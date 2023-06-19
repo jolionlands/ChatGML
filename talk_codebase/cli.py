@@ -7,32 +7,33 @@ import json
 from LLM import factory_llm
 from consts import DEFAULT_CONFIG
 
-config_path = os.path.join(os.path.expanduser("~"), ".talk_codebase_config.yaml")
+home_dir = os.path.expanduser("~")
+config_dir = os.path.join(home_dir, "talk_codebase")
+config_filename = "talk_codebase_config.yaml"
+config_path = os.path.join(config_dir, config_filename)
 
-def set_config(custom_config_path):
+# Create the config directory if it does not exist
+if not os.path.exists(config_dir):
+    os.makedirs(config_dir)
+
+def set_config(custom_config_path=None):
     global config_path
-    print("config set")
-    config_filename = "talk_codebase_config.yaml"
-    config_path = os.path.join(custom_config_path, config_filename)
-    print(config_path)
-    # Check if config file exists, if not, create an empty one
+    if custom_config_path is not None:
+        config_path = os.path.join(custom_config_path, config_filename)
     if not os.path.exists(config_path):
-        save_config({})
+        save_config(DEFAULT_CONFIG)  # Creates the config file with default config if it does not exist
 
-        
+
 def get_config():
-    print("get config")
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
     else:
-        config = {}
-    print(config)
+        config = DEFAULT_CONFIG
     return config
 
 
 def save_config(config):
-    print("saving config")
     with open(config_path, "w") as f:
         yaml.dump(config, f)
 
@@ -66,6 +67,7 @@ def validate_config(config):
     save_config(config)
     return config
 
+
 def loop(llm):
     while True:
         query = input("👉 ").lower().strip()
@@ -76,14 +78,13 @@ def loop(llm):
             break
         llm.send_query(query)
 
+
 def chat(root_dir, query):
-    print("chatting now")
     config = validate_config(get_config())
     llm = factory_llm(root_dir, config)
     response = llm.send_query(query)
-    print("done chatting for  now")
-    print(json.dumps(response))
     loop(llm)
+
 
 class TalkCodebaseCLI:
     def __init__(self):
@@ -92,17 +93,14 @@ class TalkCodebaseCLI:
     def configure(self, model_type, api_key=None, model_name=None, model_path=None):
         configure(model_type, api_key, model_name, model_path)
 
-    def set_config(self, custom_config_path):
+    def set_config(self, custom_config_path=None):
         set_config(custom_config_path)
 
     def chat(self, root_dir, query, config_path=None):
         if config_path:
             self.set_config(config_path)
         chat(root_dir, query)
-        
-    def set_config_and_chat(self, custom_config_path, root_dir, query):
-        print("running")
-        self.chat(root_dir, query, custom_config_path)
+
 
 if __name__ == "__main__":
     try:
