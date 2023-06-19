@@ -95,13 +95,14 @@ class TalkCodebaseCLI:
     def set_config(self, custom_config_path):
         set_config(custom_config_path)
 
-    def chat(self, root_dir, query):
+    def chat(self, root_dir, query, config_path=None):
+        if config_path:
+            self.set_config(config_path)
         chat(root_dir, query)
         
     def set_config_and_chat(self, custom_config_path, root_dir, query):
         print("running")
-        self.set_config(custom_config_path)
-        self.chat(root_dir, query)
+        self.chat(root_dir, query, custom_config_path)
 
 if __name__ == "__main__":
     try:
