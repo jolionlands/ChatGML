@@ -9,7 +9,7 @@ from halo import Halo
 from langchain import FAISS
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 
-from talk_codebase.consts import LOADER_MAPPING, EXCLUDE_FILES
+from consts import LOADER_MAPPING, EXCLUDE_FILES
 
 
 def get_repo(root_dir):

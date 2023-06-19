@@ -11,8 +11,8 @@ from langchain.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
 from langchain.llms import GPT4All
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-from talk_codebase.consts import MODEL_TYPES
-from talk_codebase.utils import load_files, get_local_vector_store, calculate_cost, StreamStdOut
+from consts import MODEL_TYPES
+from utils import load_files, get_local_vector_store, calculate_cost, StreamStdOut
 
 
 class BaseLLM:
