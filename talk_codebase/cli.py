@@ -16,6 +16,7 @@ config_path = os.path.join(config_dir, config_filename)
 if not os.path.exists(config_dir):
     os.makedirs(config_dir)
 
+
 def set_config(custom_config_path=None):
     global config_path
     if custom_config_path is not None:
@@ -23,15 +24,14 @@ def set_config(custom_config_path=None):
     if not os.path.exists(config_path):
         save_config(DEFAULT_CONFIG)  # Creates the config file with default config if it does not exist
 
-
 def get_config():
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
     else:
         config = DEFAULT_CONFIG
+        save_config(config)  # Save the default config to create the YAML file
     return config
-
 
 def save_config(config):
     with open(config_path, "w") as f:
