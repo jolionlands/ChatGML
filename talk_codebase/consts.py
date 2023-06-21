@@ -12,6 +12,7 @@ MODEL_TYPES = {
     "LOCAL": "local",
 }
 DEFAULT_CONFIG = {
+    "api_key":None,
     "max_tokens": "16000",
     "chunk_size": "2056",
     "chunk_overlap": "256",

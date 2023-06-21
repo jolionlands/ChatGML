@@ -20,9 +20,11 @@ if not os.path.exists(config_dir):
 def set_config(custom_config_path=None):
     global config_path
     if custom_config_path is not None:
+        print("config path already set")
         config_path = os.path.join(custom_config_path, config_filename)
     if not os.path.exists(config_path):
-        save_config(DEFAULT_CONFIG)  # Creates the config file with default config if it does not exist
+        print("writing config file")
+        get_config()  # Creates the config file with default config if it does not exist
 
 def get_config():
     if os.path.exists(config_path):
@@ -70,12 +72,15 @@ def validate_config(config):
 
 def loop(llm):
     while True:
-        query = input("👉 ").lower().strip()
+        print("querying")
+        query = input("EOF").lower().strip()
+        print("querying")
         if not query:
             print("🤖 Please enter a query")
             continue
         if query in ('exit', 'quit'):
             break
+        print("querying")
         llm.send_query(query)
 
 
@@ -83,6 +88,7 @@ def chat(root_dir, query):
     config = validate_config(get_config())
     llm = factory_llm(root_dir, config)
     response = llm.send_query(query)
+    print("looping")
     loop(llm)
 
 
@@ -94,12 +100,12 @@ class TalkCodebaseCLI:
         configure(model_type, api_key, model_name, model_path)
 
     def set_config(self, custom_config_path=None):
+        print("setting config ")
         set_config(custom_config_path)
 
-    def chat(self, root_dir, query, config_path=None):
-        if config_path:
-            self.set_config(config_path)
-        chat(root_dir, query)
+    def chat(self, root_dir):
+        print("CHATTING")
+        chat(root_dir, 'Y')
 
 
 if __name__ == "__main__":

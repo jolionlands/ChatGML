@@ -30,10 +30,12 @@ class BaseLLM:
         raise NotImplementedError("Subclasses must implement this method.")
 
     def send_query(self, question):
+        print('query sent')
         k = self.config.get("k")
         qa = RetrievalQA.from_chain_type(llm=self.llm, chain_type="stuff",
                                          retriever=self.vector_store.as_retriever(search_kwargs={"k": int(k)}),
                                          return_source_documents=True)
+        print('query retrieved')
         answer = qa(question)
         print('\n' + '\n'.join([f'📄 {os.path.abspath(s.metadata["source"])}:' for s in answer["source_documents"]]))
 
@@ -102,6 +104,7 @@ class OpenAILLM(BaseLLM):
 
 
 def factory_llm(root_dir, config):
+    print("SET UP")
     if config.get("model_type") == "openai":
         return OpenAILLM(root_dir, config)
     else:
