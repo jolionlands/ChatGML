@@ -1,0 +1,48 @@
+#code_base_editor {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: flex-start;
+    width: flex;
+    height: flex;
+    position: relative; /* Add this line */
+  }
+  
+#code_base_editor_top {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: flex-start;
+    width: flex;
+    height: flex;
+    position: absolute; /* Add this line */
+    top: 0; /* Add this line to position it at the top */
+    left: 0; /* Add this line to position it at the left */
+    z-index: 2; /* Add this line to make it appear on top */
+  }
+.run-button {
+  padding: 5px 10px;
+  cursor: pointer;
+  background-color: #4CAF50;
+  border: none;
+  color: white;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 16px;
+  margin: 4px 2px;
+  transition-duration: 0.4s;
+}
+
+.run-button:hover {
+  background-color: #45a049;
+}
+
+.splitter-td {
+  background: #ccc;
+  width: flex;
+  cursor: col-resize;
+}
+#codebase_editor .ace_content {
+    border: 2px solid #948d8d; /* Replace #000000 with your desired border color */
+  }
