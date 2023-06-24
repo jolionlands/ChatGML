@@ -14,7 +14,7 @@
 	let newEditor, newEditorContainer;
 	let gmlFile = null;
 	let projectDirectory = null;
-	let pythonProcess = null; 
+	var pythonProcess = null; 
 	let pythonOutputContent = ""; 
 
 	const cwd = process.cwd();
