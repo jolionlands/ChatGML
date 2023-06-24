@@ -32,6 +32,7 @@
 	console.log("this is the current env path directory"+envPath)
 	//console.log(process.cwd())
 	const userHomeDir = os.homedir();
+	
 	function openConfigFile() {
 		// Read the contents of the YAML file
 		fs.readFile(configPath, 'utf8', (err, data) => {
@@ -58,19 +59,6 @@
 		  console.log('Config file saved successfully!');
 		});
 	}
-	 
-	async function escapePath(path) {
-		// Escape special characters in the path
-		return path.replace(/ /g, '\\ ').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-	}
-	// Execute commands for Windows
-	const execWindows = async (command) => {
-		try {
-			return await exec(`${command}`);
-		} catch (error) {
-			console.error(`Error executing command ${command}:`, error);
-		}
-	};
 	// Function to check if the YAML config file exists
 	function checkYAMLFileExists() {
 		fs.access(configPath, fs.constants.F_OK, (err) => {
@@ -82,101 +70,14 @@
 			}
 		});
 	}
-	function setDirectoryPermissions(path, mode) {
-		return new Promise((resolve, reject) => {
-		  fs.chmod(path, mode, (err) => {
-			if (err) {
-			  reject(err);
-			} else {
-			  resolve();
-			}
-		  });
-		});
-	  }
-	async function cloneRepository(repoUrl, repoPath) {
-		return new Promise((resolve, reject) => {
-		  const escapedRepoPath = repoPath.replace(/ /g, '\\ ');
-		  const command = `git clone ${repoUrl} "${escapedRepoPath}"`;
-		  exec(command, (error, stdout, stderr) => {
-			if (error) {
-			  console.error(`Error cloning repository: ${error.message}`);
-			  reject(error);
-			} else {
-			  console.log(`Repository cloned at: ${repoPath}`);
-			  resolve();
-			}
-		  });
-		});
-	}
 
-
-	async function createVirtualEnvironment(envPath) {
-		return new Promise((resolve, reject) => {
-			fs.mkdir(envPath, { recursive: true }, (err) => {
-			if (err) {
-				reject(err);
-			} else {
-				escapePath(envPath).then((escapedPath) => {
-				const command = `python3 -m venv ${escapedPath}`;
-				exec(command, (error) => {
-					if (error) {
-					reject(error);
-					} else {
-					resolve();
-					}
-				});
-				});
-			}
-			});
-		});
-	}
 	async function setupEnvironment() {
-		try {
-			// check if repo is already cloned
-			 // Check if the repository is already cloned
-			if (!fs.existsSync(repoPath)){
-				fs.mkdirSync(repoPath, { recursive: true });
-			}
-			
-			const repoGitDir = path.join(repoPath, '.git');
-			if (!fs.existsSync(repoGitDir)) {
-			console.log(`Cloning repository...`);
-			await cloneRepository('https://github.com/jolionlands/talk-codebase.git', repoPath);
-			} else {
-			console.log(`Repository already exists at: ${repoPath}`);
-			}
-			await new Promise(resolve => setTimeout(resolve, 2000)); // 2 seconds delay
-		
-			if (!fs.existsSync(envPath)) {
-				console.log("Creating virtual environment...");
-				await createVirtualEnvironment(envPath);
-				console.log("Virtual environment created.");
-			  } else {
-				console.log("Virtual environment already exists.");
-			}
-
-
-			if (!fs.existsSync(requirementsPath)){
-				fs.mkdirSync(requirementsPath, { recursive: true });
-			}
-			
-			// check for requirements.txt and install dependencies
-			if (fs.existsSync(requirementsPath)) {
-				console.log("Installing Python dependencies...");
-				const installCommand = process.platform === 'win32'
-				  ? `${envPath}\\Scripts\\activate && pip install -r ${requirementsPath}`
-				  : `${envPath}/bin/pip install -r ${requirementsPath}`;
-		  
-				await exec(installCommand);
-				console.log("Python dependencies installed.");
-			  } else {
-				console.log("requirements.txt file does not exist. Skipping dependencies installation.");
-			  }
-			  // Check YAML file and run set_config if it does not exist
+		try {		
+			// Check YAML file and run set_config if it does not exist
 			checkYAMLFileExists();
 		  
 		} catch(err) {
-			console.error(`Error setting up environment: ${err}`);
+			console.error(`Error Getting info: ${err}`);
 		}
 	}
 	
