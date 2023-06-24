@@ -5,7 +5,7 @@
 	const path = require('path');
 	const util = require('util');
 	const { exec } = require('child_process');
-	const yaml = require('js-yaml');
+	const yaml = require('yaml');
 	const os = require('os');
 	const Preferences = $gmedit["ui.Preferences"];
 	const execPromise = util.promisify(require('child_process').exec);
@@ -59,24 +59,25 @@
 		  console.log('Config file saved successfully!');
 		});
 	}
+	
 	async function setupEnvironment() {
-		try {		
+		try {
 			// Check YAML file and run set_config if it does not exist
 			const exists = fs.existsSync(configPath);
-	
+
 			if (!exists) {
 				console.log("YAML config file does not exist. Creating one...");
 				runPythonScript('set_config');
 			} else {
 				console.log("YAML config file already exists.");
-	
+
 				// Read YAML file
-				const data = fs.readFileSync(configPath, 'utf8');
-				
+				const file = fs.readFileSync(configPath, 'utf8');
+
 				// Parse YAML file
-				const config = yaml.safeLoad(data);
-				
-				// Update repo_path and venv_path
+				const config = yaml.parse(file);
+
+				// Update repoPath and envPath
 				repoPath = config['repo_path'];
 				envPath = config['venv_path'];
 			}
