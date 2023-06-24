@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import platform
 import yaml
-import consts
+import yaml_config
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(PROJECT_ROOT, 'talk-venv')
 
