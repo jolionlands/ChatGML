@@ -74,7 +74,7 @@ def update_yaml(config_path):
     env_path = os.path.join(repo_path, 'talk-venv')
 
     # Get the default configuration and update it with the repo_path and venv_path
-    data = consts.DEFAULT_CONFIG.copy()
+    data = yaml_config.DEFAULT_CONFIG.copy()
     data.update({
         'repo_path': repo_path,
         'venv_path': env_path
