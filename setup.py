@@ -4,15 +4,19 @@ import subprocess
 import platform
 import yaml
 import yaml_config
+import json
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(PROJECT_ROOT, 'talk-venv')
 
 
 def determine_plugin_location():
-    if platform.system() == 'Windows':
-        return os.path.join(os.getenv('APPDATA'), 'AceGM', 'GMEdit', 'plugins')
-    elif platform.system() == 'Darwin':
-        return os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'AceGM', 'GMEdit', 'plugins')
+    # Load the configuration
+    with open('config.json') as f:
+        config = json.load(f)
+    
+    os_name = platform.system()
+    if os_name in config["plugin_locations"]:
+        return os.path.expand(os.path.expanduser(config["plugin_locations"][os_name]))
     else:
         return None
 
@@ -75,7 +79,7 @@ def exclude_from_git(file_path):
     with open('.gitignore', 'a') as gitignore:
         gitignore.write(ignore_entry)
 
-def update_yaml(config_path):
+def update_yaml(config_path, default_config_path='config.yaml'):
     # Check if the directory of config_path exists, if not, create it
     config_dir = os.path.dirname(config_path)
     if not os.path.exists(config_dir):
@@ -87,8 +91,12 @@ def update_yaml(config_path):
     # Assume a 'talk-venv' folder in the same directory as the virtual environment
     env_path = os.path.join(repo_path, 'talk-venv')
 
+    # Load the default configuration from the yaml file
+    with open(default_config_path, 'r') as default_config_file:
+        default_data = yaml.safe_load(default_config_file)
+
     # Get the default configuration and update it with the repo_path and venv_path
-    data = yaml_config.DEFAULT_CONFIG.copy()
+    data = default_data.copy()
     data.update({
         'repo_path': repo_path,
         'venv_path': env_path
