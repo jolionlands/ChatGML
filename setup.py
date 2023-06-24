@@ -3,13 +3,9 @@ import shutil
 import subprocess
 import platform
 import yaml
-
+import consts
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(PROJECT_ROOT, 'talk-venv')
-
-
-sys.path.append(os.path.join(PROJECT_ROOT, 'talk_codebase'))
-import consts
 
 
 def determine_plugin_location():
