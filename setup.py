@@ -63,8 +63,17 @@ def install_requirements(env_path, requirements_path):
         print(f"ERROR:\n{stderr.decode()}")
 
 def exclude_from_git(file_path):
+    ignore_entry = f'\n{file_path}'
+    
+    # Read the current .gitignore file
+    with open('.gitignore', 'r') as gitignore:
+        if ignore_entry in gitignore.read():
+            print(f"'{file_path}' is already in .gitignore")
+            return
+
+    # Append the file_path to the .gitignore file
     with open('.gitignore', 'a') as gitignore:
-        gitignore.write(f'\n{file_path}')
+        gitignore.write(ignore_entry)
 
 def update_yaml(config_path):
     # Check if the directory of config_path exists, if not, create it
@@ -100,7 +109,7 @@ def update_yaml(config_path):
     # Write the data to the yaml file
     with open(config_path, 'w') as outfile:
         yaml.dump(data, outfile, default_flow_style=False)
-        
+
 def setup():
     # Create and activate virtual environment
     if not os.path.exists(ENV_PATH):
