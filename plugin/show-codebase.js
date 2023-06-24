@@ -90,12 +90,14 @@
 		for (let line of lines) {
 			if (line.trim() === '' || line.startsWith('#')) continue; // Ignore empty lines and comments
 	
-			let [key, value] = line.split(':').map(v => v.trim());
+			let colonIndex = line.indexOf(':');
+			let key = line.substring(0, colonIndex).trim();
+			let value = line.substring(colonIndex + 1).trim();
 	
 			// If key is one of the paths, store it
 			if (key === 'repo_path' || key === 'venv_path') {
 				// Handle quoted strings and windows path
-				if (value.startsWith("'") && value.endsWith("'")) {
+				if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
 					value = value.slice(1, -1);
 				}
 	
