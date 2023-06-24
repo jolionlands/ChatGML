@@ -78,11 +78,12 @@ def update_yaml(config_path):
     # Assume a 'talk-venv' folder in the same directory as the virtual environment
     env_path = os.path.join(repo_path, 'talk-venv')
 
-    # Prepare the default configuration and update it with the repo_path and venv_path
-    data = {
+    # Get the default configuration and update it with the repo_path and venv_path
+    data = yaml_config.DEFAULT_CONFIG.copy()
+    data.update({
         'repo_path': repo_path,
         'venv_path': env_path
-    }
+    })
 
     # If the yaml file already exists, load the current data
     if os.path.exists(config_path):
@@ -99,7 +100,7 @@ def update_yaml(config_path):
     # Write the data to the yaml file
     with open(config_path, 'w') as outfile:
         yaml.dump(data, outfile, default_flow_style=False)
-
+        
 def setup():
     # Create and activate virtual environment
     if not os.path.exists(ENV_PATH):
