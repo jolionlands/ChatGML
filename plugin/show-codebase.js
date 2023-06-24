@@ -1,38 +1,38 @@
 (function() {
-	var MenuItem = Electron_MenuItem;
-	var { spawn } = require('child_process');
-	var ready = false;
-	var sizer, splitter, container, editor, session, mainCont, peekCommand;
-	var newEditor, newEditorContainer;
-	var gmlFile = null;
-	var Preferences = $gmedit["ui.Preferences"];
+	const { MenuItem } = Electron;
+	const { spawn } = require('child_process');
 	const fs = require('fs');
 	const path = require('path');
 	const util = require('util');
 	const { exec } = require('child_process');
-	const execPromise = util.promisify(require('child_process').exec);
+	const yaml = require('js-yaml');
 	const os = require('os');
-	var projectDirectory = null
-	var pythonProcess;  // declare at global scope
-	var pythonOutputContent = ""; // Initialize an empty string to hold the Python script's output
-	// Set repoPath to the plugins folder in the APPDATA directory
+	const Preferences = $gmedit["ui.Preferences"];
+	const execPromise = util.promisify(require('child_process').exec);
+
+	let ready = false;
+	let sizer, splitter, container, editor, session, mainCont, peekCommand;
+	let newEditor, newEditorContainer;
+	let gmlFile = null;
+	let projectDirectory = null;
+	let pythonProcess = null; 
+	let pythonOutputContent = ""; 
+
 	const cwd = process.cwd();
-	console.log("this is the current working directory"+process.cwd())
-	// Set repoPath to the plugins folder in the current directory
-	const repoPath = path.join(cwd, 'plugins','show-codebase','talk-codebase');
-	// Set envPath to the virtual environment folder in the current directory
-	const envPath  = path.join(cwd, 'plugins','show-codebase','talk-venv');
-	// Your Python executable path should also change accordingly
+	console.log(`Current working directory: ${cwd}`);
+
+	let repoPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-codebase');
+	let envPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-venv');
 	const pythonExecutable = path.join(envPath, 'Scripts', 'python.exe');
-	const requirementsPath = path.join(repoPath,'requirements.txt');
+	const requirementsPath = path.join(repoPath, 'requirements.txt');
 	const configPath = path.join(os.homedir(), 'talk_codebase', 'talk_codebase_config.yaml');
-	//console.log(requirementsPath)
-	console.log("this is the current repo path denvPathirectory"+repoPath)
-	console.log("this is the current requirements path directory"+requirementsPath)
-	console.log("this is the current env path directory"+envPath)
-	//console.log(process.cwd())
+
+	console.log(`Current repo path: ${repoPath}`);
+	console.log(`Current requirements path: ${requirementsPath}`);
+	console.log(`Current env path: ${envPath}`);
+
 	const userHomeDir = os.homedir();
-	
+
 	function openConfigFile() {
 		// Read the contents of the YAML file
 		fs.readFile(configPath, 'utf8', (err, data) => {
@@ -59,23 +59,27 @@
 		  console.log('Config file saved successfully!');
 		});
 	}
-	// Function to check if the YAML config file exists
-	function checkYAMLFileExists() {
-		fs.access(configPath, fs.constants.F_OK, (err) => {
-			if (err) {
+	async function setupEnvironment() {
+		try {		
+			// Check YAML file and run set_config if it does not exist
+			const exists = fs.existsSync(configPath);
+	
+			if (!exists) {
 				console.log("YAML config file does not exist. Creating one...");
 				runPythonScript('set_config');
 			} else {
 				console.log("YAML config file already exists.");
+	
+				// Read YAML file
+				const data = fs.readFileSync(configPath, 'utf8');
+				
+				// Parse YAML file
+				const config = yaml.safeLoad(data);
+				
+				// Update repo_path and venv_path
+				repoPath = config['repo_path'];
+				envPath = config['venv_path'];
 			}
-		});
-	}
-
-	async function setupEnvironment() {
-		try {		
-			// Check YAML file and run set_config if it does not exist
-			checkYAMLFileExists();
-		  
 		} catch(err) {
 			console.error(`Error Getting info: ${err}`);
 		}
@@ -183,7 +187,7 @@
 		e.initEvent("resize");
 		window.dispatchEvent(e);
 	}
-	
+
 	function hide() {
 		mainCont.removeChild(sizer);
 		mainCont.removeChild(container);
@@ -264,7 +268,7 @@
 		});
 		buttonsContainer.appendChild(killButton);
 
-				// Create the "Open Config" button
+		// Create the "Open Config" button
 		var openConfigButton = document.createElement("button");
 		openConfigButton.textContent = "Open Config";
 		openConfigButton.classList.add("run-button");
@@ -277,7 +281,7 @@
 			saveButton.classList.add("run-button");
 			saveButton.addEventListener("click", function() {
 				var configContent = newEditor.session.getValue();
-				// Replace this with the logic to save the config YAML file
+				saveConfigFile();
 				console.log("Saving config:", configContent);
 			});
 			buttonsContainer.appendChild(saveButton);
@@ -354,7 +358,7 @@
 			}
 		  }));
 		
-	  }
+	}
 	
 	function init() {
 		console.log(aceEditor.session)
