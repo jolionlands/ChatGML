@@ -43,11 +43,24 @@ def create_virtual_environment(env_path):
         subprocess.run(["python3", "-m", "venv", env_path], shell=True)
 
 def install_requirements(env_path, requirements_path):
-    activate_path = os.path.join(env_path, "bin", "activate") if platform.system() != "Windows" else os.path.join(env_path, "Scripts", "activate.bat")
+    activate_path = os.path.join(env_path, "bin", "activate") if platform.system() != "Windows" else os.path.join(env_path, "Scripts", "activate")
+
+    # Differentiate between Windows and Unix-based systems
     if platform.system() == "Windows":
-        subprocess.run(["cmd.exe", "/c", activate_path, "&&", "pip", "install", "-r", requirements_path], shell=True)
+        command = f"{activate_path} && pip install -r {requirements_path}"
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        subprocess.run(["/bin/bash", "-c", f"source {activate_path} && pip install -r {requirements_path}"], shell=True)
+        command = f"source {activate_path} && pip install -r {requirements_path}"
+        process = subprocess.Popen(['/bin/bash', '-c', command], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # Capture output and errors
+    stdout, stderr = process.communicate()
+
+    # Print output and errors
+    if stdout:
+        print(f"OUTPUT:\n{stdout.decode()}")
+    if stderr:
+        print(f"ERROR:\n{stderr.decode()}")
 
 def exclude_from_git(file_path):
     with open('.gitignore', 'a') as gitignore:
