@@ -5,7 +5,6 @@
 	const path = require('path');
 	const util = require('util');
 	const { exec } = require('child_process');
-	const yaml = require('yaml');
 	const os = require('os');
 	const Preferences = $gmedit["ui.Preferences"];
 	const execPromise = util.promisify(require('child_process').exec);
@@ -64,19 +63,19 @@
 		try {
 			// Check YAML file and run set_config if it does not exist
 			const exists = fs.existsSync(configPath);
-
+	
 			if (!exists) {
 				console.log("YAML config file does not exist. Creating one...");
 				runPythonScript('set_config');
 			} else {
 				console.log("YAML config file already exists.");
-
+	
 				// Read YAML file
 				const file = fs.readFileSync(configPath, 'utf8');
-
+	
 				// Parse YAML file
-				const config = yaml.parse(file);
-
+				const config = parseYaml(file);
+	
 				// Update repoPath and envPath
 				repoPath = config['repo_path'];
 				envPath = config['venv_path'];
@@ -84,6 +83,21 @@
 		} catch(err) {
 			console.error(`Error Getting info: ${err}`);
 		}
+	}
+	
+	function parseYaml(yamlString) {
+		const lines = yamlString.split('\n');
+		const result = {};
+		for (let line of lines) {
+			if (line.trim() === '' || line.startsWith('#')) continue; // Ignore empty lines and comments
+			let [key, value] = line.split(':').map(v => v.trim());
+			// Handle quoted strings
+			if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+				value = value.slice(1, -1);
+			}
+			result[key] = value;
+		}
+		return result;
 	}
 	
 	function updateRepo(dirName) {
