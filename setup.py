@@ -67,31 +67,39 @@ def exclude_from_git(file_path):
         gitignore.write(f'\n{file_path}')
 
 def update_yaml(config_path):
+    # Check if the directory of config_path exists, if not, create it
+    config_dir = os.path.dirname(config_path)
+    if not os.path.exists(config_dir):
+        os.makedirs(config_dir)
+        
     # Get the current working directory
     repo_path = os.getcwd()
 
     # Assume a 'talk-venv' folder in the same directory as the virtual environment
     env_path = os.path.join(repo_path, 'talk-venv')
 
-    # Get the default configuration and update it with the repo_path and venv_path
-    data = yaml_config.DEFAULT_CONFIG.copy()
-    data.update({
+    # Prepare the default configuration and update it with the repo_path and venv_path
+    data = {
         'repo_path': repo_path,
         'venv_path': env_path
-    })
+    }
 
-    # Check if the yaml file already exists
+    # If the yaml file already exists, load the current data
     if os.path.exists(config_path):
-        # If it exists, load the current data
         with open(config_path, 'r') as infile:
             current_data = yaml.safe_load(infile)
             # Update the current data with the new data
             current_data.update(data)
         data = current_data
+    else:
+        # If the yaml file does not exist, create it by opening it in write mode
+        with open(config_path, 'w') as outfile:
+            pass
 
     # Write the data to the yaml file
     with open(config_path, 'w') as outfile:
         yaml.dump(data, outfile, default_flow_style=False)
+
 def setup():
     # Create and activate virtual environment
     if not os.path.exists(ENV_PATH):
