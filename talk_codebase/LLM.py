@@ -30,48 +30,32 @@ class BaseLLM:
         raise NotImplementedError("Subclasses must implement this method.")
 
     def send_query(self, question):
-        print('query sent')
         k = self.config.get("k")
         qa = RetrievalQA.from_chain_type(llm=self.llm, chain_type="stuff",
                                          retriever=self.vector_store.as_retriever(search_kwargs={"k": int(k)}),
                                          return_source_documents=True)
-        print('query retrieved')
         answer = qa(question)
         print('\n' + '\n'.join([f'📄 {os.path.abspath(s.metadata["source"])}:' for s in answer["source_documents"]]))
 
-    def _create_vector_store(self, embeddings, index, root_dir):
-        index_path = os.path.join(root_dir, f"vector_store/{index}")
+    def _create_vector_store(self, embeddings, index, root_dir):     
+        # Normalize the root directory path
+        root_dir = os.path.normpath(root_dir)
+        index_path = os.path.join(root_dir, "vector_store", index)
+        
         new_db = get_local_vector_store(embeddings, index_path)
         if new_db is not None:
-            approve = questionary.select(
-                f"Found existing vector store. Do you want to use it?",
-                choices=[
-                    {"name": "Yes", "value": True},
-                    {"name": "No", "value": False},
-                ]
-            ).ask()
-            if approve:
-                return new_db
+           
+            return new_db
 
         docs = load_files(root_dir)
         if len(docs) == 0:
             print("✘ No documents found")
             exit(0)
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=int(self.config.get("chunk_size")),
-                                                       chunk_overlap=int(self.config.get("chunk_overlap")))
+                                                    chunk_overlap=int(self.config.get("chunk_overlap")))
         texts = text_splitter.split_documents(docs)
         if index == MODEL_TYPES["OPENAI"]:
             cost = calculate_cost(docs, self.config.get("model_name"))
-            approve = questionary.select(
-                f"Creating a vector store for {len(docs)} documents will cost ~${cost:.5f}. Do you want to continue?",
-                choices=[
-                    {"name": "Yes", "value": True},
-                    {"name": "No", "value": False},
-                ]
-            ).ask()
-            if not approve:
-                exit(0)
-
         spinners = Halo(text=f"Creating vector store for {len(docs)} documents", spinner='dots').start()
         db = FAISS.from_documents(texts, embeddings)
         db.add_documents(texts)
@@ -109,3 +93,4 @@ def factory_llm(root_dir, config):
         return OpenAILLM(root_dir, config)
     else:
         return LocalLLM(root_dir, config)
+    

@@ -42,7 +42,7 @@ class StreamStdOut(StreamingStdOutCallbackHandler):
         sys.stdout.flush()
 
 
-@Halo(text='📂 Loading files', spinner='dots')
+#@Halo(text='📂 Loading files', spinner='dots')
 def load_files(root_dir):
     num_cpus = multiprocessing.cpu_count()
     loaded_files = []
@@ -65,7 +65,7 @@ def load_files(root_dir):
         for future in futures:
             docs.extend(future.get())
 
-    print('\n' + '\n'.join([f'📄 {os.path.abspath(file_path)}:' for file_path in loaded_files]))
+    #print('\n' + '\n'.join([f'📄 {os.path.abspath(file_path)}:' for file_path in loaded_files]))
     return docs
 
 
