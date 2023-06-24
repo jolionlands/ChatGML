@@ -9,14 +9,15 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(PROJECT_ROOT, 'talk-venv')
 
 
-def determine_plugin_location():
+def determine_plugin_location(config_path='config.yaml'):
     # Load the configuration
-    with open('config.json') as f:
-        config = json.load(f)
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
     
     os_name = platform.system()
     if os_name in config["plugin_locations"]:
-        return os.path.expand(os.path.expanduser(config["plugin_locations"][os_name]))
+        # Use os.path.join and os.path.expanduser to handle '~' paths and join paths
+        return os.path.join(os.path.expanduser(config["plugin_locations"][os_name]))
     else:
         return None
 
