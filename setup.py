@@ -83,7 +83,8 @@ def setup():
     # Create and activate virtual environment
     if not os.path.exists(ENV_PATH):
         create_virtual_environment(ENV_PATH)
-
+        # Exclude virtual environment from git
+    exclude_from_git(ENV_PATH)
     # Install requirements in the created environment
     requirements_path = os.path.join(PROJECT_ROOT, 'requirements.txt')
     if os.path.exists(requirements_path):
