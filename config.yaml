@@ -2,7 +2,7 @@ plugin_locations:
   Windows: '%APPDATA%/AceGM/GMEdit/plugins/show-codebase'
   Darwin: '~/Library/Application Support/AceGM/GMEdit/plugins/show-codebase'
 
-DEFAULT_CONFIG:
+PLUGIN_CONFIG:
   api_key: null
   max_tokens: '16000'
   chunk_size: '2056'

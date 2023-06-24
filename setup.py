@@ -87,39 +87,42 @@ def update_yaml(config_path, default_config_path='config.yaml'):
     config_dir = os.path.dirname(config_path)
     if not os.path.exists(config_dir):
         os.makedirs(config_dir)
-        
+
+    # Load the default configuration from the yaml file
+    with open(default_config_path, 'r') as default_config_file:
+        default_data = yaml.safe_load(default_config_file)
+    #print(default_data)
+    # Get the current working directory
+    repo_path = os.getcwd()
+    data = default_data.get('PLUGIN_CONFIG', {})
+    # Assume a 'talk-venv' folder in the same directory as the virtual environment
     # Get the current working directory
     repo_path = os.getcwd()
 
     # Assume a 'talk-venv' folder in the same directory as the virtual environment
     env_path = os.path.join(repo_path, 'talk-venv')
 
-    # Load the default configuration from the yaml file
-    with open(default_config_path, 'r') as default_config_file:
-        default_data = yaml.safe_load(default_config_file)
-
-    # Get the default configuration and update it with the repo_path and venv_path
-    data = default_data.copy()
+    # Update data with the repo_path and venv_path
     data.update({
         'repo_path': repo_path,
         'venv_path': env_path
     })
 
-    # If the yaml file already exists, load the current data
-    if os.path.exists(config_path):
+     # If the yaml file already exists and contains data, load it
+    if os.path.exists(config_path) and os.path.getsize(config_path) > 0:
         with open(config_path, 'r') as infile:
             current_data = yaml.safe_load(infile)
-            # Update the current data with the new data
-            current_data.update(data)
-        data = current_data
-    else:
-        # If the yaml file does not exist, create it by opening it in write mode
-        with open(config_path, 'w') as outfile:
-            pass
+            print(current_data)
+            # Update the 'repo_path' and 'venv_path' in current_data with the values from data
+            current_data['repo_path'] = data['repo_path']
+            current_data['venv_path'] = data['venv_path']
 
+    else:
+        current_data = data
     # Write the data to the yaml file
     with open(config_path, 'w') as outfile:
-        yaml.dump(data, outfile, default_flow_style=False)
+        yaml.dump(current_data, outfile, default_flow_style=False)
+
 
 def setup():
     # Create and activate virtual environment

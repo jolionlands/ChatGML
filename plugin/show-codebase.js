@@ -70,11 +70,8 @@
 			} else {
 				console.log("YAML config file already exists.");
 	
-				// Read YAML file
-				const file = fs.readFileSync(configPath, 'utf8');
-	
 				// Parse YAML file
-				const config = parseYaml(file);
+				const config = parseYamlForPaths(configPath);
 	
 				// Update repoPath and envPath
 				repoPath = config['repo_path'];
@@ -85,20 +82,34 @@
 		}
 	}
 	
-	function parseYaml(yamlString) {
-		const lines = yamlString.split('\n');
-		const result = {};
+	function parseYamlForPaths(configPath) {
+		// Read file line by line from end
+		const lines = fs.readFileSync(configPath, 'utf-8').split('\n').reverse();
+		const config = {};
+	
 		for (let line of lines) {
 			if (line.trim() === '' || line.startsWith('#')) continue; // Ignore empty lines and comments
+	
 			let [key, value] = line.split(':').map(v => v.trim());
-			// Handle quoted strings
-			if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
-				value = value.slice(1, -1);
+	
+			// If key is one of the paths, store it
+			if (key === 'repo_path' || key === 'venv_path') {
+				// Handle quoted strings and windows path
+				if (value.startsWith("'") && value.endsWith("'")) {
+					value = value.slice(1, -1);
+				}
+	
+				value = value.replace(/\\/g, '/');
+				config[key] = value;
 			}
-			result[key] = value;
+	
+			// If we have both values, we can break early
+			if (config['repo_path'] && config['venv_path']) break;
 		}
-		return result;
+	
+		return config;
 	}
+	
 	
 	function updateRepo(dirName) {
 		// Full path for the directory
