@@ -71,6 +71,7 @@ def validate_config(config):
 
 
 def loop(llm):
+    print("Enter loop for queries")
     print("EOF")
     query = ""
     for line in sys.stdin:
