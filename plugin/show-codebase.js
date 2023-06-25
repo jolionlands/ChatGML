@@ -280,7 +280,7 @@
 		var command = ace.edit(newEditorContainer).getValue();
 			console.log(command);
 			console.log(pythonProcess)
-			pythonProcess.stdin.write(command + "✅\n");
+			pythonProcess.stdin.write(command + "END\n");
 
 		});
 		buttonsContainer.appendChild(sendCommandButton);

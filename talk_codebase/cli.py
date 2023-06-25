@@ -75,8 +75,8 @@ def loop(llm):
     print("EOF")
     query = ""
     for line in sys.stdin:
-        if "✅" in line:
-            query += line.replace("✅", "").lower().strip() # remove end signal from line and add to query
+        if "END" in line:
+            query += line.replace("END", "").lower().strip() # remove end signal from line and add to query
             if query in ('exit', 'quit'):
                 break
             llm.send_query(query)
