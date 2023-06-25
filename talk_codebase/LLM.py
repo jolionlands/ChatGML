@@ -41,10 +41,7 @@ class BaseLLM:
         # Normalize the root directory path
         root_dir = os.path.normpath(root_dir)
         index_path = os.path.join(root_dir, "vector_store", index)
-        
         new_db = get_local_vector_store(embeddings, index_path)
-        print(new_db)
-        print(index_path)
         if new_db is not None:
            
             return new_db

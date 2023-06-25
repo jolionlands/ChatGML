@@ -14,7 +14,7 @@
 	let newEditor, newEditorContainer;
 	let gmlFile = null;
 	let projectDirectory = null;
-	var pythonProcess = null; 
+	let pythonProcess = null; 
 	let pythonOutputContent = ""; 
 
 	const cwd = process.cwd();
@@ -161,7 +161,7 @@
 	  
 		console.log(`Running script at: ${scriptPath}`);
 		try {
-				pythonProcess = spawn(pythonExecutable, [scriptPath,'chat',projectDirectory], {
+				pythonProcess = spawn(pythonExecutable, ['-u','-i',scriptPath,'chat',projectDirectory], {
 				stdio: ['pipe', 'pipe', process.stderr], // Redirect stdout and stderr to pipes
 			});
 	  
@@ -173,7 +173,7 @@
 			pythonProcess.stdout.on('data', (data) => {
 				
 				const dataStr = data.toString();
-				//console.log('Python script output:', dataStr);
+				console.log('Python script output:', dataStr);
 			
 				if (dataStr.includes('EOF')) {
 					console.log('Python script finished outputting.');
@@ -280,7 +280,8 @@
 		var command = ace.edit(newEditorContainer).getValue();
 			console.log(command);
 			console.log(pythonProcess)
-			pythonProcess.stdin.write(command + "\n"); // Write to the Python process' stdin
+			pythonProcess.stdin.write(command + "✅\n");
+
 		});
 		buttonsContainer.appendChild(sendCommandButton);
 
