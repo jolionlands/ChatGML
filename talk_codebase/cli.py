@@ -71,24 +71,25 @@ def validate_config(config):
 
 
 def loop(llm):
-    while True:
-        print("querying")
-        query = input("EOF").lower().strip()
-        print("querying")
-        if not query:
-            print("🤖 Please enter a query")
-            continue
-        if query in ('exit', 'quit'):
-            break
-        print("querying")
-        llm.send_query(query)
-
+    print("EOF")
+    query = ""
+    for line in sys.stdin:
+        if "✅" in line:
+            query += line.replace("✅", "").lower().strip() # remove end signal from line and add to query
+            if query in ('exit', 'quit'):
+                break
+            llm.send_query(query)
+            query = ""
+            print("EOF", file=sys.stdout)
+            sys.stdout.flush()
+        else:
+            query += line.lower().strip() + " " # add space between lines
+    print("EOF")
 
 def chat(root_dir, query):
     config = validate_config(get_config())
     llm = factory_llm(root_dir, config)
     response = llm.send_query(query)
-    print("looping")
     loop(llm)
 
 

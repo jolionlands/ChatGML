@@ -43,6 +43,8 @@ class BaseLLM:
         index_path = os.path.join(root_dir, "vector_store", index)
         
         new_db = get_local_vector_store(embeddings, index_path)
+        print(new_db)
+        print(index_path)
         if new_db is not None:
            
             return new_db
@@ -56,6 +58,8 @@ class BaseLLM:
         texts = text_splitter.split_documents(docs)
         if index == MODEL_TYPES["OPENAI"]:
             cost = calculate_cost(docs, self.config.get("model_name"))
+
+            print(cost)
         spinners = Halo(text=f"Creating vector store for {len(docs)} documents", spinner='dots').start()
         db = FAISS.from_documents(texts, embeddings)
         db.add_documents(texts)
