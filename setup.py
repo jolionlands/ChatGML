@@ -29,13 +29,19 @@ def copy_files_to_plugin_directory(src_directory, dest_directory):
         return
 
     if not os.path.exists(dest_directory):
-        os.makedirs(dest_directory)
+        os.makedirs(dest_directory, exist_ok=True)
 
     for filename in os.listdir(src_directory):
         src_file_path = os.path.join(src_directory, filename)
         dest_file_path = os.path.join(dest_directory, filename)
 
         if os.path.isfile(src_file_path):
+            # Check if file already exists in destination directory
+            if os.path.isfile(dest_file_path):
+                # Delete it if it does
+                os.remove(dest_file_path)
+
+            # Copy the file
             shutil.copy2(src_file_path, dest_file_path)
 
 def update_plugin(plugin_files_source):
