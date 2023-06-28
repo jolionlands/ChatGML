@@ -43,7 +43,7 @@ class BaseLLM:
         index_path = os.path.join(root_dir, "vector_store", index)
         new_db = get_local_vector_store(embeddings, index_path)
         if new_db is not None:
-           
+            print(new_db)
             return new_db
 
         docs = load_files(root_dir)
@@ -63,7 +63,42 @@ class BaseLLM:
         db.save_local(index_path)
         spinners.succeed(f"Created vector store for {len(docs)} documents")
         return db
+    
 
+    def _update_vector_store(self, updated_file_paths, embeddings, index, root_dir):
+        # Normalize the root directory path
+        root_dir = os.path.normpath(root_dir)
+        index_path = os.path.join(root_dir, "vector_store", index)
+
+        # Load existing db
+        db = FAISS.load_local(index_path)
+        if db is None:
+            print("✘ No existing vector store found")
+            exit(0)
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=int(self.config.get("chunk_size")),
+                                                    chunk_overlap=int(self.config.get("chunk_overlap")))
+
+        spinner = Halo(text=f"Updating vector store for {len(updated_file_paths)} documents", spinner='dots').start()
+
+        for updated_file_path in updated_file_paths:
+            # Load the updated document
+            updated_docs = load_file(updated_file_path)  # assuming load_file function is defined
+            if len(updated_docs) == 0:
+                print(f"✘ No updated documents found for file path: {updated_file_path}")
+                continue
+
+            updated_texts = text_splitter.split_documents(updated_docs)
+
+            # Remove the existing vectors for the file from the database
+            db.remove_documents_where(lambda doc: doc.metadata["source"] == updated_file_path)
+
+            # Add the updated vectors to the database
+            db.add_documents(updated_texts)
+
+        db.save_local(index_path)
+        spinner.succeed(f"Updated vector store for {len(updated_file_paths)} documents")
+        return db
 
 class LocalLLM(BaseLLM):
 
