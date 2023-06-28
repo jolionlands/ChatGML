@@ -161,7 +161,7 @@
 	  
 		console.log(`Running script at: ${scriptPath}`);
 		try {
-				pythonProcess = spawn(pythonExecutable, ['-u','-i',scriptPath,'chat',projectDirectory], {
+				pythonProcess = spawn(pythonExecutable, [scriptPath,'chat',projectDirectory], {
 				stdio: ['pipe', 'pipe', process.stderr], // Redirect stdout and stderr to pipes
 			});
 	  

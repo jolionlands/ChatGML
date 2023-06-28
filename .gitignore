@@ -5,4 +5,5 @@
 /talk_codebase/__pycache__/
 .DS_Store
 /talk-venv
-C:\Users\kalli\Documents\AI_SOLNS\talk-codebase\talk-venv
+/__pycache__
+talk-venv

@@ -1,10 +1,10 @@
 plugin_locations:
   Windows: '%APPDATA%/AceGM/GMEdit/plugins/show-codebase'
   Darwin: '~/Library/Application Support/AceGM/GMEdit/plugins/show-codebase'
-
+  Linux: null
 PLUGIN_CONFIG:
   api_key: null
-  max_tokens: '16000'
+  max_tokens: '10000'
   chunk_size: '2056'
   chunk_overlap: '256'
   k: '1'
