@@ -3,11 +3,9 @@ import shutil
 import subprocess
 import platform
 import yaml
-import yaml_config
-import json
+import stat
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(PROJECT_ROOT, 'talk-venv')
-
 
 
 def determine_plugin_location():
@@ -36,6 +34,8 @@ def determine_plugin_location():
     return None
 
 def copy_files_to_plugin_directory(src_directory, dest_directory):
+    print("Copying plugin files to GMEdit plugin directory...")
+
     if not os.path.exists(src_directory):
         print(f"Source directory does not exist: {src_directory}")
         return
@@ -48,7 +48,22 @@ def copy_files_to_plugin_directory(src_directory, dest_directory):
         dest_file_path = os.path.join(dest_directory, filename)
 
         if os.path.isfile(src_file_path):
-            shutil.copy2(src_file_path, dest_file_path)
+            # Check if the destination file is not a symlink
+            if not os.path.islink(dest_file_path):
+                # Also check if the source file is not a symlink that points to the destination file
+                if not (os.path.islink(src_file_path) and os.path.realpath(src_file_path) == os.path.realpath(dest_file_path)):
+                    # Finally, check if the source and destination are the same file by comparing inode numbers
+                    if os.stat(src_file_path)[stat.ST_INO] != os.stat(dest_file_path)[stat.ST_INO]:
+                        # Copy src file to dest, overwriting any existing file at dest
+                        shutil.copy2(src_file_path, dest_file_path)
+                    else:
+                        print(f"Source '{src_file_path}' and destination '{dest_file_path}' are the same file. Skipped copying.")
+                else:
+                    print(f"Source '{src_file_path}' is a symlink pointing to the destination. Skipped copying.")
+            else:
+                print(f"Destination '{dest_file_path}' is a symlink. Skipped copying.")
+        else:
+            print(f"Invalid source file path constructed: {src_file_path}")
 
 def update_plugin(plugin_files_source):
     plugin_location = determine_plugin_location()
@@ -56,12 +71,15 @@ def update_plugin(plugin_files_source):
         copy_files_to_plugin_directory(plugin_files_source, plugin_location)
 
 def create_virtual_environment(env_path):
+    print("Starting virtual environment creation...")
     if platform.system() == "Windows":
         subprocess.run(["python", "-m", "venv", env_path], shell=True)
     else:
         subprocess.run(["python3", "-m", "venv", env_path])
 
 def install_requirements(env_path, requirements_path):
+    print("Installing requirements...")
+
     activate_path = os.path.join(env_path, "bin", "activate") if platform.system() != "Windows" else os.path.join(env_path, "Scripts", "activate")
 
     # Differentiate between Windows and Unix-based systems
@@ -81,26 +99,9 @@ def install_requirements(env_path, requirements_path):
     if stderr:
         print(f"ERROR:\n{stderr.decode()}")
 
-def exclude_from_git(file_path):
-    relative_path = os.path.relpath(file_path, PROJECT_ROOT)
+def update_yaml(config_path, default_config_path = os.path.join(PROJECT_ROOT, 'config.yaml')):
+    print(f"Updating yaml config file at location '{config_path}'...")
     
-    ignore_entry = f'\n{relative_path}'
-    
-    # Determine the base directory from the provided file_path
-    base_dir = os.path.dirname(file_path)
-    gitignore_path = os.path.join(base_dir, '.gitignore')
-    
-    # Read the current .gitignore file
-    with open(gitignore_path, 'r') as gitignore:
-        if ignore_entry in gitignore.read():
-            print(f"'{file_path}' is already in .gitignore")
-            return
-
-    # Append the file_path to the .gitignore file
-    with open(gitignore_path, 'a') as gitignore:
-        gitignore.write(ignore_entry)
-
-def update_yaml(config_path, default_config_path= os.path.join(PROJECT_ROOT,'config.yaml')):
     # Check if the directory of config_path exists, if not, create it
     config_dir = os.path.dirname(config_path)
     if not os.path.exists(config_dir):
@@ -143,19 +144,18 @@ def update_yaml(config_path, default_config_path= os.path.join(PROJECT_ROOT,'con
 
 
 def setup():
-    print("running")
+    print("Running show-codebase setup...")
+
     # Create and activate virtual environment
     if not os.path.exists(ENV_PATH):
         create_virtual_environment(ENV_PATH)
-        # Exclude virtual environment from git
-    exclude_from_git(ENV_PATH)
+    else:
+        print(f"Virtual environment already exists at location '{ENV_PATH}', skipping creation...")
+
     # Install requirements in the created environment
     requirements_path = os.path.join(PROJECT_ROOT, 'requirements.txt')
     if os.path.exists(requirements_path):
         install_requirements(ENV_PATH, requirements_path)
-
-    # Exclude virtual environment from git
-    exclude_from_git(ENV_PATH)
 
     # Update plugin files
     update_plugin(os.path.join(PROJECT_ROOT, 'plugin'))
