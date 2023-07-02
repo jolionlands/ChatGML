@@ -53,7 +53,7 @@ def load_files(root_dir):
                 continue
             for ext in LOADER_MAPPING:
                 if file_path.endswith(ext):
-                    print('\r' + f'📂 Loading files: {file_path}')
+                    print('\r' + f'Loading files: {file_path}')
                     args = LOADER_MAPPING[ext]['args']
                     loader = LOADER_MAPPING[ext]['loader'](file_path, *args)
                     futures.append(pool.apply_async(loader.load))

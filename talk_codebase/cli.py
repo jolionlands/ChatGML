@@ -3,7 +3,7 @@ import sys
 import yaml
 import fire
 import json
-
+sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 from talk_codebase.llm import factory_llm
 from talk_codebase.consts import DEFAULT_CONFIG
 
@@ -110,7 +110,7 @@ class TalkCodebaseCLI:
         chat(root_dir, 'Y')
 
 
-if __name__ == "__main__":
+def main():
     try:
         fire.Fire(TalkCodebaseCLI)
     except KeyboardInterrupt:

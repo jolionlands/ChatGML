@@ -64,6 +64,11 @@ model_type: openai
 - [x] `.txt`
 - [x] `popular programming languages`
 
+## Get the project structure (Unix)
+```
+find . | grep -v "__pycache__\|\.pytest_cache\|\.benchmarks\|ffmpeg\|\.pyc\|./talk-venv\|./.github\|./.DS_Store\|./.git" > project_structure.txt
+```
+
 ## Contributing
 
 * If you find a bug in talk-codebase, please report it on the project's issue tracker. When reporting a bug, please include as much information as possible, such as the steps to reproduce the bug, the expected behavior, and the actual behavior.

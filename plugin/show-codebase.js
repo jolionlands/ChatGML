@@ -158,12 +158,39 @@
 		} else {
 			console.log(`Python script found at: ${scriptPath}`);
 		}
+
+		// Check for execution permissions on Unix
+		if (process.platform !== "win32") {
+			try {
+				fs.accessSync(pythonExecutable, fs.constants.X_OK);
+			} catch (error) {
+				console.error(`Python executable at: ${pythonExecutable} is not executable.`, error);
+				return;
+			}
+		}
 	  
-		console.log(`Running script at: ${scriptPath}`);
+		console.log("Running script", scriptPath);
 		try {
-				pythonProcess = spawn(pythonExecutable, [scriptPath,'chat',projectDirectory], {
-				stdio: ['pipe', 'pipe', process.stderr], // Redirect stdout and stderr to pipes
+
+			pythonProcess = spawn(pythonExecutable, [scriptPath,'chat',projectDirectory], {
+				stdio: ['pipe', 'pipe', 'pipe'],
 			});
+
+			// Check if the Python process was successfully started
+			if (!pythonProcess) {
+				console.error('Failed to start the Python process.');
+				return;
+			}
+
+			// Check if pythonProcess.stderr is not null before setting up the event listener (may have failed silently)
+			if (pythonProcess.stderr) {
+				pythonProcess.stderr.on('data', (data) => {
+					console.error('Python script error:', data.toString());
+				});
+			} else {
+				console.error('Failed to create stderr for the Python process.');
+				return;
+			}
 	  
 			pythonProcess.on('error', (error) => {
 				console.error('Failed to start subprocess.', error);
@@ -203,7 +230,7 @@
 				console.log('Python script exited with code:', code);
 			});
 		} catch (err) {
-			
+			console.log("Caught error while trying to start python process", err);
 		}
 	}
 	// A function to update the content of Ace editor
