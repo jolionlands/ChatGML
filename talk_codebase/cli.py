@@ -71,7 +71,7 @@ def validate_config(config):
 
 
 def loop(llm):
-    # print(json.dumps({"status": "info", "message": "Entered loop for queries"}) + "\n")
+    sys.stderr.write("Entered loop for queries...")
     query = ""
     while True:  # Keep this loop running indefinitely
         line = sys.stdin.readline().strip()  # Try to read a line
@@ -80,24 +80,17 @@ def loop(llm):
         if line.endswith("END"):
             query += line.replace("END", "").lower().strip()  # Remove end signal from line and add to query
             if query in ('exit', 'quit'):
-                print("User requested exit. Exiting query loop...")
+                sys.stderr.write("User requested exit. Exiting query loop...")
                 break
-            print("About to send query to the model...")
-            response = llm.send_query(query)
-            print("Query sent, response received.")
-            print("Writing response to stdout...")
-            sys.stdout.write(json.dumps(response))
-            sys.stdout.flush()
-            print("Response written to stdout.")
+            sys.stderr.write("About to send query to the model...")
+            llm.send_query(query)
             query = ""
         else:
             query += line.lower().strip() + " "  # Add space between lines
-    # print(json.dumps("EOF"))
 
-def chat(root_dir, query):
+def chat(root_dir):
     config = validate_config(get_config())
     llm = factory_llm(root_dir, config)
-    response = llm.send_query(query)
     loop(llm)
 
 
@@ -109,12 +102,12 @@ class TalkCodebaseCLI:
         configure(model_type, api_key, model_name, model_path)
 
     def set_config(self, custom_config_path=None):
-        print(json.dumps({"status": "info", "message": "Setting config..."}))
+        sys.stderr.write("Setting config...")
         set_config(custom_config_path)
 
     def chat(self, root_dir):
-        print(json.dumps({"status": "info", "message": "Starting chat..."}))
-        chat(root_dir, 'Y')
+        sys.stderr.write("Starting chat...")
+        chat(root_dir)
 
 
 if __name__ == "__main__":

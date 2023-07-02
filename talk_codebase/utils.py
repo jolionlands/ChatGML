@@ -54,9 +54,12 @@ class StreamStdOutJSON(StreamingStdOutCallbackHandler):
         self.output.append("ChatGML: ")
 
     def on_llm_end(self, response, **kwargs):
-        self.output.append("\nEOF")
-        json_output = json.dumps({"ai_response": " ".join(self.output)})
-        sys.stdout.write(json_output)
+        # Get the first generation if it exists
+        ai_response = response.generations[0][0].text if response.generations else ' '.join(self.output)
+        
+        sys.stdout.write(json.dumps({
+            "ai_response": ai_response,
+        }))
         sys.stdout.flush()
 
 

@@ -1,5 +1,5 @@
 # llm.py
-
+import sys
 import os
 from typing import Optional
 import json
@@ -101,7 +101,7 @@ class OpenAILLM(BaseLLM):
                           callback_manager=CallbackManager([StreamStdOutJSON()]),
                           temperature=float(self.config.get("temperature")))
 
-    def send_query(self, query):
+    def send_query(self, query) -> None:
         k = self.config.get("k")
         docs = self.embedding_search(query, k=int(k))
 
@@ -113,22 +113,18 @@ class OpenAILLM(BaseLLM):
             HumanMessage(content=query)
         ]
 
-        ai_message_resp = self.llm(messages)
+        self.llm(messages)
         
         file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
-        output_message = {
+        sys.stdout.write(json.dumps({
             "prompt": prompt,
             "query": query,
-            "ai_response": ai_message_resp.content,
-            "files": file_paths,
-        }
-
-        return output_message
+            "files": file_paths
+        }))
 
 
 def factory_llm(root_dir, config):
     model_type = config.get("model_type")
-    print(json.dumps(f"Setting up LLM model of type {model_type}..."))
     if model_type == "openai":
         return OpenAILLM(root_dir, config)
     else:

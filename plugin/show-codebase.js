@@ -17,6 +17,9 @@
 	let pythonProcess = null;
 	let pythonOutputContent = "";
 
+	// Used to keep track of the last command to user accidentally sending duplicates
+	let lastCommand = "";
+
 	const cwd = process.cwd();
 	console.log(`Current working directory: ${cwd}`);
 
@@ -205,11 +208,7 @@
 			}
 
 			// Check if pythonProcess.stderr is not null before setting up the event listener (may have failed silently)
-			if (pythonProcess.stderr) {
-				pythonProcess.stderr.on('data', (data) => {
-					console.error('Python script error:', data.toString());
-				});
-			} else {
+			if (!pythonProcess.stderr) {
 				console.error('Failed to create stderr for the Python process', pythonProcess);
 				return;
 			}
@@ -232,52 +231,36 @@
 			pythonProcess.stdout.on('data', (data) => {
 
 				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
-				// console.log("stdoutdata", dataStr);
+
+				if (!dataStr) {
+					return;
+				}
 
 				try {
 					const dataObj = JSON.parse(dataStr);
 					if (dataObj.ai_response) {
 						const aiRespContent = dataObj.ai_response.trim();
-						pythonOutputContent += aiRespContent;
-						if (aiRespContent.includes('EOF')) {
-							console.log('Received AI response for user query:\n', aiRespContent);
-							updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
-							pythonOutputContent = "";
-							return;
-						}
+						pythonOutputContent = aiRespContent;
+						console.log('Received AI response for user query:\n', aiRespContent, dataObj);
+						updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
+						pythonOutputContent = "";
+						return;
+					} else {
+						console.warn('Received unexpected data from Python script:\n', dataStr);
 					}
 				} catch(e) {
-					if (!(e instanceof SyntaxError)) {
+					if (e instanceof SyntaxError) {
+						console.error("Failed to parse JSON from stdout:\n", dataStr);
+					} else {
 						throw e;
 					}
-				} finally {
-					if (dataStr) {
-						console.log("stdoutdata:\n", dataStr);
-					}
 				}
-			
-				// if (dataStr.includes('EOF')) {
-				// 	if (pythonOutputContent) {
-				// 		console.log('Received response data for user query', pythonOutputContent);
-				// 		updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
-				// 	} else {
-				// 		console.warn('Received empty response data for user query');
-				// 	}
-				// 	pythonOutputContent = "";
-				// } else {
-				// 	pythonOutputContent += dataStr; // Append output to pythonOutputContent
-				// 	console.log("Appended content to ouput", pythonOutputContent);
-				// }
-				// let apple = dataStr
-				// if (apple.trim() == ('SET UP')) {
-				// 	console.log('Python script setting up outputting. Y');
-				// 	pythonProcess.stdin.write('Y' + "\n");
-				// }
 			});
 
 			// Listen for data events on stderr (optional)
 			pythonProcess.stderr.on('data', (data) => {
-				console.error('Python script error:', data.toString());
+				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
+				console.info('stderr data:', dataStr);
 			});
 
 			pythonProcess.stdout.on('end', () => {
@@ -372,12 +355,16 @@
 		sendCommandButton.classList.add("run-button");
 		sendCommandButton.addEventListener("click", function () {
 			var command = ace.edit(newEditorContainer).getValue();
-			if (command) {
-				console.log("User content retrieved from editor", command);
-				console.debug(pythonProcess);
-				pythonProcess.stdin.write(command + "END\n");
-			} else {
+			// Check if the command is the same as the last one
+			if (!command) {
 				console.warn("User content is empty");
+			} else if (command !== lastCommand) {
+				console.log("User content retrieved from editor", command);
+				pythonProcess.stdin.write(command + "END\n");
+				// Update the last command
+				lastCommand = command;
+			} else {
+				console.log("User attempted to send the same command again. Command not sent.");
 			}
 		});
 		buttonsContainer.appendChild(sendCommandButton);
