@@ -65,7 +65,7 @@ class BaseLLM:
         db = FAISS.from_documents(texts, embeddings)
         db.add_documents(texts)
         db.save_local(index_path)
-        spinners.succeed(f"Created vector store")
+        spinners.succeed(f"Created vector store for {len(docs)} documents")
         return db
 
 

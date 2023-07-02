@@ -217,12 +217,17 @@
 	}
 
 	function hide() {
-		mainCont.removeChild(sizer);
-		mainCont.removeChild(container);
+		if (mainCont && sizer) {
+			mainCont.removeChild(sizer);
+		}
+		if (mainCont && container) {
+			mainCont.removeChild(container);
+		}
 		gmlFile = null;
 		forceUpdate();
 		setTimeout(() => aceEditor.focus());
 	}
+	
 	
 	function show(file) {
 		if (!file.codeEditor) return;
@@ -408,7 +413,12 @@
 				show(aceEditor.session.gmlFile);
 			}
 		}));
-		setupEnvironment("https://github.com/jolionlands/talk-codebase.git", "talk-codebase", "talk-venv","cli.py");
+
+		try {
+			setupEnvironment("https://github.com/jolionlands/talk-codebase.git", "talk-codebase", "talk-venv","cli.py");
+		} catch (err) {
+			console.error("Error during setupEnvironment:", err);
+		}
 
 		GMEdit.on("projectOpen", function(e) {
 			console.log("Project opened: ", e.project);
