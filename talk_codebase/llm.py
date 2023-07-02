@@ -4,11 +4,12 @@ from typing import Optional
 import questionary
 from halo import Halo
 from langchain import FAISS
+from langchain import PromptTemplate, LLMChain
 from langchain.callbacks.manager import CallbackManager
-from langchain.chains import RetrievalQA
 from langchain.chat_models import ChatOpenAI
 from langchain.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
 from langchain.llms import GPT4All
+from langchain.schema import HumanMessage, SystemMessage
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from consts import MODEL_TYPES
@@ -29,13 +30,8 @@ class BaseLLM:
     def _create_model(self):
         raise NotImplementedError("Subclasses must implement this method.")
 
-    def send_query(self, question):
-        k = self.config.get("k")
-        qa = RetrievalQA.from_chain_type(llm=self.llm, chain_type="stuff",
-                                         retriever=self.vector_store.as_retriever(search_kwargs={"k": int(k)}),
-                                         return_source_documents=True)
-        answer = qa(question)
-        print('\n' + '\n'.join([f'📄 {os.path.abspath(s.metadata["source"])}:' for s in answer["source_documents"]]))
+    def embedding_search(self, query, k):
+        return self.vector_store.search(query, k=k, search_type="similarity")
 
     def _create_vector_store(self, embeddings, index, root_dir):     
         # Normalize the root directory path
@@ -55,13 +51,21 @@ class BaseLLM:
         texts = text_splitter.split_documents(docs)
         if index == MODEL_TYPES["OPENAI"]:
             cost = calculate_cost(docs, self.config.get("model_name"))
+            approve = questionary.select(
+                f"Creating a vector store will cost ~${cost:.5f}. Do you want to continue?",
+                choices=[
+                    {"name": "Yes", "value": True},
+                    {"name": "No", "value": False},
+                ]
+            ).ask()
+            if not approve:
+                exit(0)
 
-            print(cost)
-        spinners = Halo(text=f"Creating vector store for {len(docs)} documents", spinner='dots').start()
+        spinners = Halo(text=f"Creating vector store", spinner='dots').start()
         db = FAISS.from_documents(texts, embeddings)
         db.add_documents(texts)
         db.save_local(index_path)
-        spinners.succeed(f"Created vector store for {len(docs)} documents")
+        spinners.succeed(f"Created vector store")
         return db
     
 
@@ -110,6 +114,21 @@ class LocalLLM(BaseLLM):
         llm = GPT4All(model=self.config.get("model_path"), n_ctx=int(self.config.get("max_tokens")), streaming=True)
         return llm
 
+    def send_query(self, query):
+        k = self.config.get("k")
+        docs = self.embedding_search(query, k=int(k))
+
+        content = "\n".join([f"content: \n```{s.page_content}```" for s in docs])
+        template = "Given the following content, your task is to answer the question.\nQuestion: {question}\n{content}"
+
+        prompt = PromptTemplate(template=template, input_variables=["content", "question"]).partial(content=content)
+        llm_chain = LLMChain(prompt=prompt, llm=self.llm)
+
+        llm_chain.run(query)
+
+        file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
+        print('\n'.join([f'📄 {file_path}:' for file_path in file_paths]))
+
 
 class OpenAILLM(BaseLLM):
     def _create_store(self, root_dir: str) -> Optional[FAISS]:
@@ -117,10 +136,29 @@ class OpenAILLM(BaseLLM):
         return self._create_vector_store(embeddings, MODEL_TYPES["OPENAI"], root_dir)
 
     def _create_model(self):
-        return ChatOpenAI(model_name=self.config.get("model_name"), openai_api_key=self.config.get("api_key"),
+        return ChatOpenAI(model_name=self.config.get("model_name"),
+                          openai_api_key=self.config.get("api_key"),
                           streaming=True,
                           max_tokens=int(self.config.get("max_tokens")),
-                          callback_manager=CallbackManager([StreamStdOut()]))
+                          callback_manager=CallbackManager([StreamStdOut()]),
+                          temperature=float(self.config.get("temperature")))
+
+    def send_query(self, query):
+        k = self.config.get("k")
+        docs = self.embedding_search(query, k=int(k))
+
+        content = "\n".join([f"content: \n```{s.page_content}```" for s in docs])
+        prompt = f"Given the following content, your task is to answer the question. \n{content}"
+
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=query),
+        ]
+
+        self.llm(messages)
+
+        file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
+        print('\n'.join([f'📄 {file_path}:' for file_path in file_paths]))
 
 
 def factory_llm(root_dir, config):
