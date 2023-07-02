@@ -44,7 +44,7 @@ chunk_overlap: 50
 chunk_size: 500
 
 # Configuration for sampling
-k: 4
+k: 4  # Essentially how many relevant files/sections to send to the AI for context
 max_tokens: 1048
 
 # Configuration for the LLM model

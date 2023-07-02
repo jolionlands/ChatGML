@@ -8,3 +8,4 @@
 __pycache__/
 talk-venv
 project_structure.txt
+vector_store/

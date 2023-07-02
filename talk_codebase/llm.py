@@ -123,7 +123,7 @@ class OpenAILLM(BaseLLM):
         self.llm(messages)
 
         file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
-        print('\n'.join([f'📄 {file_path}:' for file_path in file_paths]))
+        print(f'Found {len(file_paths)} file(s) relevant to user question: ' + '\n'.join([f'{file_path}:' for file_path in file_paths]))
 
 
 def factory_llm(root_dir, config):
