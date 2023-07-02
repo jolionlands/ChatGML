@@ -1,3 +1,5 @@
+# cli.py
+
 import os
 import sys
 import yaml
@@ -14,7 +16,6 @@ config_path = os.path.join(config_dir, config_filename)
 # Create the config directory if it does not exist
 if not os.path.exists(config_dir):
     os.makedirs(config_dir)
-
 
 def set_config(custom_config_path=None):
     global config_path
@@ -70,21 +71,28 @@ def validate_config(config):
 
 
 def loop(llm):
-    print("Enter loop for queries")
-    print("EOF")
+    # print(json.dumps({"status": "info", "message": "Entered loop for queries"}) + "\n")
     query = ""
-    for line in sys.stdin:
-        if "END" in line:
-            query += line.replace("END", "").lower().strip() # remove end signal from line and add to query
+    while True:  # Keep this loop running indefinitely
+        line = sys.stdin.readline().strip()  # Try to read a line
+        if not line:  # If the line is empty (no input)
+            continue  # Just go back to the start of the loop
+        if line.endswith("END"):
+            query += line.replace("END", "").lower().strip()  # Remove end signal from line and add to query
             if query in ('exit', 'quit'):
+                print("User requested exit. Exiting query loop...")
                 break
-            llm.send_query(query)
-            query = ""
-            print("EOF", file=sys.stdout)
+            print("About to send query to the model...")
+            response = llm.send_query(query)
+            print("Query sent, response received.")
+            print("Writing response to stdout...")
+            sys.stdout.write(json.dumps(response))
             sys.stdout.flush()
+            print("Response written to stdout.")
+            query = ""
         else:
-            query += line.lower().strip() + " " # add space between lines
-    print("EOF")
+            query += line.lower().strip() + " "  # Add space between lines
+    # print(json.dumps("EOF"))
 
 def chat(root_dir, query):
     config = validate_config(get_config())
@@ -101,15 +109,15 @@ class TalkCodebaseCLI:
         configure(model_type, api_key, model_name, model_path)
 
     def set_config(self, custom_config_path=None):
-        print("setting config ")
+        print(json.dumps({"status": "info", "message": "Setting config..."}))
         set_config(custom_config_path)
 
     def chat(self, root_dir):
-        print("CHATTING")
+        print(json.dumps({"status": "info", "message": "Starting chat..."}))
         chat(root_dir, 'Y')
 
 
-def main():
+if __name__ == "__main__":
     try:
         fire.Fire(TalkCodebaseCLI)
     except KeyboardInterrupt:
@@ -118,4 +126,4 @@ def main():
         if str(e) == "<empty message>":
             print(json.dumps({"status": "error", "message": "Please configure your API key. Use talk-codebase configure"}))
         else:
-            raise e
+            print(json.dumps({"status": "error", "message": str(e)}))

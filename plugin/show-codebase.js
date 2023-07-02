@@ -198,12 +198,9 @@
 				return;
 			}
 
-			// If pythonProcess.stdin is not null, write the input into it
-			if (pythonProcess.stdin) {
-				pythonProcess.stdin.write(input + '\n');
-				pythonProcess.stdin.end();
-			} else {
-				console.error('Failed to create stdin for the Python process.');
+			// Check that pythonProcess.stdin is not null
+			if (!pythonProcess.stdin) {
+				console.error('Failed to create stdin for the Python process');
 				return;
 			}
 
@@ -234,21 +231,48 @@
 			// Listen for data events on stdout
 			pythonProcess.stdout.on('data', (data) => {
 
-				const dataStr = data.toString();
-				console.log('Python script output:', dataStr);
+				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
+				// console.log("stdoutdata", dataStr);
 
-				if (dataStr.includes('EOF')) {
-					console.log('Python script finished outputting.');
-					updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
-					pythonOutputContent = "";
-				} else {
-					pythonOutputContent += dataStr; // Append output to pythonOutputContent
+				try {
+					const dataObj = JSON.parse(dataStr);
+					if (dataObj.ai_response) {
+						const aiRespContent = dataObj.ai_response.trim();
+						pythonOutputContent += aiRespContent;
+						if (aiRespContent.includes('EOF')) {
+							console.log('Received AI response for user query:\n', aiRespContent);
+							updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
+							pythonOutputContent = "";
+							return;
+						}
+					}
+				} catch(e) {
+					if (!(e instanceof SyntaxError)) {
+						throw e;
+					}
+				} finally {
+					if (dataStr) {
+						console.log("stdoutdata:\n", dataStr);
+					}
 				}
-				let apple = dataStr
-				if (apple.trim() == ('SET UP')) {
-					console.log('Python script setting up outputting. Y');
-					pythonProcess.stdin.write('Y' + "\n");
-				}
+			
+				// if (dataStr.includes('EOF')) {
+				// 	if (pythonOutputContent) {
+				// 		console.log('Received response data for user query', pythonOutputContent);
+				// 		updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
+				// 	} else {
+				// 		console.warn('Received empty response data for user query');
+				// 	}
+				// 	pythonOutputContent = "";
+				// } else {
+				// 	pythonOutputContent += dataStr; // Append output to pythonOutputContent
+				// 	console.log("Appended content to ouput", pythonOutputContent);
+				// }
+				// let apple = dataStr
+				// if (apple.trim() == ('SET UP')) {
+				// 	console.log('Python script setting up outputting. Y');
+				// 	pythonProcess.stdin.write('Y' + "\n");
+				// }
 			});
 
 			// Listen for data events on stderr (optional)
@@ -348,10 +372,13 @@
 		sendCommandButton.classList.add("run-button");
 		sendCommandButton.addEventListener("click", function () {
 			var command = ace.edit(newEditorContainer).getValue();
-			console.log(command);
-			console.log(pythonProcess)
-			pythonProcess.stdin.write(command + "END\n");
-
+			if (command) {
+				console.log("User content retrieved from editor", command);
+				console.debug(pythonProcess);
+				pythonProcess.stdin.write(command + "END\n");
+			} else {
+				console.warn("User content is empty");
+			}
 		});
 		buttonsContainer.appendChild(sendCommandButton);
 

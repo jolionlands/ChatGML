@@ -1,5 +1,8 @@
+# llm.py
+
 import os
 from typing import Optional
+import json
 from halo import Halo
 from langchain import FAISS
 from langchain import PromptTemplate, LLMChain
@@ -11,7 +14,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from consts import MODEL_TYPES
-from utils import load_files, get_local_vector_store, calculate_cost, StreamStdOut
+from utils import load_files, get_local_vector_store, calculate_cost, StreamStdOutJSON
 
 
 class BaseLLM:
@@ -82,7 +85,7 @@ class LocalLLM(BaseLLM):
         llm_chain.run(query)
 
         file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
-        print('\n'.join([f'📄 {file_path}:' for file_path in file_paths]))
+        print('\n'.join([f'{file_path}:' for file_path in file_paths]))
 
 
 class OpenAILLM(BaseLLM):
@@ -95,7 +98,7 @@ class OpenAILLM(BaseLLM):
                           openai_api_key=self.config.get("api_key"),
                           streaming=True,
                           max_tokens=int(self.config.get("max_tokens")),
-                          callback_manager=CallbackManager([StreamStdOut()]),
+                          callback_manager=CallbackManager([StreamStdOutJSON()]),
                           temperature=float(self.config.get("temperature")))
 
     def send_query(self, query):
@@ -103,22 +106,30 @@ class OpenAILLM(BaseLLM):
         docs = self.embedding_search(query, k=int(k))
 
         content = "\n".join([f"content: \n```{s.page_content}```" for s in docs])
-        prompt = f"Given the following content, your task is to answer the question. \n{content}"
+        prompt = f"Given the following snippets of related content, respond with the answer to the question. \n{content}"
 
         messages = [
             SystemMessage(content=prompt),
-            HumanMessage(content=query),
+            HumanMessage(content=query)
         ]
 
-        self.llm(messages)
-
+        ai_message_resp = self.llm(messages)
+        
         file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
-        print(f'Found {len(file_paths)} file(s) relevant to user question: ' + '\n'.join([f'{file_path}:' for file_path in file_paths]))
+        output_message = {
+            "prompt": prompt,
+            "query": query,
+            "ai_response": ai_message_resp.content,
+            "files": file_paths,
+        }
+
+        return output_message
 
 
 def factory_llm(root_dir, config):
-    print("SET UP")
-    if config.get("model_type") == "openai":
+    model_type = config.get("model_type")
+    print(json.dumps(f"Setting up LLM model of type {model_type}..."))
+    if model_type == "openai":
         return OpenAILLM(root_dir, config)
     else:
         return LocalLLM(root_dir, config)

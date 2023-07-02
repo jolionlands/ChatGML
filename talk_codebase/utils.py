@@ -1,8 +1,10 @@
+# utils.py
+
 import glob
 import multiprocessing
 import os
 import sys
-
+import json
 import tiktoken
 from git import Repo
 from langchain import FAISS
@@ -34,10 +36,27 @@ class StreamStdOut(StreamingStdOutCallbackHandler):
         sys.stdout.flush()
 
     def on_llm_start(self, serialized, prompts, **kwargs):
-        sys.stdout.write("🤖 ")
+        sys.stdout.write("🤖")
 
     def on_llm_end(self, response, **kwargs):
         sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
+class StreamStdOutJSON(StreamingStdOutCallbackHandler):
+    def __init__(self):
+        self.output = []
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.output.append(token)
+
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        self.output.append("ChatGML: ")
+
+    def on_llm_end(self, response, **kwargs):
+        self.output.append("\nEOF")
+        json_output = json.dumps({"ai_response": " ".join(self.output)})
+        sys.stdout.write(json_output)
         sys.stdout.flush()
 
 
