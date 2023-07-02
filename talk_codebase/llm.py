@@ -1,7 +1,5 @@
 import os
 from typing import Optional
-
-import questionary
 from halo import Halo
 from langchain import FAISS
 from langchain import PromptTemplate, LLMChain
@@ -12,8 +10,8 @@ from langchain.llms import GPT4All
 from langchain.schema import HumanMessage, SystemMessage
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-from talk_codebase.consts import MODEL_TYPES
-from talk_codebase.utils import load_files, get_local_vector_store, calculate_cost, StreamStdOut
+from consts import MODEL_TYPES
+from utils import load_files, get_local_vector_store, calculate_cost, StreamStdOut
 
 
 class BaseLLM:
@@ -51,15 +49,7 @@ class BaseLLM:
         texts = text_splitter.split_documents(docs)
         if index == MODEL_TYPES["OPENAI"]:
             cost = calculate_cost(docs, self.config.get("model_name"))
-            approve = questionary.select(
-                f"Creating a vector store will cost ~${cost:.5f}. Do you want to continue?",
-                choices=[
-                    {"name": "Yes", "value": True},
-                    {"name": "No", "value": False},
-                ]
-            ).ask()
-            if not approve:
-                exit(0)
+            print(f"Creating a vector store with estimated cost ~${cost:.5f}")
 
         spinners = Halo(text=f"Creating vector store", spinner='dots').start()
         db = FAISS.from_documents(texts, embeddings)

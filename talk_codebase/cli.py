@@ -3,9 +3,8 @@ import sys
 import yaml
 import fire
 import json
-sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-from talk_codebase.llm import factory_llm
-from talk_codebase.consts import DEFAULT_CONFIG
+from llm import factory_llm
+from consts import DEFAULT_CONFIG
 
 home_dir = os.path.expanduser("~")
 config_dir = os.path.join(home_dir, "talk_codebase")
