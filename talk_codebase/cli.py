@@ -20,10 +20,10 @@ if not os.path.exists(config_dir):
 def set_config(custom_config_path=None):
     global config_path
     if custom_config_path is not None:
-        print("config path already set")
+        sys.stderr.write(f"Config path already set: {custom_config_path}")
         config_path = os.path.join(custom_config_path, config_filename)
     if not os.path.exists(config_path):
-        print("writing config file")
+        sys.stderr.write("Writing config file...")
         get_config()  # Creates the config file with default config if it does not exist
 
 def get_config():
@@ -49,7 +49,7 @@ def configure(model_type, api_key=None, model_name=None, model_path=None):
     elif model_type == "local":
         config["model_path"] = model_path if model_path else DEFAULT_CONFIG["model_path"]
     save_config(config)
-    print(json.dumps({"status": "success", "message": "Configuration saved!"}))
+    sys.stderr.write("Configuration saved!")
 
 
 def validate_config(config):
@@ -59,12 +59,12 @@ def validate_config(config):
     if config.get("model_type") == "openai":
         api_key = config.get("api_key")
         if not api_key:
-            print(json.dumps({"status": "error", "message": "Please configure your API key. Use talk-codebase configure"}))
+            sys.stderr.write("API key not configured")
             sys.exit(0)
     elif config.get("model_type") == "local":
         model_path = config.get("model_path")
         if not model_path:
-            print(json.dumps({"status": "error", "message": "Please configure your model path. Use talk-codebase configure"}))
+            sys.stderr.write("Model path not configured")
             sys.exit(0)
     save_config(config)
     return config
@@ -75,6 +75,10 @@ def loop(llm):
     query = ""
     while True:  # Keep this loop running indefinitely
         line = sys.stdin.readline().strip()  # Try to read a line
+        if line == "RECREATE_VECTOR_STORE":
+            sys.stderr.write("User requested vector store recreation...")
+            # Exit the loop and trigger recreation in `chat(root_dir)`
+            return "RECREATE_VECTOR_STORE"
         if not line:  # If the line is empty (no input)
             continue  # Just go back to the start of the loop
         if line.endswith("END"):
@@ -91,7 +95,14 @@ def loop(llm):
 def chat(root_dir):
     config = validate_config(get_config())
     llm = factory_llm(root_dir, config)
-    loop(llm)
+    while True:
+        result = loop(llm)
+        if result == "RECREATE_VECTOR_STORE":
+            sys.stderr.write("Recreating vector store...")
+            llm.vector_store = llm._create_store(root_dir, force_recreate=True)
+            sys.stderr.write("Vector store recreated. Restarting chat...")
+        else:
+            break
 
 
 class TalkCodebaseCLI:
@@ -114,9 +125,9 @@ if __name__ == "__main__":
     try:
         fire.Fire(TalkCodebaseCLI)
     except KeyboardInterrupt:
-        print(json.dumps({"status": "exit", "message": "Bye!"}))
+        sys.stderr.write("Bye!")
     except Exception as e:
         if str(e) == "<empty message>":
-            print(json.dumps({"status": "error", "message": "Please configure your API key. Use talk-codebase configure"}))
+            sys.stderr.write("Please configure your API key. Use talk-codebase configure")
         else:
-            print(json.dumps({"status": "error", "message": str(e)}))
+            sys.stderr.write(str(e))

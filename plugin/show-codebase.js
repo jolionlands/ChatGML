@@ -97,6 +97,14 @@
 		}
 	}
 
+	function sendToPython(input) {
+		if (pythonProcess && pythonProcess.stdin) {
+			pythonProcess.stdin.write(input + "\n");
+		} else {
+			console.error("Python process or stdin is not available.");
+		}
+	}
+
 	function parseYamlForPaths(configPath) {
 		// Read file line by line from end
 		const lines = fs.readFileSync(configPath, 'utf-8').split('\n').reverse();
@@ -412,6 +420,14 @@
 			buttonsContainer.appendChild(exitButton);
 		});
 		buttonsContainer.appendChild(openConfigButton);
+
+		var regenerateButton = document.createElement("button");
+		regenerateButton.textContent = "Regenerate";
+		regenerateButton.classList.add("run-button");
+		regenerateButton.addEventListener("click", function() {
+			sendToPython("RECREATE_VECTOR_STORE");
+		});
+		buttonsContainer.appendChild(regenerateButton);
 
 		sizer = document.createElement("div");
 		var editor_id = "codebase_editor";

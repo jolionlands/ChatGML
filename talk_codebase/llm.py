@@ -34,25 +34,27 @@ class BaseLLM:
     def embedding_search(self, query, k):
         return self.vector_store.search(query, k=k, search_type="similarity")
 
-    def _create_vector_store(self, embeddings, index, root_dir):     
+    def _create_vector_store(self, embeddings, index, root_dir, force_recreate:bool = False):     
         # Normalize the root directory path
         root_dir = os.path.normpath(root_dir)
         index_path = os.path.join(root_dir, "vector_store", index)
-        new_db = get_local_vector_store(embeddings, index_path)
-        if new_db is not None:
-            print(new_db)
-            return new_db
+        
+        if not force_recreate:
+            new_db = get_local_vector_store(embeddings, index_path)
+            if new_db is not None:
+                sys.stderr.write(f"Existing local vector store found: {new_db}")
+                return new_db
 
         docs = load_files(root_dir)
         if len(docs) == 0:
-            print("✘ No documents found")
+            sys.stderr.write("✘ No documents found")
             exit(0)
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=int(self.config.get("chunk_size")),
                                                        chunk_overlap=int(self.config.get("chunk_overlap")))
         texts = text_splitter.split_documents(docs)
         if index == MODEL_TYPES["OPENAI"]:
             cost = calculate_cost(docs, self.config.get("model_name"))
-            print(f"Creating a vector store with estimated cost ~${cost:.5f}")
+            sys.stderr.write(f"Creating a vector store with estimated cost ~${cost:.5f}")
 
         spinners = Halo(text=f"Creating vector store", spinner='dots').start()
         db = FAISS.from_documents(texts, embeddings)
@@ -85,13 +87,13 @@ class LocalLLM(BaseLLM):
         llm_chain.run(query)
 
         file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
-        print('\n'.join([f'{file_path}:' for file_path in file_paths]))
+        sys.stderr.write('\n'.join([f'{file_path}:' for file_path in file_paths]))
 
 
 class OpenAILLM(BaseLLM):
-    def _create_store(self, root_dir: str) -> Optional[FAISS]:
+    def _create_store(self, root_dir: str, force_recreate: bool = False) -> Optional[FAISS]:
         embeddings = OpenAIEmbeddings(openai_api_key=self.config.get("api_key"))
-        return self._create_vector_store(embeddings, MODEL_TYPES["OPENAI"], root_dir)
+        return self._create_vector_store(embeddings, MODEL_TYPES["OPENAI"], root_dir, force_recreate)
 
     def _create_model(self):
         return ChatOpenAI(model_name=self.config.get("model_name"),
