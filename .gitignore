@@ -4,7 +4,9 @@
 /.venv/
 /talk_codebase/__pycache__/
 .DS_Store
-/talk-venv
-talk-venv
 venv
 __pycache__
+__pycache__/
+talk-venv
+project_structure.txt
+vector_store/
