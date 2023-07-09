@@ -24,7 +24,7 @@
 	console.log(`Current working directory: ${cwd}`);
 
 	let repoPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-codebase');
-	let envPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-venv');
+	let envPath = path.join(cwd, 'plugins', 'show-codebase', 'chatgml-venv');
 	const requirementsPath = path.join(repoPath, 'requirements.txt');
 	const configPath = path.join(os.homedir(), 'talk_codebase', 'talk_codebase_config.yaml');
 

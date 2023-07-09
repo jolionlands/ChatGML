@@ -66,7 +66,7 @@ model_type: openai
 
 ## Get the project structure (Unix)
 ```
-find . | grep -v "__pycache__\|\.pytest_cache\|\.benchmarks\|ffmpeg\|\.pyc\|./talk-venv\|./.github\|./.DS_Store\|./.git" > project_structure.txt
+find . | grep -v "__pycache__\|\.pytest_cache\|\.benchmarks\|ffmpeg\|\.pyc\|./venv\|./.github\|./.DS_Store\|./.git" > project_structure.txt
 ```
 
 ## Contributing

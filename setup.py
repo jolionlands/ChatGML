@@ -114,12 +114,12 @@ def update_yaml(config_path, default_config_path = os.path.join(PROJECT_ROOT, 'c
     # Get the current working directory
     repo_path = PROJECT_ROOT
     data = default_data.get('PLUGIN_CONFIG', {})
-    # Assume a 'talk-venv' folder in the same directory as the virtual environment
+    # Assume a 'chatgml-venv' folder in the same directory as the virtual environment
     # Get the current working directory
     repo_path = PROJECT_ROOT
 
-    # Assume a 'talk-venv' folder in the same directory as the virtual environment
-    env_path = os.path.join(repo_path, 'talk-venv')
+    # Assume a 'chatgml-venv' folder in the same directory as the virtual environment
+    env_path = os.path.join(repo_path, 'chatgml-venv')
 
     # Update data with the repo_path and venv_path
     data.update({
