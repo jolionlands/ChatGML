@@ -4,7 +4,6 @@ import os
 import sys
 import yaml
 import fire
-import json
 from llm import factory_llm
 from consts import DEFAULT_CONFIG
 

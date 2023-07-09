@@ -17,6 +17,13 @@
 	let pythonProcess = null;
 	let pythonOutputContent = "";
 
+	// Buttons
+	let launchButton;
+	let sendCommandButton;
+	let killButton;
+	let openConfigButton;
+	let regenerateButton;
+
 	// Used to keep track of the last command to user accidentally sending duplicates
 	let lastCommand = "";
 
@@ -46,17 +53,16 @@
 		console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 	});
 
-	function openConfigFile() {
-		// Read the contents of the YAML file
-		fs.readFile(configPath, 'utf8', (err, data) => {
-			if (err) {
-				console.error(`Error reading config file: ${err}`);
-				return;
-			}
-
+	async function openConfigFile() {
+		try {
+			// Read the contents of the YAML file
+			const data = await fs.promises.readFile(configPath, 'utf8');
+	
 			// Set the contents of the file to the Ace Editor
 			newEditor.session.setValue(data);
-		});
+		} catch (err) {
+			console.error(`Error reading config file: ${err}`);
+		}
 	}
 
 	function saveConfigFile() {
@@ -187,7 +193,7 @@
 		// Check for execution permissions on Unix
 		if (process.platform !== "win32") {
 			try {
-				fs.accessSync(pythonExecutable, fs.constants.X_OK);
+				await fs.promises.access(pythonExecutable, fs.constants.X_OK);
 			} catch (error) {
 				console.error(`Python executable at: ${pythonExecutable} is not executable.`, error);
 				return;
@@ -269,6 +275,14 @@
 			pythonProcess.stderr.on('data', (data) => {
 				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
 				console.info('stderr data:', dataStr);
+
+				if (dataStr.includes("Entered loop for queries...")) {
+					if (launchButton) {
+						launchButton.stopLoading();
+					} else {
+						console.warn("launchButton is not defined yet.");
+					}
+				}
 			});
 
 			pythonProcess.stdout.on('end', () => {
@@ -324,7 +338,7 @@
 		console.log(gmlFile)
 		console.log(session)
 		session = GMEdit.aceTools.cloneSession(file.codeEditor.session);
-		var session2 = GMEdit.aceTools.cloneSession(file.codeEditor.session);
+		// var session2 = GMEdit.aceTools.cloneSession(file.codeEditor.session);
 		editor.session.setMode("ace/mode/javascript"); // Set the language mode
 		newEditor.session.setMode("ace/mode/javascript");
 		console.log(newEditor.kind)
@@ -349,19 +363,13 @@
 		newEditor = editor;
 		newEditor = ace.edit(newEditorContainer);
 
-		var pythonButton = document.createElement("button");
-		pythonButton.textContent = "Launch talk-codebase";
-		pythonButton.classList.add("run-button");
-		pythonButton.addEventListener("click", function () {
+		launchButton = new PluginButton(buttonsContainer, "Launch", function() {
 			var input = "START";
-			runPythonScript(input);
+			return runPythonScript(input);
 		});
-		buttonsContainer.appendChild(pythonButton);
 
-		var sendCommandButton = document.createElement("button");
-		sendCommandButton.textContent = "Send Command";
-		sendCommandButton.classList.add("run-button");
-		sendCommandButton.addEventListener("click", function () {
+		// Send Command button
+		sendCommandButton = new PluginButton(buttonsContainer, "Send Command", function() {
 			var command = ace.edit(newEditorContainer).getValue();
 			// Check if the command is the same as the last one
 			if (!command) {
@@ -375,59 +383,41 @@
 				console.log("User attempted to send the same command again. Command not sent.");
 			}
 		});
-		buttonsContainer.appendChild(sendCommandButton);
 
-		var killButton = document.createElement("button");
-		killButton.textContent = "Kill";
-		killButton.classList.add("run-button");
-		killButton.addEventListener("click", function () {
+		// Kill button
+		killButton = new PluginButton(buttonsContainer, "Kill", function() {
 			if (pythonProcess) {
 				pythonProcess.kill(); // Kill the Python process
 				pythonProcess = null; // Set the pythonProcess variable to null
 				console.log("Python process killed.");
 			}
 		});
-		buttonsContainer.appendChild(killButton);
 
-		// Create the "Open Config" button
-		var openConfigButton = document.createElement("button");
-		openConfigButton.textContent = "Open Config";
-		openConfigButton.classList.add("run-button");
-		openConfigButton.addEventListener("click", function () {
+		// Open Config button
+		openConfigButton = new PluginButton(buttonsContainer, "Open Config", function() {
 			openConfigFile();
 
 			// Create the "Save" button
-			var saveButton = document.createElement("button");
-			saveButton.textContent = "Save";
-			saveButton.classList.add("run-button");
-			saveButton.addEventListener("click", function () {
+			var saveButton = new PluginButton(buttonsContainer, "Save", function() {
 				var configContent = newEditor.session.getValue();
 				saveConfigFile();
 				console.log("Saving config:", configContent);
 			});
-			buttonsContainer.appendChild(saveButton);
 
 			// Create the "Exit" button
-			var exitButton = document.createElement("button");
-			exitButton.textContent = "Exit";
-			exitButton.classList.add("run-button");
-			exitButton.addEventListener("click", function () {
+			var exitButton = new PluginButton(buttonsContainer, "Exit", function() {
 				// Remove the editor and buttons from the container
 				newEditor.session.setValue("");
-				buttonsContainer.removeChild(saveButton);
-				buttonsContainer.removeChild(exitButton);
+				saveButton.remove();
+				exitButton.remove();
 			});
-			buttonsContainer.appendChild(exitButton);
 		});
-		buttonsContainer.appendChild(openConfigButton);
 
-		var regenerateButton = document.createElement("button");
-		regenerateButton.textContent = "Regenerate";
-		regenerateButton.classList.add("run-button");
-		regenerateButton.addEventListener("click", function() {
+		// Regenerate button
+		regenerateButton = new PluginButton(buttonsContainer, "Regenerate", function() {
 			sendToPython("RECREATE_VECTOR_STORE");
 		});
-		buttonsContainer.appendChild(regenerateButton);
+		regenerateButton.disable();
 
 		sizer = document.createElement("div");
 		var editor_id = "codebase_editor";
@@ -438,7 +428,6 @@
 
 		var nextCont = document.createElement("div");
 		nextCont.classList.add("ace_container");
-
 
 		mainCont = aceEditor.container.parentElement;
 		var mainChildren = [];
