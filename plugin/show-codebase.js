@@ -18,9 +18,8 @@
 	let pythonOutputContent = "";
 
 	// Buttons
-	let launchButton;
+	let launchKillButton;
 	let sendCommandButton;
-	let killButton;
 	let openConfigButton;
 	let regenerateButton;
 
@@ -33,13 +32,12 @@
 	let repoPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-codebase');
 	let envPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-venv');
 	const requirementsPath = path.join(repoPath, 'requirements.txt');
-	const configPath = path.join(os.homedir(), 'talk_codebase', 'talk_codebase_config.yaml');
+	const userHomeDir = os.homedir();
+	const configPath = path.join(userHomeDir, 'talk_codebase', 'talk_codebase_config.yaml');
 
 	console.log(`Current repo path: ${repoPath}`);
 	console.log(`Current requirements path: ${requirementsPath}`);
 	console.log(`Current env path: ${envPath}`);
-
-	const userHomeDir = os.homedir();
 
 	// Global error handler
 	process.on('uncaughtException', (err, origin) => {
@@ -257,6 +255,7 @@
 						pythonOutputContent = aiRespContent;
 						console.log('Received AI response for user query:\n', aiRespContent, dataObj);
 						updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
+						sendCommandButton.stopLoading();
 						pythonOutputContent = "";
 						return;
 					} else {
@@ -277,10 +276,10 @@
 				console.info('stderr data:', dataStr);
 
 				if (dataStr.includes("Entered loop for queries...")) {
-					if (launchButton) {
-						launchButton.stopLoading();
+					if (launchKillButton) {
+						launchKillButton.launch();
 					} else {
-						console.warn("launchButton is not defined yet.");
+						console.warn("launchKillButton is not defined yet.");
 					}
 				}
 			});
@@ -293,6 +292,7 @@
 			// Handle the close event
 			pythonProcess.on('close', (code) => {
 				console.log('Python script exited with code:', code);
+				launchKillButton.kill();
 			});
 		} catch (err) {
 			console.log("Caught error while trying to start python process", err);
@@ -363,13 +363,27 @@
 		newEditor = editor;
 		newEditor = ace.edit(newEditorContainer);
 
-		launchButton = new PluginButton(buttonsContainer, "Launch", function() {
-			var input = "START";
-			return runPythonScript(input);
-		}, "Launching...");
+		// Toggle Launch/Kill button
+		launchKillButton = new ToggleButton(buttonsContainer, "Launch", "Kill", 
+			function() {
+				var input = "START";
+				return runPythonScript(input);
+			},
+			function() {
+				if (pythonProcess) {
+					pythonProcess.kill(); // Kill the Python process
+					pythonProcess = null; // Set the pythonProcess variable to null
+					console.log("Python process killed.");
+					return Promise.resolve();
+				} else {
+					return Promise.reject("Python process is not running.");
+				}
+			}, 
+			"Launching..."
+		);
 
 		// Send Command button
-		sendCommandButton = new PluginButton(buttonsContainer, "Send Command", function() {
+		sendCommandButton = new PluginButtonLoadable(buttonsContainer, "Send Command", function() {
 			var command = ace.edit(newEditorContainer).getValue();
 			// Check if the command is the same as the last one
 			if (!command) {
@@ -383,15 +397,6 @@
 				console.log("User attempted to send the same command again. Command not sent.");
 			}
 		}, "Sending...");
-
-		// Kill button
-		killButton = new PluginButton(buttonsContainer, "Kill", function() {
-			if (pythonProcess) {
-				pythonProcess.kill(); // Kill the Python process
-				pythonProcess = null; // Set the pythonProcess variable to null
-				console.log("Python process killed.");
-			}
-		}, "Killing...");
 
 		// Open Config button
 		openConfigButton = new PluginButton(buttonsContainer, "Open Config", function() {
@@ -414,10 +419,10 @@
 		});
 
 		// Regenerate button
-		regenerateButton = new PluginButton(buttonsContainer, "Regenerate", function() {
+		regenerateButton = new PluginButtonLoadable(buttonsContainer, "Regenerate", function() {
 			sendToPython("RECREATE_VECTOR_STORE");
 		}, "Regenerating...");
-		regenerateButton.disable();
+		regenerateButton.disable(); // Starts disabled - only enable after 'Launch' process is complete
 
 		sizer = document.createElement("div");
 		var editor_id = "codebase_editor";
