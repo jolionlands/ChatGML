@@ -366,7 +366,7 @@
 		launchButton = new PluginButton(buttonsContainer, "Launch", function() {
 			var input = "START";
 			return runPythonScript(input);
-		});
+		}, "Launching...");
 
 		// Send Command button
 		sendCommandButton = new PluginButton(buttonsContainer, "Send Command", function() {
@@ -382,7 +382,7 @@
 			} else {
 				console.log("User attempted to send the same command again. Command not sent.");
 			}
-		});
+		}, "Sending...");
 
 		// Kill button
 		killButton = new PluginButton(buttonsContainer, "Kill", function() {
@@ -391,7 +391,7 @@
 				pythonProcess = null; // Set the pythonProcess variable to null
 				console.log("Python process killed.");
 			}
-		});
+		}, "Killing...");
 
 		// Open Config button
 		openConfigButton = new PluginButton(buttonsContainer, "Open Config", function() {
@@ -416,7 +416,7 @@
 		// Regenerate button
 		regenerateButton = new PluginButton(buttonsContainer, "Regenerate", function() {
 			sendToPython("RECREATE_VECTOR_STORE");
-		});
+		}, "Regenerating...");
 		regenerateButton.disable();
 
 		sizer = document.createElement("div");

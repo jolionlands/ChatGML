@@ -1,8 +1,9 @@
 class PluginButton {
-    constructor(container, text, task) {
+    constructor(container, text, task, loadingText = 'Loading...') {
         this.container = container;
         this.text = text;
         this.task = task;
+        this.loadingText = loadingText;
         this.buttonElement = this.createButtonElement();
         console.log(this.buttonElement); // Log the button after the spinner is added
     }
@@ -54,8 +55,8 @@ class PluginButton {
         // Disable the button
         this.disable();
 
-        // Show the "Loading..." text when the button is clicked
-        this.buttonElement.textContent = 'Loading...';
+        // Show the loading text when the button is clicked
+        this.buttonElement.textContent = this.loadingText;
 
         // Execute the task and handle any errors
         this.task().catch((error) => {
