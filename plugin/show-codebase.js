@@ -164,140 +164,97 @@
 		});
 	}
 
-	async function runPythonScript(input) {
+	function stdoutCallback(dataStr) {
+        if (!dataStr) {
+            return;
+        }
 
+        try {
+            const dataObj = JSON.parse(dataStr);
+            if (dataObj.ai_response) {
+                const aiRespContent = dataObj.ai_response.trim();
+                pythonOutputContent = aiRespContent;
+                console.log('Received AI response for user query:\n', aiRespContent, dataObj);
+                updateAceEditorContent(pythonOutputContent);
+                sendCommandButton.stopLoading();
+                pythonOutputContent = "";
+                return;
+            } else {
+                console.warn('Received unexpected data from Python script:\n', dataStr);
+            }
+        } catch(e) {
+            if (e instanceof SyntaxError) {
+                console.error("Failed to parse JSON from stdout:\n", dataStr);
+            } else {
+                throw e;
+            }
+        }
+    }
+
+    function stderrCallback(dataStr) {
+        console.info('stderr data:', dataStr);
+
+        if (dataStr.includes("Entered loop for queries...")) {
+            if (launchKillButton) {
+                launchKillButton.stopLoading();
+                launchKillButton.setKillState();
+            } else {
+                console.warn("launchKillButton is not defined yet.");
+            }
+        }
+    }
+
+
+	async function runPythonScript() {
 		const pythonExecutable = process.platform === 'win32'
 			? path.join(envPath, 'Scripts', 'python.exe')
 			: path.join(envPath, 'bin', 'python3');
-
+	
 		const scriptPath = path.join(repoPath, 'talk_codebase', 'cli.py');
-
+	
 		// Check Python executable
 		if (!fs.existsSync(pythonExecutable)) {
 			console.error(`Python executable not found at: ${pythonExecutable}`);
-			return;
+			return null;
 		} else {
 			console.log(`Python executable found at: ${pythonExecutable}`);
 		}
-
+	
 		// Check Python script
 		if (!fs.existsSync(scriptPath)) {
 			console.error(`Python script not found at: ${scriptPath}`);
-			return;
+			return null;
 		} else {
 			console.log(`Python script found at: ${scriptPath}`);
 		}
-
+	
 		// Check for execution permissions on Unix
 		if (process.platform !== "win32") {
 			try {
 				await fs.promises.access(pythonExecutable, fs.constants.X_OK);
 			} catch (error) {
 				console.error(`Python executable at: ${pythonExecutable} is not executable.`, error);
-				return;
+				return null;
 			}
 		}
-
+	
 		console.log("Running script in project directory", scriptPath, projectDirectory);
-		
+	
 		// Spawn Python process
 		try {
-
 			pythonProcess = spawn(pythonExecutable, [scriptPath, 'chat', projectDirectory], {
 				stdio: ['pipe', 'pipe', 'pipe'],
 			});
 
-			// Check if the Python process was successfully started
-			if (!pythonProcess) {
-				console.error('Failed to start the Python process.');
-				return;
-			}
-
-			// Check that pythonProcess.stdin is not null
-			if (!pythonProcess.stdin) {
-				console.error('Failed to create stdin for the Python process');
-				return;
-			}
-
-			// Check if pythonProcess.stderr is not null before setting up the event listener (may have failed silently)
-			if (!pythonProcess.stderr) {
-				console.error('Failed to create stderr for the Python process', pythonProcess);
-				return;
-			}
-
-			pythonProcess.on('error', (error) => {
-				console.error('Failed to start subprocess.', error);
-			});
-
-			// Python process disconnect event
-			pythonProcess.on('disconnect', () => {
-				console.log('Python process disconnected');
-			});
-
-			// Python process exit event
-			pythonProcess.on('exit', (code, signal) => {
-				console.log(`Python process exited with code ${code} and signal ${signal}`);
-			});
-
-			// Listen for data events on stdout
-			pythonProcess.stdout.on('data', (data) => {
-
-				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
-
-				if (!dataStr) {
-					return;
-				}
-
-				try {
-					const dataObj = JSON.parse(dataStr);
-					if (dataObj.ai_response) {
-						const aiRespContent = dataObj.ai_response.trim();
-						pythonOutputContent = aiRespContent;
-						console.log('Received AI response for user query:\n', aiRespContent, dataObj);
-						updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
-						sendCommandButton.stopLoading();
-						pythonOutputContent = "";
-						return;
-					} else {
-						console.warn('Received unexpected data from Python script:\n', dataStr);
-					}
-				} catch(e) {
-					if (e instanceof SyntaxError) {
-						console.error("Failed to parse JSON from stdout:\n", dataStr);
-					} else {
-						throw e;
-					}
-				}
-			});
-
-			// Listen for data events on stderr (optional)
-			pythonProcess.stderr.on('data', (data) => {
-				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
-				console.info('stderr data:', dataStr);
-
-				if (dataStr.includes("Entered loop for queries...")) {
-					if (launchKillButton) {
-						launchKillButton.launch();
-					} else {
-						console.warn("launchKillButton is not defined yet.");
-					}
-				}
-			});
-
-			pythonProcess.stdout.on('end', () => {
-				console.log('Python script finished outputting.');
-				updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
-			});
-
-			// Handle the close event
-			pythonProcess.on('close', (code) => {
-				console.log('Python script exited with code:', code);
-				launchKillButton.kill();
-			});
+			console.log("Started Python process");
+	
+			return pythonProcess;
+	
 		} catch (err) {
 			console.log("Caught error while trying to start python process", err);
+			return null;
 		}
-	}
+	}	
 
 	// A function to update the content of Ace editor
 	function updateAceEditorContent(content) {
@@ -321,7 +278,6 @@
 		forceUpdate();
 		setTimeout(() => aceEditor.focus());
 	}
-
 
 	function show(file) {
 		if (!file.codeEditor) return;
@@ -364,22 +320,8 @@
 		newEditor = ace.edit(newEditorContainer);
 
 		// Toggle Launch/Kill button
-		launchKillButton = new ToggleButton(buttonsContainer, "Launch", "Kill", 
-			function() {
-				var input = "START";
-				return runPythonScript(input);
-			},
-			function() {
-				if (pythonProcess) {
-					pythonProcess.kill(); // Kill the Python process
-					pythonProcess = null; // Set the pythonProcess variable to null
-					console.log("Python process killed.");
-					return Promise.resolve();
-				} else {
-					return Promise.reject("Python process is not running.");
-				}
-			}, 
-			"Launching..."
+		launchKillButton = new PythonProcessButton(
+			buttonsContainer, "Launch", "Kill", runPythonScript, "Launching...", stdoutCallback, stderrCallback
 		);
 
 		// Send Command button
