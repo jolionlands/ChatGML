@@ -77,7 +77,7 @@ def load_files(root_dir):
                 if file_path.endswith(ext):
                     sys.stderr.write('\r' + f'Loading files: {file_path}')
                     args = LOADER_MAPPING[ext]['args']
-                    loader = LOADER_MAPPING[ext]['loader'](file_path, *args)
+                    loader = LOADER_MAPPING[ext]['loader'](file_path, **args)       
                     futures.append(pool.apply_async(loader.load))
         docs = []
         for future in futures:

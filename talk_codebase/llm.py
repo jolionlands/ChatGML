@@ -57,11 +57,12 @@ class BaseLLM:
             cost = calculate_cost(docs, self.config.get("model_name"))
             sys.stderr.write(f"Creating a vector store with estimated cost ~${cost:.5f}")
 
-        spinners = Halo(text=f"Creating vector store", spinner='dots').start()
+        #spinners = Halo(text=f"Creating vector store", spinner='dots').start()
+        #sys.stderr.write('\r' + f'Loading files: {spinners}')
         db = FAISS.from_documents(texts, embeddings)
         db.add_documents(texts)
         db.save_local(index_path)
-        spinners.succeed(f"Created vector store for {len(docs)} documents")
+        #spinners.succeed(f"Created vector store for {len(docs)} documents")
         return db
 
 
