@@ -1,25 +1,20 @@
-#code_base_editor {
-    display: flex;
-    flex-direction: row;
-    justify-content: flex-start;
-    align-items: flex-start;
-    width: flex;
-    height: flex;
-    position: relative; /* Add this line */
-  }
-  
+#code_base_editor, #code_base_editor_top {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: flex-start;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+}
+
 #code_base_editor_top {
-    display: flex;
-    flex-direction: row;
-    justify-content: flex-start;
-    align-items: flex-start;
-    width: flex;
-    height: flex;
-    position: absolute; /* Add this line */
-    top: 0; /* Add this line to position it at the top */
-    left: 0; /* Add this line to position it at the left */
-    z-index: 2; /* Add this line to make it appear on top */
-  }
+  z-index: 3;
+}
+
 .run-button {
   padding: 5px 10px;
   cursor: pointer;
@@ -34,15 +29,21 @@
   transition-duration: 0.4s;
 }
 
-.run-button:hover {
-  background-color: #45a049;
+.run-button:hover:not([disabled]) {
+  background-color: darken(#4CAF50, 15%);
+}
+
+button[disabled] {
+  background-color: #ccc;
+  cursor: not-allowed;
 }
 
 .splitter-td {
   background: #ccc;
-  width: flex;
+  width: 100%;
   cursor: col-resize;
 }
+
 #codebase_editor .ace_content {
-    border: 2px solid #948d8d; /* Replace #000000 with your desired border color */
-  }
+  border: 2px solid #948d8d;
+}

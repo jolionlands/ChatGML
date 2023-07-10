@@ -1,6 +1,6 @@
 {
 	"name": "show-codebase",
 	"description": "Adds a context menu item to code editor for splitting into a two-pane layout for ceodebase ",
-	"scripts": ["show-codebase.js"],
+	"scripts": ["show-codebase.js", "plugin-button.js"],
 	"stylesheets": ["style.css"]
 }

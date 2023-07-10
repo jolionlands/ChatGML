@@ -17,6 +17,12 @@
 	let pythonProcess = null;
 	let pythonOutputContent = "";
 
+	// Buttons
+	let launchKillButton;
+	let sendCommandButton;
+	let openConfigButton;
+	let regenerateButton;
+
 	// Used to keep track of the last command to user accidentally sending duplicates
 	let lastCommand = "";
 
@@ -26,13 +32,12 @@
 	let repoPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-codebase');
 	let envPath = path.join(cwd, 'plugins', 'show-codebase', 'talk-venv');
 	const requirementsPath = path.join(repoPath, 'requirements.txt');
-	const configPath = path.join(os.homedir(), 'talk_codebase', 'talk_codebase_config.yaml');
+	const userHomeDir = os.homedir();
+	const configPath = path.join(userHomeDir, 'talk_codebase', 'talk_codebase_config.yaml');
 
 	console.log(`Current repo path: ${repoPath}`);
 	console.log(`Current requirements path: ${requirementsPath}`);
 	console.log(`Current env path: ${envPath}`);
-
-	const userHomeDir = os.homedir();
 
 	// Global error handler
 	process.on('uncaughtException', (err, origin) => {
@@ -46,17 +51,16 @@
 		console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 	});
 
-	function openConfigFile() {
-		// Read the contents of the YAML file
-		fs.readFile(configPath, 'utf8', (err, data) => {
-			if (err) {
-				console.error(`Error reading config file: ${err}`);
-				return;
-			}
-
+	async function openConfigFile() {
+		try {
+			// Read the contents of the YAML file
+			const data = await fs.promises.readFile(configPath, 'utf8');
+	
 			// Set the contents of the file to the Ace Editor
 			newEditor.session.setValue(data);
-		});
+		} catch (err) {
+			console.error(`Error reading config file: ${err}`);
+		}
 	}
 
 	function saveConfigFile() {
@@ -160,130 +164,87 @@
 		});
 	}
 
-	async function runPythonScript(input) {
+	function stdoutCallback(dataStr) {
+        if (!dataStr) {
+            return;
+        }
 
+        try {
+            const dataObj = JSON.parse(dataStr);
+            if (dataObj.ai_response) {
+                const aiRespContent = dataObj.ai_response.trim();
+                pythonOutputContent = aiRespContent;
+                console.log('Received AI response for user query:\n', aiRespContent, dataObj);
+                updateAceEditorContent(pythonOutputContent);
+                sendCommandButton.stopLoading();
+                pythonOutputContent = "";
+                return;
+            } else {
+                console.warn('Received unexpected data from Python script:\n', dataStr);
+            }
+        } catch(e) {
+            if (e instanceof SyntaxError) {
+                console.error("Failed to parse JSON from stdout:\n", dataStr);
+            } else {
+                throw e;
+            }
+        }
+    }
+
+    function stderrCallback(dataStr) {
+        console.info('stderr data:', dataStr);
+    }
+
+	async function runPythonScript() {
 		const pythonExecutable = process.platform === 'win32'
 			? path.join(envPath, 'Scripts', 'python.exe')
 			: path.join(envPath, 'bin', 'python3');
-
+	
 		const scriptPath = path.join(repoPath, 'talk_codebase', 'cli.py');
-
+	
 		// Check Python executable
 		if (!fs.existsSync(pythonExecutable)) {
 			console.error(`Python executable not found at: ${pythonExecutable}`);
-			return;
+			return null;
 		} else {
 			console.log(`Python executable found at: ${pythonExecutable}`);
 		}
-
+	
 		// Check Python script
 		if (!fs.existsSync(scriptPath)) {
 			console.error(`Python script not found at: ${scriptPath}`);
-			return;
+			return null;
 		} else {
 			console.log(`Python script found at: ${scriptPath}`);
 		}
-
+	
 		// Check for execution permissions on Unix
 		if (process.platform !== "win32") {
 			try {
-				fs.accessSync(pythonExecutable, fs.constants.X_OK);
+				await fs.promises.access(pythonExecutable, fs.constants.X_OK);
 			} catch (error) {
 				console.error(`Python executable at: ${pythonExecutable} is not executable.`, error);
-				return;
+				return null;
 			}
 		}
-
+	
 		console.log("Running script in project directory", scriptPath, projectDirectory);
-		
+	
 		// Spawn Python process
 		try {
-
 			pythonProcess = spawn(pythonExecutable, [scriptPath, 'chat', projectDirectory], {
 				stdio: ['pipe', 'pipe', 'pipe'],
 			});
 
-			// Check if the Python process was successfully started
-			if (!pythonProcess) {
-				console.error('Failed to start the Python process.');
-				return;
-			}
-
-			// Check that pythonProcess.stdin is not null
-			if (!pythonProcess.stdin) {
-				console.error('Failed to create stdin for the Python process');
-				return;
-			}
-
-			// Check if pythonProcess.stderr is not null before setting up the event listener (may have failed silently)
-			if (!pythonProcess.stderr) {
-				console.error('Failed to create stderr for the Python process', pythonProcess);
-				return;
-			}
-
-			pythonProcess.on('error', (error) => {
-				console.error('Failed to start subprocess.', error);
-			});
-
-			// Python process disconnect event
-			pythonProcess.on('disconnect', () => {
-				console.log('Python process disconnected');
-			});
-
-			// Python process exit event
-			pythonProcess.on('exit', (code, signal) => {
-				console.log(`Python process exited with code ${code} and signal ${signal}`);
-			});
-
-			// Listen for data events on stdout
-			pythonProcess.stdout.on('data', (data) => {
-
-				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
-
-				if (!dataStr) {
-					return;
-				}
-
-				try {
-					const dataObj = JSON.parse(dataStr);
-					if (dataObj.ai_response) {
-						const aiRespContent = dataObj.ai_response.trim();
-						pythonOutputContent = aiRespContent;
-						console.log('Received AI response for user query:\n', aiRespContent, dataObj);
-						updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
-						pythonOutputContent = "";
-						return;
-					} else {
-						console.warn('Received unexpected data from Python script:\n', dataStr);
-					}
-				} catch(e) {
-					if (e instanceof SyntaxError) {
-						console.error("Failed to parse JSON from stdout:\n", dataStr);
-					} else {
-						throw e;
-					}
-				}
-			});
-
-			// Listen for data events on stderr (optional)
-			pythonProcess.stderr.on('data', (data) => {
-				let dataStr = data.toString('utf8').trim(); // Convert buffer to string
-				console.info('stderr data:', dataStr);
-			});
-
-			pythonProcess.stdout.on('end', () => {
-				console.log('Python script finished outputting.');
-				updateAceEditorContent(pythonOutputContent); // Update Ace editor content when the Python process finishes outputting
-			});
-
-			// Handle the close event
-			pythonProcess.on('close', (code) => {
-				console.log('Python script exited with code:', code);
-			});
+			console.log("Started Python process");
+	
+			return pythonProcess;
+	
 		} catch (err) {
 			console.log("Caught error while trying to start python process", err);
+			return null;
 		}
-	}
+	}	
 
 	// A function to update the content of Ace editor
 	function updateAceEditorContent(content) {
@@ -308,7 +269,6 @@
 		setTimeout(() => aceEditor.focus());
 	}
 
-
 	function show(file) {
 		if (!file.codeEditor) return;
 		if (gmlFile == file) return;
@@ -324,7 +284,7 @@
 		console.log(gmlFile)
 		console.log(session)
 		session = GMEdit.aceTools.cloneSession(file.codeEditor.session);
-		var session2 = GMEdit.aceTools.cloneSession(file.codeEditor.session);
+		// var session2 = GMEdit.aceTools.cloneSession(file.codeEditor.session);
 		editor.session.setMode("ace/mode/javascript"); // Set the language mode
 		newEditor.session.setMode("ace/mode/javascript");
 		console.log(newEditor.kind)
@@ -349,19 +309,14 @@
 		newEditor = editor;
 		newEditor = ace.edit(newEditorContainer);
 
-		var pythonButton = document.createElement("button");
-		pythonButton.textContent = "Launch talk-codebase";
-		pythonButton.classList.add("run-button");
-		pythonButton.addEventListener("click", function () {
-			var input = "START";
-			runPythonScript(input);
-		});
-		buttonsContainer.appendChild(pythonButton);
+		// Toggle Launch/Kill button
+		launchKillButton = new PythonProcessButton(
+			buttonsContainer, "Launch", "Kill", runPythonScript, "Launching...", stdoutCallback, stderrCallback, "Entered loop for queries..."
 
-		var sendCommandButton = document.createElement("button");
-		sendCommandButton.textContent = "Send Command";
-		sendCommandButton.classList.add("run-button");
-		sendCommandButton.addEventListener("click", function () {
+		);
+
+		// Send Command button
+		sendCommandButton = new PluginButtonLoadable(buttonsContainer, "Send Command", function() {
 			var command = ace.edit(newEditorContainer).getValue();
 			// Check if the command is the same as the last one
 			if (!command) {
@@ -374,60 +329,33 @@
 			} else {
 				console.log("User attempted to send the same command again. Command not sent.");
 			}
-		});
-		buttonsContainer.appendChild(sendCommandButton);
+		}, "Sending...");
 
-		var killButton = document.createElement("button");
-		killButton.textContent = "Kill";
-		killButton.classList.add("run-button");
-		killButton.addEventListener("click", function () {
-			if (pythonProcess) {
-				pythonProcess.kill(); // Kill the Python process
-				pythonProcess = null; // Set the pythonProcess variable to null
-				console.log("Python process killed.");
-			}
-		});
-		buttonsContainer.appendChild(killButton);
-
-		// Create the "Open Config" button
-		var openConfigButton = document.createElement("button");
-		openConfigButton.textContent = "Open Config";
-		openConfigButton.classList.add("run-button");
-		openConfigButton.addEventListener("click", function () {
+		// Open Config button
+		openConfigButton = new PluginButton(buttonsContainer, "Open Config", function() {
 			openConfigFile();
 
 			// Create the "Save" button
-			var saveButton = document.createElement("button");
-			saveButton.textContent = "Save";
-			saveButton.classList.add("run-button");
-			saveButton.addEventListener("click", function () {
+			var saveButton = new PluginButton(buttonsContainer, "Save", function() {
 				var configContent = newEditor.session.getValue();
 				saveConfigFile();
 				console.log("Saving config:", configContent);
 			});
-			buttonsContainer.appendChild(saveButton);
 
 			// Create the "Exit" button
-			var exitButton = document.createElement("button");
-			exitButton.textContent = "Exit";
-			exitButton.classList.add("run-button");
-			exitButton.addEventListener("click", function () {
+			var exitButton = new PluginButton(buttonsContainer, "Exit", function() {
 				// Remove the editor and buttons from the container
 				newEditor.session.setValue("");
-				buttonsContainer.removeChild(saveButton);
-				buttonsContainer.removeChild(exitButton);
+				saveButton.remove();
+				exitButton.remove();
 			});
-			buttonsContainer.appendChild(exitButton);
 		});
-		buttonsContainer.appendChild(openConfigButton);
 
-		var regenerateButton = document.createElement("button");
-		regenerateButton.textContent = "Regenerate";
-		regenerateButton.classList.add("run-button");
-		regenerateButton.addEventListener("click", function() {
+		// Regenerate button
+		regenerateButton = new PluginButtonLoadable(buttonsContainer, "Regenerate", function() {
 			sendToPython("RECREATE_VECTOR_STORE");
-		});
-		buttonsContainer.appendChild(regenerateButton);
+		}, "Regenerating...");
+		regenerateButton.disable(); // Starts disabled - only enable after 'Launch' process is complete
 
 		sizer = document.createElement("div");
 		var editor_id = "codebase_editor";
@@ -438,7 +366,6 @@
 
 		var nextCont = document.createElement("div");
 		nextCont.classList.add("ace_container");
-
 
 		mainCont = aceEditor.container.parentElement;
 		var mainChildren = [];
