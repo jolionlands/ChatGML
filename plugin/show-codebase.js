@@ -1,3 +1,4 @@
+// show-codebase.js
 (function () {
 	var MenuItem = Electron_MenuItem;
 	const { spawn } = require('child_process');
@@ -317,18 +318,23 @@
 
 		// Send Command button
 		sendCommandButton = new PluginButtonLoadable(buttonsContainer, "Send Command", function() {
-			var command = ace.edit(newEditorContainer).getValue();
-			// Check if the command is the same as the last one
-			if (!command) {
-				console.warn("User content is empty");
-			} else if (command !== lastCommand) {
-				console.log("User content retrieved from editor", command);
-				pythonProcess.stdin.write(command + "END\n");
-				// Update the last command
-				lastCommand = command;
-			} else {
-				console.log("User attempted to send the same command again. Command not sent.");
-			}
+			return new Promise((resolve, reject) => {
+				var command = ace.edit(newEditorContainer).getValue();
+				// Check if the command is the same as the last one
+				if (!command) {
+					console.warn("User content is empty");
+					reject("User content is empty");
+				} else if (command !== lastCommand) {
+					console.log("User content retrieved from editor", command);
+					pythonProcess.stdin.write(command + "END\n");
+					// Update the last command
+					lastCommand = command;
+					resolve();
+				} else {
+					console.log("User attempted to send the same command again. Command not sent.");
+					reject("User attempted to send the same command again. Command not sent.");
+				}
+			});
 		}, "Sending...");
 
 		// Open Config button
