@@ -61,11 +61,8 @@ class PluginButtonLoadable extends PluginButton {
         this.enable();
     }
 
-    handleClick() {
-        // If the button is disabled, do not execute the task
-        if (this.isDisabled()) return;
-
-        // Disable the button
+    startLoading() {
+        // Disable the button to prevent multiple clicks
         this.disable();
 
         // Show the loading text when the button is clicked
@@ -80,123 +77,116 @@ class PluginButtonLoadable extends PluginButton {
             this.stopLoading();
         });
     }
+
+    handleClick() {
+        // If the button is disabled, do not execute the task
+        if (this.isDisabled()) return;
+
+        // Start loading
+        this.startLoading();
+    }
 }
 
 class PythonProcessButton extends PluginButtonLoadable {
-    constructor(container, launchText, killText, launchTask, loadingText = 'Processing...', stdoutCallback, stderrCallback) {
-        super(container, launchText, launchTask, loadingText);
-        this.state = 'launch'; // The button starts in the "Launch" state
+    constructor(container, launchText, killText, launchTask, loadingText = 'Processing...', stdoutCallback, stderrCallback, processStartedMessage) {
+        super(container=container, launchText, launchTask, loadingText);
+        this.launchText = launchText;
         this.killText = killText;
         this.stdoutCallback = stdoutCallback;
         this.stderrCallback = stderrCallback;
         this.pythonProcess = null;
+        this.processStartedMessage = processStartedMessage;
+        this.setKilledState();
+    }
+
+    stopLoading() {
+        this.setLaunchedState();
     }
 
     launchPythonProcess() {
+        if (this.state === 'launching') return;
+
+        this.state = 'launching';
+        this.disable();
+        this.buttonElement.textContent = this.loadingText;
+
         this.task().then((pythonProcess) => {
             this.pythonProcess = pythonProcess;
 
             if (this.pythonProcess) {
                 console.log('Python process launched successfully.');
 
-                // Switch to the "Kill" state
-                this.setKillState();
-
-                this.pythonProcess.on('error', (error) => {
-                    console.error('Failed to start subprocess.', error);
-                    this.killPythonProcess();
-                });
-
-                this.pythonProcess.on('close', (code) => {
-                    console.log('Python script exited with code:', code);
-                    this.killPythonProcess();
-                });
-
-                // Python process disconnect event
-                this.pythonProcess.on('disconnect', () => {
-                    console.log('Python process disconnected');
-                    this.killPythonProcess();
-                });
-
-                // Python process exit event
-                this.pythonProcess.on('exit', (code, signal) => {
-                    console.log(`Python process exited with code ${code} and signal ${signal}`);
-                    this.killPythonProcess();
-                });
-
                 // Listen for data events on stdout
                 this.pythonProcess.stdout.on('data', (data) => {
                     let dataStr = data.toString('utf8').trim(); // Convert buffer to string
                     this.stdoutCallback(dataStr); // Call the provided callback
+                
+                    if (dataStr.includes(this.processStartedMessage)) {
+                        this.setLaunchedState();
+                    }
                 });
 
                 // Listen for data events on stderr
                 this.pythonProcess.stderr.on('data', (data) => {
                     let dataStr = data.toString('utf8').trim(); // Convert buffer to string
                     this.stderrCallback(dataStr); // Call the provided callback
+               
+                    if (dataStr.includes(this.processStartedMessage)) {
+                        this.setLaunchedState();
+                    }
                 });
+                
+                // If the process exits or disconnects, kill the process
+                this.pythonProcess.on('exit', () => this.killPythonProcess());
+                this.pythonProcess.on('disconnect', () => this.killPythonProcess());
             } else {
                 console.error('Failed to start the Python process.');
-                this.setLaunchState(); // Switch back to the "Launch" state
+                this.setKilledState();
             }
         }).catch((error) => {
             console.error('Failed to start the Python process:', error);
-            this.setLaunchState(); // Switch back to the "Launch" state
+            this.state = 'killed';
+            this.setKilledState();
         });
     }
 
     killPythonProcess() {
+        console.log('killPythonProcess() called');
         if (this.pythonProcess) {
+            this.state = 'killing';
+            this.buttonElement.textContent = this.loadingText;
             this.pythonProcess.kill();
             this.pythonProcess = null;
             console.log("Python process killed.");
+            this.setKilledState();
         } else {
             console.warn("Python process is not running.");
+            this.setKilledState();
         }
-        this.setLaunchState(); // Switch back to the "Launch" state
     }
 
-    setLaunchState() {
-        this.state = 'launch';
-        this.text = this.launchText;
+    setLaunchedState() {
+        this.state = 'launched';
+        this.text = this.killText;  // Text should show the option to "kill"
         this.buttonElement.textContent = this.text;
         this.enable();
     }
 
-    setKillState() {
-        this.state = 'kill';
-        this.text = this.killText;
+    setKilledState() {
+        this.state = 'killed';
+        this.text = this.launchText;  // Text should show the option to "launch"
         this.buttonElement.textContent = this.text;
         this.enable();
     }
 
     handleClick() {
         if (this.isDisabled()) return;
-        if (this.state === 'launch') {
-            this.disable();
-            this.buttonElement.textContent = this.loadingText;
-
-            // Execute the task and handle any errors
-            this.launchPythonProcess().catch((error) => {
-                // Handle any errors from the task
-                console.error(`Error launching Python process: ${error}`);
-                
-                // Revert the text and state
-                this.setLaunchState();
-            });
-        } else if (this.state === 'kill') {
-            this.disable();
-            this.buttonElement.textContent = this.loadingText;
-
-            try {
-                this.killPythonProcess();
-            } catch (error) {
-                console.error(`Error killing Python process: ${error}`);
-                this.setKillState(); // Switch back to the "Kill" state
-            }
+        if (this.state === 'killed') {
+            this.launchPythonProcess();
+        } else if (this.state === 'launched') {
+            this.killPythonProcess();
         } else {
             console.error('Invalid button state:', this.state);
         }
     }
-
 }

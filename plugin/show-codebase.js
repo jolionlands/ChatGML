@@ -193,17 +193,7 @@
 
     function stderrCallback(dataStr) {
         console.info('stderr data:', dataStr);
-
-        if (dataStr.includes("Entered loop for queries...")) {
-            if (launchKillButton) {
-                launchKillButton.stopLoading();
-                launchKillButton.setKillState();
-            } else {
-                console.warn("launchKillButton is not defined yet.");
-            }
-        }
     }
-
 
 	async function runPythonScript() {
 		const pythonExecutable = process.platform === 'win32'
@@ -321,7 +311,8 @@
 
 		// Toggle Launch/Kill button
 		launchKillButton = new PythonProcessButton(
-			buttonsContainer, "Launch", "Kill", runPythonScript, "Launching...", stdoutCallback, stderrCallback
+			buttonsContainer, "Launch", "Kill", runPythonScript, "Launching...", stdoutCallback, stderrCallback, "Entered loop for queries..."
+
 		);
 
 		// Send Command button
