@@ -31,9 +31,18 @@ class BaseLLM:
 
     def _create_model(self):
         raise NotImplementedError("Subclasses must implement this method.")
+    
+    def send_query(self, query, files=None):
+        raise NotImplementedError("Subclasses must implement this method.")
 
     def embedding_search(self, query, k):
         return self.vector_store.search(query, k=k, search_type="similarity")
+    
+    def find_files(self, query: str) -> list:
+        k = self.config.get("k")
+        docs = self.embedding_search(query, k=int(k))
+        file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
+        return file_paths
 
     def _create_vector_store(self, embeddings, index, root_dir, force_recreate:bool = False):     
         # Normalize the root directory path
@@ -105,24 +114,27 @@ class OpenAILLM(BaseLLM):
                           callback_manager=CallbackManager([StreamStdOutJSON()]),
                           temperature=float(self.config.get("temperature")))
 
-    def send_query(self, query) -> None:
-        k = self.config.get("k")
-        docs = self.embedding_search(query, k=int(k))
-
-        content = "\n".join([f"content: \n```{s.page_content}```" for s in docs])
-        prompt = f"Given the following snippets of related content, respond with the answer to the question. \n{content}"
-
+    def send_query(self, query, files=None):
+        prompt = ""
+        if files is not None:
+            content = "\n".join([f"content: \n```{s.page_content}```" for s in files])
+            prompt = f"Given the following snippets of relevant content, respond with the answer to the question. \n{content}"
+        else:
+            prompt = f"Please respond with the answer to the question."
+            
         messages = [
             SystemMessage(content=prompt),
             HumanMessage(content=query)
         ]
 
         self.llm(messages)
-        
-        file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
+
         sys.stderr.write(f"AI prompt:\n{prompt}")
         sys.stderr.write(f"User query:\n{query}")
-        sys.stderr.write(f"Relevant files:\n{file_paths}")
+        if files is not None:
+            file_paths = [os.path.abspath(s.metadata["source"]) for s in files]
+            sys.stderr.write(f"Relevant files:\n{file_paths}")
+
 
 def factory_llm(root_dir, config):
     model_type = config.get("model_type")

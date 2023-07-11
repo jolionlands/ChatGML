@@ -18,6 +18,10 @@
 	let pythonProcess = null;
 	let pythonOutputContent = "";
 
+	// File searching functionality
+	let fileSearchButton;
+	let selectedFiles = [];
+
 	// Buttons
 	let launchKillButton;
 	let sendCommandButton;
@@ -182,6 +186,14 @@
                 sendCommandButton.stopLoading();
                 pythonOutputContent = "";
                 return;
+			} else if (dataObj.files) {
+				const aiRespContent = dataObj.files;
+                respFiles = aiRespContent;
+                console.log('Found related files to user query:\n', aiRespContent, dataObj);
+				displayFileSearchResults(respFiles);
+                fileSearchButton.stopLoading();
+                pythonOutputContent = "";
+                return;
             } else {
                 console.warn('Received unexpected data from Python script:\n', dataStr);
             }
@@ -293,6 +305,50 @@
 		console.log(newEditor.kind)
 	}
 
+	function displayFileSearchResults(files) {
+		// Clear previous search results
+		selectedFiles = [];
+
+		// Create a new container for all file elements
+		var fileElementsContainer = document.createElement('div');
+		fileElementsContainer.className = 'file-elements-container';
+		fileElementsContainer.style.display = 'flex';
+		fileElementsContainer.style.flexWrap = 'wrap';
+		fileElementsContainer.style.justifyContent = 'start';
+	
+		// files should be an array of file paths
+		files.forEach(file => {
+			// Create a div to represent the file
+			var fileElement = document.createElement('div');
+			fileElement.className = 'file-element';
+	
+			// Use path.basename to get the file name from the full path
+			fileElement.innerText = path.basename(file);
+	
+			// Add a button to deselect the file
+			var deselectButton = document.createElement('button');
+			deselectButton.innerText = "X";
+			deselectButton.addEventListener('click', function() {
+				fileElement.remove();
+				var index = selectedFiles.indexOf(file);
+				if (index > -1) {
+					selectedFiles.splice(index, 1);
+				}
+			});
+	
+			fileElement.appendChild(deselectButton);
+	
+			// Add to the container
+			fileElementsContainer.appendChild(fileElement);
+	
+			// Add to selected files
+			selectedFiles.push(file);
+		});
+
+		// Add the new container to the main container
+		container.appendChild(fileElementsContainer);
+	}
+
 	function prepare() {
 		ready = true;
 		container = document.createElement("div");
@@ -337,12 +393,16 @@
 		}, "Sending...");
 		sendCommandButton.disable(); // Start with the button disabled until the Python process is launched
 
-		// Listen for the stateChanged event on the launchKillButton and enable/disable the sendCommandButton accordingly
+		// Listen for the stateChanged event on the launchKillButton and enable/disable dependent buttons accordingly
 		launchKillButton.buttonElement.addEventListener('stateChanged', function(event) {
 			if (event.detail === 'launched') {
 				sendCommandButton.enable();
+				regenerateButton.enable();
+				fileSearchButton.enable();
 			} else {
 				sendCommandButton.disable();
+				regenerateButton.disable();
+				fileSearchButton.disable();
 			}
 		});
 
@@ -351,6 +411,19 @@
 			sendToPython("RECREATE_VECTOR_STORE");
 		}, "Regenerating...");
 		regenerateButton.disable(); // Starts disabled - only enable after 'Launch' process is complete
+
+		// File Search button
+		fileSearchButton = new PluginButtonLoadable(buttonsContainer, "Find Files", function() {
+			var userQuery = ace.edit(newEditorContainer).getValue();
+			if (!userQuery) {
+				console.warn("User content is empty");
+				return false;
+			} else {
+				sendToPython(userQuery + "FILE_SEARCH");
+				return true;
+			}
+		}, "Searching...");
+		fileSearchButton.disable();
 
 		sizer = document.createElement("div");
 		var editor_id = "codebase_editor";

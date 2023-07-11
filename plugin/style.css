@@ -47,3 +47,25 @@ button[disabled] {
 #codebase_editor .ace_content {
   border: 2px solid #948d8d;
 }
+
+.file-element {
+  padding: 5px 10px;
+  margin: 4px 2px;
+  background-color: #948d8d;
+  color: white;
+  font-size: 16px;
+  display: inline-block;
+  transition-duration: 0.4s;
+}
+
+.file-element:hover {
+  background-color: darken(#4CAF50, 15%);
+}
+
+.file-element button {
+  margin-left: 10px;
+  background-color: #ccc;
+  border: none;
+  color: white;
+  cursor: pointer;
+}

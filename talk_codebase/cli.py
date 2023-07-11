@@ -4,6 +4,7 @@ import os
 import sys
 import yaml
 import fire
+import json
 from llm import factory_llm
 from consts import DEFAULT_CONFIG
 
@@ -80,7 +81,15 @@ def loop(llm):
             return "RECREATE_VECTOR_STORE"
         if not line:  # If the line is empty (no input)
             continue  # Just go back to the start of the loop
-        if line.endswith("END"):
+        if line.endswith("FILE_SEARCH"):
+            query += line.replace("FILE_SEARCH", "").lower().strip()
+            files = llm.find_files(query)
+            sys.stderr.write(f"Found {len(files)} files related to user query")
+            sys.stdout.write(json.dumps({
+                "files": files
+            }))
+            sys.stdout.flush()
+        elif line.endswith("END"):
             query += line.replace("END", "").lower().strip()  # Remove end signal from line and add to query
             if query in ('exit', 'quit'):
                 sys.stderr.write("User requested exit. Exiting query loop...")
@@ -103,7 +112,6 @@ def chat(root_dir):
         else:
             break
 
-
 class TalkCodebaseCLI:
     def __init__(self):
         pass
@@ -118,6 +126,13 @@ class TalkCodebaseCLI:
     def chat(self, root_dir):
         sys.stderr.write("Starting chat...")
         chat(root_dir)
+
+    def find_files(self, root_dir, query):
+        config = validate_config(get_config())
+        llm = factory_llm(root_dir, config)
+        files = llm.find_files(query)
+        sys.stderr.write(f"Found {len(files)} files related to user query")
+        sys.stdout.write('\n'.join(files))
 
 
 if __name__ == "__main__":
