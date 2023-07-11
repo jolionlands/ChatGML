@@ -120,12 +120,9 @@ class OpenAILLM(BaseLLM):
         self.llm(messages)
         
         file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
-        sys.stdout.write(json.dumps({
-            "prompt": prompt,
-            "query": query,
-            "files": file_paths
-        }))
-
+        sys.stderr.write(f"AI prompt:\n{prompt}")
+        sys.stderr.write(f"User query:\n{query}")
+        sys.stderr.write(f"Relevant files:\n{file_paths}")
 
 def factory_llm(root_dir, config):
     model_type = config.get("model_type")

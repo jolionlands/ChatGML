@@ -67,23 +67,18 @@ class PluginButtonLoadable extends PluginButton {
 
         // Show the loading text when the button is clicked
         this.buttonElement.textContent = this.loadingText;
-
-        // Execute the task and handle any errors
-        this.task().catch((error) => {
-            // Handle any errors from the task
-            console.error(`Error executing task: ${error}`);
-            
-            // Regardless of error, revert the text
-            this.stopLoading();
-        });
     }
 
     handleClick() {
         // If the button is disabled, do not execute the task
         if (this.isDisabled()) return;
 
-        // Start loading
-        this.startLoading();
+        // Call task function and capture the result
+        const wasTaskStarted = this.task();
+        if (wasTaskStarted) {
+            // Start loading if task succeeds/criteria is met
+            this.startLoading();
+        }
     }
 }
 
@@ -165,11 +160,17 @@ class PythonProcessButton extends PluginButtonLoadable {
         }
     }
 
+    _stateChanged() {
+        // Emit an event to indicate that the state has changed
+        this.buttonElement.dispatchEvent(new CustomEvent('stateChanged', { detail: this.state }));
+    }
+
     setLaunchedState() {
         this.state = 'launched';
         this.text = this.killText;  // Text should show the option to "kill"
         this.buttonElement.textContent = this.text;
         this.enable();
+        this._stateChanged();
     }
 
     setKilledState() {
@@ -177,6 +178,7 @@ class PythonProcessButton extends PluginButtonLoadable {
         this.text = this.launchText;  // Text should show the option to "launch"
         this.buttonElement.textContent = this.text;
         this.enable();
+        this._stateChanged();
     }
 
     handleClick() {
