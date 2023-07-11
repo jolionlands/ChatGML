@@ -1,6 +1,6 @@
 {
 	"name": "show-codebase",
 	"description": "Ask an AI questions about your code.",
-	"scripts": ["show-codebase.js", "plugin-button.js"],
+	"scripts": ["js-yaml.min.js", "show-codebase.js", "plugin-button.js"],
 	"stylesheets": ["style.css"]
 }

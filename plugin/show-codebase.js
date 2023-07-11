@@ -21,7 +21,6 @@
 	// Buttons
 	let launchKillButton;
 	let sendCommandButton;
-	let openConfigButton;
 	let regenerateButton;
 
 	// Used to keep track of the last command to user accidentally sending duplicates
@@ -52,33 +51,6 @@
 		console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 	});
 
-	async function openConfigFile() {
-		try {
-			// Read the contents of the YAML file
-			const data = await fs.promises.readFile(configPath, 'utf8');
-	
-			// Set the contents of the file to the Ace Editor
-			newEditor.session.setValue(data);
-		} catch (err) {
-			console.error(`Error reading config file: ${err}`);
-		}
-	}
-
-	function saveConfigFile() {
-		// Get the contents of the Ace Editor
-		const configContent = newEditor.session.getValue();
-
-		// Write the contents to the YAML file
-		fs.writeFile(configPath, configContent, 'utf8', (err) => {
-			if (err) {
-				console.error(`Error saving config file: ${err}`);
-				return;
-			}
-
-			console.log('Config file saved successfully!');
-		});
-	}
-
 	async function setupEnvironment() {
 		try {
 			// Check YAML file and run set_config if it does not exist
@@ -101,6 +73,36 @@
 			console.error(`Error Getting info: ${err}`);
 		}
 	}
+
+	async function loadConfig() {
+		try {
+			const configContent = await fs.promises.readFile(configPath, 'utf8');
+			const configData = jsyaml.load(configContent);
+			return configData;
+		} catch (err) {
+			console.error(`Error reading and parsing config file: ${err}`);
+		}
+	}
+	
+	function saveConfig(configData) {
+		try {
+			// Convert the configData object to a YAML string
+			const configContent = jsyaml.dump(configData);
+	
+			// Write the contents to the YAML file
+			fs.writeFile(configPath, configContent, 'utf8', (err) => {
+				if (err) {
+					console.error(`Error saving config file: ${err}`);
+					return;
+				}
+				console.log('Config file saved successfully!');
+			});
+		} catch(err) {
+			console.error(`Error dumping config object to YAML string: ${err}`);
+		}
+	}
+	
+	
 
 	function sendToPython(input) {
 		if (pythonProcess && pythonProcess.stdin) {
@@ -344,26 +346,6 @@
 			}
 		});
 
-		// Open Config button
-		openConfigButton = new PluginButton(buttonsContainer, "Open Config", function() {
-			openConfigFile();
-
-			// Create the "Save" button
-			var saveButton = new PluginButton(buttonsContainer, "Save", function() {
-				var configContent = newEditor.session.getValue();
-				saveConfigFile();
-				console.log("Saving config:", configContent);
-			});
-
-			// Create the "Exit" button
-			var exitButton = new PluginButton(buttonsContainer, "Exit", function() {
-				// Remove the editor and buttons from the container
-				newEditor.session.setValue("");
-				saveButton.remove();
-				exitButton.remove();
-			});
-		});
-
 		// Regenerate button
 		regenerateButton = new PluginButtonLoadable(buttonsContainer, "Regenerate", function() {
 			sendToPython("RECREATE_VECTOR_STORE");
@@ -462,42 +444,18 @@
 
 		GMEdit.on("preferencesBuilt", function(e) {
 			var out = e.target.querySelector('.plugin-settings[for="show-codebase"]');
-            
-            // Define configuration options
-            var configOptions = {
-                'API Key': 'api_key',
-                'Model Path': 'model_path',
-                'Chunk Overlap': 'chunk_overlap',
-                'Chunk Size': 'chunk_size',
-                'K Value': 'k',
-                'Max Tokens': 'max_tokens',
-                'Model Name': 'model_name',
-                'Repo Path': 'repo_path',
-                'Temperature': 'temperature',
-                'Venv Path': 'venv_path'
-            };
 
-            // Define default configuration values
-            var configDefaults = {
-                'api_key': "sk-12345",
-                'chunk_overlap': "256",
-                'chunk_size': "2056",
-                'k': "1",
-                'max_tokens': "8000",
-                'model_name': "gpt-3.5-turbo-16k-0613",
-                'model_path': "models/ggml-gpt4all-j-v1.3-groovy.bin",
-                'repo_path': "/Users/henrykirk/talk-codebase",
-                'temperature': "0.7",
-                'venv_path': "/Users/henrykirk/talk-codebase/talk-venv"
-            };
-            
-			// Add input fields for each config option
-			for (let [label, configKey] of Object.entries(configOptions)) {
-				let defaultValue = configDefaults[configKey] || '';
-				Preferences.addInput(out, label, defaultValue, function(text) {
-					console.log(`Setting ${configKey} to ${text}`);
-				});
-			}
+			// Load YAML configuration
+			loadConfig().then(config => {
+				// Add each configuration field to the preferences
+				for (let [key, value] of Object.entries(config)) {
+					Preferences.addInput(out, key, value, function(text) {
+						// Update YAML configuration when preference value changes
+						config[key] = text;
+						saveConfig(config);
+					});
+				}
+			});
         });
 	}
 
