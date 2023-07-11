@@ -310,32 +310,39 @@
 		newEditor = editor;
 		newEditor = ace.edit(newEditorContainer);
 
-		// Toggle Launch/Kill button
+		// Launch/Kill Python process button
 		launchKillButton = new PythonProcessButton(
 			buttonsContainer, "Launch", "Kill", runPythonScript, "Launching...", stdoutCallback, stderrCallback, "Entered loop for queries..."
-
 		);
 
 		// Send Command button
 		sendCommandButton = new PluginButtonLoadable(buttonsContainer, "Send Command", function() {
-			return new Promise((resolve, reject) => {
-				var command = ace.edit(newEditorContainer).getValue();
-				// Check if the command is the same as the last one
-				if (!command) {
-					console.warn("User content is empty");
-					reject("User content is empty");
-				} else if (command !== lastCommand) {
-					console.log("User content retrieved from editor", command);
-					pythonProcess.stdin.write(command + "END\n");
-					// Update the last command
-					lastCommand = command;
-					resolve();
-				} else {
-					console.log("User attempted to send the same command again. Command not sent.");
-					reject("User attempted to send the same command again. Command not sent.");
-				}
-			});
+			var command = ace.edit(newEditorContainer).getValue();
+			// Check if the command is the same as the last one
+			if (!command) {
+				console.warn("User content is empty");
+				return false;
+			} else if (command !== lastCommand) {
+				console.log("User content retrieved from editor", command);
+				pythonProcess.stdin.write(command + "END\n");
+				// Update the last command
+				lastCommand = command;
+				return true;
+			} else {
+				console.log("User attempted to send the same command again. Command not sent.");
+				return false;
+			}
 		}, "Sending...");
+		sendCommandButton.disable(); // Start with the button disabled until the Python process is launched
+
+		// Listen for the stateChanged event on the launchKillButton and enable/disable the sendCommandButton accordingly
+		launchKillButton.buttonElement.addEventListener('stateChanged', function(event) {
+			if (event.detail === 'launched') {
+				sendCommandButton.enable();
+			} else {
+				sendCommandButton.disable();
+			}
+		});
 
 		// Open Config button
 		openConfigButton = new PluginButton(buttonsContainer, "Open Config", function() {
