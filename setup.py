@@ -47,6 +47,9 @@ def copy_files_to_plugin_directory(src_directory, dest_directory):
         src_file_path = os.path.join(src_directory, filename)
         dest_file_path = os.path.join(dest_directory, filename)
 
+        if not os.path.exists(dest_file_path):
+            shutil.copy2(src_file_path, dest_file_path)
+
         if os.path.isfile(src_file_path):
             # Check if the destination file is not a symlink
             if not os.path.islink(dest_file_path):
