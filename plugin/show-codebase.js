@@ -286,8 +286,8 @@
 		console.log(session)
 		session = GMEdit.aceTools.cloneSession(file.codeEditor.session);
 		// var session2 = GMEdit.aceTools.cloneSession(file.codeEditor.session);
-		editor.session.setMode("ace/mode/javascript"); // Set the language mode
-		newEditor.session.setMode("ace/mode/javascript");
+		editor.session.setMode("ace/mode/text"); // Set the language mode
+		newEditor.session.setMode("ace/mode/text");
 		console.log(newEditor.kind)
 	}
 
