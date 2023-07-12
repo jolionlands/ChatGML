@@ -7,7 +7,7 @@
 	const util = require('util');
 	const { exec } = require('child_process');
 	const os = require('os');
-	const Preferences = $gmedit["ui.Preferences"];
+	var Preferences = $gmedit["ui.Preferences"];
 	const execPromise = util.promisify(require('child_process').exec);
 
 	let ready = false;
@@ -21,7 +21,6 @@
 	// Buttons
 	let launchKillButton;
 	let sendCommandButton;
-	let openConfigButton;
 	let regenerateButton;
 
 	// Used to keep track of the last command to user accidentally sending duplicates
@@ -52,33 +51,6 @@
 		console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 	});
 
-	async function openConfigFile() {
-		try {
-			// Read the contents of the YAML file
-			const data = await fs.promises.readFile(configPath, 'utf8');
-	
-			// Set the contents of the file to the Ace Editor
-			newEditor.session.setValue(data);
-		} catch (err) {
-			console.error(`Error reading config file: ${err}`);
-		}
-	}
-
-	function saveConfigFile() {
-		// Get the contents of the Ace Editor
-		const configContent = newEditor.session.getValue();
-
-		// Write the contents to the YAML file
-		fs.writeFile(configPath, configContent, 'utf8', (err) => {
-			if (err) {
-				console.error(`Error saving config file: ${err}`);
-				return;
-			}
-
-			console.log('Config file saved successfully!');
-		});
-	}
-
 	async function setupEnvironment() {
 		try {
 			// Check YAML file and run set_config if it does not exist
@@ -101,6 +73,36 @@
 			console.error(`Error Getting info: ${err}`);
 		}
 	}
+
+	async function loadConfig() {
+		try {
+			const configContent = await fs.promises.readFile(configPath, 'utf8');
+			const configData = jsyaml.load(configContent);
+			return configData;
+		} catch (err) {
+			console.error(`Error reading and parsing config file: ${err}`);
+		}
+	}
+	
+	function saveConfig(configData) {
+		try {
+			// Convert the configData object to a YAML string
+			const configContent = jsyaml.dump(configData);
+	
+			// Write the contents to the YAML file
+			fs.writeFile(configPath, configContent, 'utf8', (err) => {
+				if (err) {
+					console.error(`Error saving config file: ${err}`);
+					return;
+				}
+				console.log('Config file saved successfully!');
+			});
+		} catch(err) {
+			console.error(`Error dumping config object to YAML string: ${err}`);
+		}
+	}
+	
+	
 
 	function sendToPython(input) {
 		if (pythonProcess && pythonProcess.stdin) {
@@ -344,26 +346,6 @@
 			}
 		});
 
-		// Open Config button
-		openConfigButton = new PluginButton(buttonsContainer, "Open Config", function() {
-			openConfigFile();
-
-			// Create the "Save" button
-			var saveButton = new PluginButton(buttonsContainer, "Save", function() {
-				var configContent = newEditor.session.getValue();
-				saveConfigFile();
-				console.log("Saving config:", configContent);
-			});
-
-			// Create the "Exit" button
-			var exitButton = new PluginButton(buttonsContainer, "Exit", function() {
-				// Remove the editor and buttons from the container
-				newEditor.session.setValue("");
-				saveButton.remove();
-				exitButton.remove();
-			});
-		});
-
 		// Regenerate button
 		regenerateButton = new PluginButtonLoadable(buttonsContainer, "Regenerate", function() {
 			sendToPython("RECREATE_VECTOR_STORE");
@@ -460,6 +442,21 @@
 			projectDirectory = e.project.dir
 		});
 
+		GMEdit.on("preferencesBuilt", function(e) {
+			var out = e.target.querySelector('.plugin-settings[for="show-codebase"]');
+
+			// Load YAML configuration
+			loadConfig().then(config => {
+				// Add each configuration field to the preferences
+				for (let [key, value] of Object.entries(config)) {
+					Preferences.addInput(out, key, value, function(text) {
+						// Update YAML configuration when preference value changes
+						config[key] = text;
+						saveConfig(config);
+					});
+				}
+			});
+        });
 	}
 
 	GMEdit.register("show-codebase", {
