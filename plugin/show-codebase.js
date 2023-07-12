@@ -11,8 +11,8 @@
 	const execPromise = util.promisify(require('child_process').exec);
 
 	let ready = false;
-	let sizer, splitter, container, editor, session, mainCont, peekCommand;
-	let newEditor, newEditorContainer;
+	let sizer, splitter, container, aiResponseEditor, session, mainCont, peekCommand;
+	let userEditor, userEditorContainer;
 	let gmlFile = null;
 	let projectDirectory = null;
 	let pythonProcess = null;
@@ -105,8 +105,6 @@
 			console.error(`Error dumping config object to YAML string: ${err}`);
 		}
 	}
-	
-	
 
 	function sendToPython(input) {
 		if (pythonProcess && pythonProcess.stdin) {
@@ -182,7 +180,7 @@
                 const aiRespContent = dataObj.ai_response.trim();
                 pythonOutputContent = aiRespContent;
                 console.log('Received AI response for user query:\n', aiRespContent, dataObj);
-                updateAceEditorContent(pythonOutputContent);
+                aiResponseEditor.setContent(pythonOutputContent);
                 sendCommandButton.stopLoading();
                 pythonOutputContent = "";
                 return;
@@ -259,11 +257,6 @@
 			console.log("Caught error while trying to start python process", err);
 			return null;
 		}
-	}	
-
-	// A function to update the content of Ace editor
-	function updateAceEditorContent(content) {
-		editor.session.setValue(content); // This will replace the current content in the Ace editor with the content variable
 	}
 
 	function forceUpdate() {
@@ -295,14 +288,11 @@
 			forceUpdate();
 		}
 		gmlFile = file;
-		console.log(editor)
-		console.log(gmlFile)
-		console.log(session)
 		session = GMEdit.aceTools.cloneSession(file.codeEditor.session);
-		// var session2 = GMEdit.aceTools.cloneSession(file.codeEditor.session);
-		editor.session.setMode("ace/mode/text"); // Set the language mode
-		newEditor.session.setMode("ace/mode/text");
-		console.log(newEditor.kind)
+		
+		// Set the language mode - using "text" so there's no syntax highlighting
+		aiResponseEditor.session.setMode("ace/mode/text");
+		console.log(userEditor.kind)
 	}
 
 	function displayFileSearchResults(files) {
@@ -312,9 +302,6 @@
 		// Create a new container for all file elements
 		var fileElementsContainer = document.createElement('div');
 		fileElementsContainer.className = 'file-elements-container';
-		fileElementsContainer.style.display = 'flex';
-		fileElementsContainer.style.flexWrap = 'wrap';
-		fileElementsContainer.style.justifyContent = 'start';
 	
 		// files should be an array of file paths
 		files.forEach(file => {
@@ -350,7 +337,6 @@
 	}
 
 	function prepare() {
-		ready = true;
 		container = document.createElement("div");
 		container.classList.add("ace_container");
 
@@ -358,15 +344,30 @@
 		var buttonsContainer = document.createElement("div");
 		buttonsContainer.classList.add("buttons-container");
 		container.appendChild(buttonsContainer);
-		newEditorContainer = document.createElement('div');
-		newEditorContainer.id = 'newEditorContainer';
-		container.appendChild(newEditorContainer);
 
-		newEditor = GMEdit.aceTools.createEditor(newEditorContainer);
-		//newEditor.setTheme("ace/theme/monokai"); // Set the theme
-		newEditor.session.setMode("ace/mode/javascript"); // Set the language mode
-		newEditor = editor;
-		newEditor = ace.edit(newEditorContainer);
+		// Create an editor for user's input/query
+		userEditor = new CustomEditor(
+			container, 'userEditorContainer', 'ace/mode/text'
+		);
+
+		// Pick random example user input
+		const exampleUserQuestions = [
+			"Why is my game object not appearing on the screen?",
+			"How can I optimize the performance of my game?",
+			"What is the best way to manage collisions in my game?",
+			"How can I make my character move smoothly across the screen?",
+			"How do I implement a scoring system in my game?",
+			"What's the most efficient way to manage memory in my game?",
+			"How can I add multiplayer functionality to my game?",
+			"How do I implement save game functionality?",
+			"What's the best way to handle animation in my game?",
+			"Why is my game running slowly when there are many objects on the screen?",
+			"How can I create a pause menu in my game?",
+			"Why is my game crashing after playing for a while?"
+		];
+		const randomIndex = Math.floor(Math.random() * exampleUserQuestions.length);
+		const randomQuestion = exampleUserQuestions[randomIndex];
+		userEditor.setContent(randomQuestion);
 
 		// Launch/Kill Python process button
 		launchKillButton = new PythonProcessButton(
@@ -375,7 +376,7 @@
 
 		// Send Command button
 		sendCommandButton = new PluginButtonLoadable(buttonsContainer, "Send Command", function() {
-			var command = ace.edit(newEditorContainer).getValue();
+			var command = ace.edit(userEditorContainer).getValue();
 			// Check if the command is the same as the last one
 			if (!command) {
 				console.warn("User content is empty");
@@ -414,7 +415,7 @@
 
 		// File Search button
 		fileSearchButton = new PluginButtonLoadable(buttonsContainer, "Find Files", function() {
-			var userQuery = ace.edit(newEditorContainer).getValue();
+			var userQuery = ace.edit(userEditorContainer).getValue();
 			if (!userQuery) {
 				console.warn("User content is empty");
 				return false;
@@ -449,14 +450,15 @@
 		mainCont.appendChild(sizer);
 		mainCont.appendChild(container);
 
-		var textarea = document.createElement("textarea");
-		container.appendChild(textarea);
-		editor = GMEdit.aceTools.createEditor(textarea);
+		// Create an editor to display AI's response
+		aiResponseEditor = new CustomEditor(
+			container, 'aiResponseEditorContainer', true
+		);
 
 		container.id = editor_id;
 		splitter = new GMEdit_Splitter(sizer);
 
-		var sideMenu = editor.contextMenu.menu;
+		var sideMenu = aiResponseEditor.contextMenu.menu;
 		var insertAt = 0;
 		while (insertAt < sideMenu.items.length) {
 			if (sideMenu.items[insertAt++].aceCommand == "selectall") break;
@@ -469,7 +471,7 @@
 			}
 		}));
 
-		var sideMenu = newEditor.contextMenu.menu;
+		var sideMenu = userEditor.contextMenu.menu;
 		var insertAt = 0;
 		while (insertAt < sideMenu.items.length) {
 			if (sideMenu.items[insertAt++].aceCommand == "selectall") break;
@@ -482,6 +484,7 @@
 			}
 		}));
 
+		ready = true;
 	}
 
 	function init() {
