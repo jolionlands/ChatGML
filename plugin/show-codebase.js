@@ -346,9 +346,7 @@
 		container.appendChild(buttonsContainer);
 
 		// Create an editor for user's input/query
-		userEditor = new CustomEditor(
-			container, 'userEditorContainer', 'ace/mode/text'
-		);
+		userEditor = new CustomEditor(container);
 
 		// Pick random example user input
 		const exampleUserQuestions = [
@@ -452,7 +450,7 @@
 
 		// Create an editor to display AI's response
 		aiResponseEditor = new CustomEditor(
-			container, 'aiResponseEditorContainer', true
+			container, true
 		);
 
 		container.id = editor_id;
