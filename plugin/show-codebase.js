@@ -374,9 +374,9 @@
 
 		// Send Command button
 		sendCommandButton = new PluginButtonLoadable(buttonsContainer, "Send Command", function() {
-			var command = ace.edit(userEditorContainer).getValue();
+			var command = userEditor.content;
 			// Check if the command is the same as the last one
-			if (!command) {
+			if (!userContent) {
 				console.warn("User content is empty");
 				return false;
 			} else if (command !== lastCommand) {
@@ -413,7 +413,7 @@
 
 		// File Search button
 		fileSearchButton = new PluginButtonLoadable(buttonsContainer, "Find Files", function() {
-			var userQuery = ace.edit(userEditorContainer).getValue();
+			var userQuery = userEditor.content;
 			if (!userQuery) {
 				console.warn("User content is empty");
 				return false;
