@@ -12,11 +12,13 @@
 
 	let ready = false;
 	let sizer, splitter, container, aiResponseEditor, session, mainCont, peekCommand;
-	let userEditor, userEditorContainer;
+	let userEditor;
 	let gmlFile = null;
 	let projectDirectory = null;
 	let pythonProcess = null;
 	let pythonOutputContent = "";
+	let isChatGMLShown = false;  // Controls whether the ChatGML interface is visible/open
+	var mainMenu;
 
 	// File searching functionality
 	let fileSearchButton;
@@ -290,9 +292,7 @@
 		gmlFile = file;
 		session = GMEdit.aceTools.cloneSession(file.codeEditor.session);
 		
-		// Set the language mode - using "text" so there's no syntax highlighting
-		aiResponseEditor.session.setMode("ace/mode/text");
-		console.log(userEditor.kind)
+		console.log(userEditor.kind);
 	}
 
 	function displayFileSearchResults(files) {
@@ -449,61 +449,58 @@
 		mainCont.appendChild(container);
 
 		// Create an editor to display AI's response
-		aiResponseEditor = new CustomEditor(
-			container, true
-		);
+		aiResponseEditor = new CustomEditor(container, true);
 
 		container.id = editor_id;
 		splitter = new GMEdit_Splitter(sizer);
 
-		var sideMenu = aiResponseEditor.contextMenu.menu;
-		var insertAt = 0;
-		while (insertAt < sideMenu.items.length) {
-			if (sideMenu.items[insertAt++].aceCommand == "selectall") break;
-		}
-		sideMenu.insert(insertAt, new MenuItem({ type: "separator" }));
-		sideMenu.insert(insertAt + 1, new MenuItem({
-			label: "Hide aside",
-			click: function () {
-				hide();
-			}
-		}));
-
-		var sideMenu = userEditor.contextMenu.menu;
-		var insertAt = 0;
-		while (insertAt < sideMenu.items.length) {
-			if (sideMenu.items[insertAt++].aceCommand == "selectall") break;
-		}
-		sideMenu.insert(insertAt, new MenuItem({ type: "separator" }));
-		sideMenu.insert(insertAt + 1, new MenuItem({
-			label: "Hide aside",
-			click: function () {
-				hide();
-			}
-		}));
-
 		ready = true;
 	}
 
+	function updateMenuItems() {
+		var showItem = mainMenu.getMenuItemById('show-codebase');
+		var hideItem = mainMenu.getMenuItemById('hide-codebase');
+		
+		if (isChatGMLShown) {
+			if (showItem) showItem.visible = false;
+			if (hideItem) hideItem.visible = true;
+		} else {
+			if (showItem) showItem.visible = true;
+			if (hideItem) hideItem.visible = false;
+		}
+	}	
+
 	function init() {
 		console.log(aceEditor.session)
-		var mainMenu = aceEditor.contextMenu.menu;
+		
+		mainMenu = aceEditor.contextMenu.menu;
 		var insertAt = 0;
 		while (insertAt < mainMenu.items.length) {
 			if (mainMenu.items[insertAt++].aceCommand == "selectall") break;
 		}
-		console.log("mainmenu lenght = " + mainMenu.items.length)
-		console.log("inser at  = " + insertAt + 2,)
-		var insertPosition = Math.min(insertAt + 2, mainMenu.items.length);
 
-		mainMenu.insert(insertPosition, new MenuItem({
-			label: "Show codebase",
+		mainMenu.insert(insertAt, new MenuItem({type: "separator", id: "show-codebase-sep"}));
+		mainMenu.insert(insertAt + 1, new MenuItem({
+			label: "Show ChatGML",
 			id: "show-codebase",
 			icon: __dirname + "/icons/silk/application_split_vertical.png",
-			click: function () {
+			click: function() {
 				show(aceEditor.session.gmlFile);
+				isChatGMLShown = true;
+				updateMenuItems();
 			}
 		}));
+		mainMenu.insert(insertAt + 2, new MenuItem({
+			label: "Hide ChatGML",
+			id: "hide-codebase",
+			icon: __dirname + "/icons/silk/application_split_vertical.png",
+			click: function() {
+				hide();
+				isChatGMLShown = false;
+				updateMenuItems();
+			}
+		}));
+		updateMenuItems();
 
 		try {
 			setupEnvironment("https://github.com/jolionlands/talk-codebase.git", "talk-codebase", "talk-venv", "cli.py");
