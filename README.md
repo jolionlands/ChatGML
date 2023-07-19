@@ -1,12 +1,15 @@
 # ChatGML
-* ChatGML is a plugin for [GMEdit](https://github.com/YellowAfterlife/GMEdit) to ask questions to and converse with your game's codebase using LLMs (Large Language Models).
-* It supports offline code processing using [GPT4All](https://github.com/nomic-ai/gpt4all) without sharing your code with third parties, or you can use OpenAI if privacy is not a concern for you.
+* ChatGML is a plugin for [GMEdit](https://github.com/YellowAfterlife/GMEdit) to ask questions to and converse with your [GameMaker](https://gamemaker.io/en) game's codebase using LLMs (Large Language Models).
+* It supports offline code processing using [GPT4All](https://github.com/nomic-ai/gpt4all) without sharing your code with third parties and OpenAI's ChatGPT.
 * ChatGML is still under development, but it is a tool that can help you to improve your code. It is only recommended for educational purposes and not for production use.
 
 ## Installation Requirements
 * Python 3.9
 * An OpenAI API [api-keys](https://platform.openai.com/account/api-keys)
 * (Optional) [GPT4All](https://gpt4all.io) 
+
+## Installation Guide
+* TODO
 
 ## Advanced configuration
 
@@ -36,6 +39,9 @@ model_type: openai
 ```
 find . | grep -v "__pycache__\|\.pytest_cache\|\.benchmarks\|ffmpeg\|\.pyc\|./talk-venv\|./.github\|./.DS_Store\|./.git" > project_structure.txt
 ```
+
+## Other Resources
+* TODO
 
 ## Contributing
 
