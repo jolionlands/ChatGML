@@ -1,5 +1,5 @@
 # ChatGML
-* ChatGML is a GMEdit plugin to ask questions to and converse with your game's codebase using LLMs (Large Language Models) to answer your queries.
+* ChatGML is a plugin for [GMEdit](https://github.com/YellowAfterlife/GMEdit) to ask questions to and converse with your game's codebase using LLMs (Large Language Models).
 * It supports offline code processing using [GPT4All](https://github.com/nomic-ai/gpt4all) without sharing your code with third parties, or you can use OpenAI if privacy is not a concern for you.
 * ChatGML is still under development, but it is a tool that can help you to improve your code. It is only recommended for educational purposes and not for production use.
 
