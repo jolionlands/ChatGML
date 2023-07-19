@@ -1,33 +1,15 @@
-## talk-codebase 
-[![Node.js Package](https://github.com/rsaryev/talk-codebase/actions/workflows/python-publish.yml/badge.svg)](https://github.com/rsaryev/talk-codebase/actions/workflows/python-publish.yml)
-
-* Talk-codebase is a tool that allows you to converse with your codebase using LLMs (Large Language Models) to answer your queries.
+## ChatGML
+* ChatGML is a GMEdit plugin to ask questions to and converse with your game's codebase using LLMs (Large Language Models) to answer your queries.
 * It supports offline code processing using [GPT4All](https://github.com/nomic-ai/gpt4all) without sharing your code with third parties, or you can use OpenAI if privacy is not a concern for you.
-* Talk-codebase is still under development, but it is a tool that can help you to improve your code. It is only recommended for educational purposes and not for production use.
-
-<p align="center">
-  <img src="https://github.com/rsaryev/talk-codebase/assets/70219513/b5d338f9-14a5-417b-9690-83f5cd66facf" width="800" alt="chat">
-</p>
+* ChatGML is still under development, but it is a tool that can help you to improve your code. It is only recommended for educational purposes and not for production use.
 
 ## Installation
 
-To install talk-codebase, you need to have:
+To install ChatGML, you need to have:
 
 * Python 3.9
 * An OpenAI API [api-keys](https://platform.openai.com/account/api-keys)
-* (Optional) [GPT4All](https://gpt4all.io) model
-
-```bash
-# Install talk-codebase
-pip install talk-codebase
-
-# Configure talk-codebase
-talk-codebase configure
-
-# If you want some files to be ignored, add them to .gitignore.
-# Once `talk-codebase` is installed, you can use it to chat with your codebase in the current directory by running the following command:
-talk-codebase chat .
-```
+* (Optional) [GPT4All](https://gpt4all.io) 
 
 ## Advanced configuration
 
