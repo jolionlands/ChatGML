@@ -132,7 +132,6 @@ class TalkCodebaseCLI:
         llm = factory_llm(root_dir, config)
         files = llm.find_files(query)
         sys.stderr.write(f"Found {len(files)} files related to user query")
-        sys.stdout.write('\n'.join(files))
 
 
 if __name__ == "__main__":

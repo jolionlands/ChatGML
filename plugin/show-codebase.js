@@ -303,14 +303,14 @@
 		var fileElementsContainer = document.createElement('div');
 		fileElementsContainer.className = 'file-elements-container';
 	
-		// files should be an array of file paths
+		// The 'files' should be an array of objects containing file paths and contents
 		files.forEach(file => {
 			// Create a div to represent the file
 			var fileElement = document.createElement('div');
 			fileElement.className = 'file-element';
 	
 			// Use path.basename to get the file name from the full path
-			fileElement.innerText = path.basename(file);
+			fileElement.innerText = path.basename(file.path);
 	
 			// Add a button to deselect the file
 			var deselectButton = document.createElement('button');

@@ -37,12 +37,15 @@ class BaseLLM:
 
     def embedding_search(self, query, k):
         return self.vector_store.search(query, k=k, search_type="similarity")
-    
+
     def find_files(self, query: str) -> list:
         k = self.config.get("k")
         docs = self.embedding_search(query, k=int(k))
-        file_paths = [os.path.abspath(s.metadata["source"]) for s in docs]
-        return file_paths
+        file_data = []
+        for s in docs:
+            abs_path = os.path.abspath(s.metadata["source"])
+            file_data.append({"page_content": s.page_content, "path": abs_path})
+        return file_data
 
     def _create_vector_store(self, embeddings, index, root_dir, force_recreate:bool = False):     
         # Normalize the root directory path
@@ -133,6 +136,7 @@ class OpenAILLM(BaseLLM):
         sys.stderr.write(f"User query:\n{query}")
         if files is not None:
             file_paths = [os.path.abspath(s.metadata["source"]) for s in files]
+            print(files)
             sys.stderr.write(f"Relevant files:\n{file_paths}")
 
 
