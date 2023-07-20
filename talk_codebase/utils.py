@@ -59,7 +59,7 @@ class StreamStdOutJSON(StreamingStdOutCallbackHandler):
         
         sys.stdout.write(json.dumps({
             "ai_response": ai_response,
-        }))
+        }, ensure_ascii=False))
         sys.stdout.flush()
 
 

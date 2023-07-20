@@ -87,7 +87,7 @@ def loop(llm):
             sys.stderr.write(f"Found {len(files)} files related to user query")
             sys.stdout.write(json.dumps({
                 "files": files
-            }))
+            }, ensure_ascii=False))
             sys.stdout.flush()
         elif line.endswith("END"):
             query += line.replace("END", "").lower().strip()  # Remove end signal from line and add to query

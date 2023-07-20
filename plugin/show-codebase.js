@@ -16,7 +16,7 @@
 	let gmlFile = null;
 	let projectDirectory = null;
 	let pythonProcess = null;
-	let pythonOutputContent = "";
+	let pythonOutputContent = "";  // Content of the Python process output to be displayed in the output editor
 	let isChatGMLShown = false;  // Controls whether the ChatGML interface is visible/open
 	var mainMenu;
 
@@ -176,34 +176,26 @@
             return;
         }
 
-        try {
-            const dataObj = JSON.parse(dataStr);
-            if (dataObj.ai_response) {
-                const aiRespContent = dataObj.ai_response.trim();
-                pythonOutputContent = aiRespContent;
-                console.log('Received AI response for user query:\n', aiRespContent, dataObj);
-                aiResponseEditor.setContent(pythonOutputContent);
-                sendCommandButton.stopLoading();
-                pythonOutputContent = "";
-                return;
-			} else if (dataObj.files) {
-				const aiRespContent = dataObj.files;
-                respFiles = aiRespContent;
-                console.log('Found related files to user query:\n', aiRespContent, dataObj);
-				displayFileSearchResults(respFiles);
-                fileSearchButton.stopLoading();
-                pythonOutputContent = "";
-                return;
-            } else {
-                console.warn('Received unexpected data from Python script:\n', dataStr);
-            }
-        } catch(e) {
-            if (e instanceof SyntaxError) {
-                console.error("Failed to parse JSON from stdout:\n", dataStr);
-            } else {
-                throw e;
-            }
-        }
+		const dataObj = parseJsonFromString(dataStr);
+		if (dataObj.ai_response) {
+			const aiRespContent = dataObj.ai_response.trim();
+			pythonOutputContent = aiRespContent;
+			console.log('Received AI response for user query:\n', aiRespContent, dataObj);
+			aiResponseEditor.setContent(pythonOutputContent);
+			sendCommandButton.stopLoading();
+			pythonOutputContent = "";
+			return;
+		} else if (dataObj.files) {
+			const aiRespContent = dataObj.files;
+			respFiles = aiRespContent;
+			console.log('Found related files to user query:\n', aiRespContent, dataObj);
+			displayFileSearchResults(respFiles);
+			fileSearchButton.stopLoading();
+			pythonOutputContent = "";
+			return;
+		} else {
+			console.warn('Received unexpected data from Python script:\n', dataStr);
+		}
     }
 
     function stderrCallback(dataStr) {
@@ -291,49 +283,39 @@
 		}
 		gmlFile = file;
 		session = GMEdit.aceTools.cloneSession(file.codeEditor.session);
-		
-		console.log(userEditor.kind);
 	}
 
 	function displayFileSearchResults(files) {
-		// Clear previous search results
-		selectedFiles = [];
-
-		// Create a new container for all file elements
-		var fileElementsContainer = document.createElement('div');
-		fileElementsContainer.className = 'file-elements-container';
-	
 		// The 'files' should be an array of objects containing file paths and contents
+		// Add each file's content to the user editor, wrapped in a region
 		files.forEach(file => {
-			// Create a div to represent the file
-			var fileElement = document.createElement('div');
-			fileElement.className = 'file-element';
-	
-			// Use path.basename to get the file name from the full path
-			fileElement.innerText = path.basename(file.path);
-	
-			// Add a button to deselect the file
-			var deselectButton = document.createElement('button');
-			deselectButton.innerText = "X";
-			deselectButton.addEventListener('click', function() {
-				fileElement.remove();
-				var index = selectedFiles.indexOf(file);
-				if (index > -1) {
-					selectedFiles.splice(index, 1);
-				}
-			});
-	
-			fileElement.appendChild(deselectButton);
-	
-			// Add to the container
-			fileElementsContainer.appendChild(fileElement);
-	
-			// Add to selected files
-			selectedFiles.push(file);
+			// Format the file content as a region with the file path as the region comment
+			const regionContent = `#region ${file.path}\n${file.page_content}\n#endregion\n`;
+			
+			// Add the region to the user editor
+			userEditor.appendContent(regionContent);
 		});
+	}
 
-		// Add the new container to the main container
-		container.appendChild(fileElementsContainer);
+	function parseJsonFromString(dataStr) {
+		try {
+			let sanitizedDataStr = dataStr;
+			const regex = /([^\\]|^)(\n|\t)/g; // Matches newline or tab characters not preceded by a backslash
+			let match;
+			while (match = regex.exec(sanitizedDataStr)) {
+				// Replace unescaped newline and tab characters with their escaped equivalents
+				sanitizedDataStr = sanitizedDataStr.substring(0, match.index + 1) +
+					'\\' + sanitizedDataStr.substring(match.index + 1);
+			}
+			const dataObj = JSON.parse(sanitizedDataStr);
+			return dataObj;
+		} catch(e) {
+			if (e instanceof SyntaxError) {
+				console.error("Failed to parse JSON from stdout:\n", dataStr);
+			} else {
+				throw e;
+			}
+		}	
 	}
 
 	function prepare() {

@@ -1,9 +1,13 @@
 class CustomEditor {
-    constructor(parent, isReadOnly = false, mode = "ace/mode/text", wrapColumnWidth = 80) {
+    constructor(parent, isReadOnly = false, mode = "ace/mode/text", wrapColumnWidth = 80, theme) {
         this.container = document.createElement('div');
         parent.appendChild(this.container);
         this.editor = GMEdit.aceTools.createEditor(this.container);
         this.editor.session.setMode(mode);
+
+        if (theme) {
+            this.editor.setTheme(theme);
+        }
 
         // Set editor to use soft wrap (lines will wrap around visually in the editor, but not in the actual file)
         this.editor.setOptions({
@@ -33,4 +37,15 @@ class CustomEditor {
         this.editor.setValue(value);
         this.editor.selection.clearSelection();
     }
+
+    // Method to append content to the existing editor content
+    appendContent(value) {
+        const session = this.editor.session;
+        const count = session.getLength();  // get number of lines
+        session.insert({
+            row: count, 
+            column: session.getLine(count-1).length
+        }, '\n' + value);  // append at end of the file
+    }
+
 }
