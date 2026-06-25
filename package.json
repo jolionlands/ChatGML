@@ -1,7 +1,30 @@
 {
   "name": "chatgml",
   "version": "0.1.0",
-  "description": "GameMaker-aware agentic coding assistant over any OpenAI-compatible backend.",
+  "description": "GameMaker-first TypeScript agentic coding assistant that navigates and edits your codebase via tools over any OpenAI-compatible endpoint, with pluggable (local or hippo) memory.",
+  "keywords": [
+    "agentic",
+    "coding-assistant",
+    "ai",
+    "llm",
+    "openai-compatible",
+    "gamemaker",
+    "gml",
+    "gmedit",
+    "codebase",
+    "embeddings",
+    "rag",
+    "cli",
+    "typescript"
+  ],
+  "homepage": "https://github.com/jolionlands/ChatGML#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jolionlands/ChatGML.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jolionlands/ChatGML/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=24"
