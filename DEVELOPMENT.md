@@ -69,9 +69,20 @@ file.
 `.github/workflows/python-publish.yml` is **neutralized** (kept for history, `workflow_dispatch`
 only, no-op job) — the Python `talk_codebase` tree is never auto-published.
 
-## GMEdit plugin symlink (legacy; modernized in M6)
+## GMEdit plugin (M6 — modernized onto `chatgml serve`)
+
+The plugin (`plugin/`) is thin Electron-renderer glue that spawns the core as a child process and
+speaks NDJSON over its stdio — no Python venv, no `git pull`, no YAML. Symlink the repo's `plugin/`
+dir into GMEdit's plugins folder (the folder name + `config.json` `name` are both `chatgml`):
 
 ```
 cd %APPDATA%\AceGM\GMEdit\plugins
-mklink /D "show-codebase" "C:\Users\henry\Documents\talk-codebase-gmedit\plugin"
+mklink /D "chatgml" "C:\Users\you\Development\ChatGML\plugin"
 ```
+
+Build the core first (`npm run build`) so `dist/cli.js` exists, or set the *ChatGML binary path*
+plugin Preference / `CHATGML_BIN` to a resolved `chatgml`. The plugin↔core transport is proven
+headlessly by `test/serve.spawn-integration.test.ts` (spawns the real `node dist/cli.js serve`
+against a local SSE stub and drives a full streaming turn + an `apply_patch` approve round-trip). See
+[docs/gmedit-plugin.md](docs/gmedit-plugin.md) for the full install, config, and event→UI mapping.
+The old `show-codebase` plugin is kept for reference under `plugin/legacy/`.

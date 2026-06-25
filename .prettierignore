@@ -9,8 +9,10 @@ package-lock.json
 talk_codebase/
 *.py
 
-# Legacy plugin (modernized in M6, left as-is until then)
-plugin/
+# Legacy plugin (kept as reference per never-delete; not reformatted)
+plugin/legacy/
+# Vendored / bundled assets we don't reflow
+plugin/icons/
 
 # Test fixtures with exact byte content
 test/fixtures/

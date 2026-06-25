@@ -1,36 +1,35 @@
-#code_base_editor, #code_base_editor_top {
+#chatgml_editor {
   display: flex;
-  flex-direction: row;
-  justify-content: flex-start;
-  align-items: flex-start;
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
+  flex-direction: column;
+  position: relative;
   height: 100%;
-  z-index: 2;
-}
-
-#code_base_editor_top {
-  z-index: 3;
+  overflow: hidden;
 }
 
 .run-button {
   padding: 5px 10px;
   cursor: pointer;
-  background-color: #4CAF50;
+  background-color: #4caf50;
   border: none;
   color: white;
   text-align: center;
   text-decoration: none;
   display: inline-block;
-  font-size: 16px;
+  font-size: 14px;
   margin: 4px 2px;
   transition-duration: 0.4s;
 }
 
+/* CSS has no darken() — use a concrete darker green (≈ darken(#4CAF50, 15%)). */
 .run-button:hover:not([disabled]) {
-  background-color: darken(#4CAF50, 15%);
+  background-color: #357a38;
+}
+
+.run-button.chatgml-reject {
+  background-color: #b23b3b;
+}
+.run-button.chatgml-reject:hover:not([disabled]) {
+  background-color: #7d2929;
 }
 
 button[disabled] {
@@ -44,6 +43,110 @@ button[disabled] {
   cursor: col-resize;
 }
 
-#codebase_editor .ace_content {
+#chatgml_editor .ace_content {
   border: 2px solid #948d8d;
+}
+
+/* ---- ChatGML panel ---- */
+.chatgml-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 6px;
+  box-sizing: border-box;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.chatgml-controls {
+  flex: 0 0 auto;
+}
+
+.chatgml-status {
+  flex: 0 0 auto;
+  font-style: italic;
+  opacity: 0.8;
+  margin: 4px 0;
+}
+
+.chatgml-activity {
+  flex: 0 0 auto;
+  margin: 4px 0;
+}
+.chatgml-activity-row {
+  font-family: monospace;
+  font-size: 12px;
+}
+.chatgml-activity-running {
+  opacity: 0.7;
+}
+.chatgml-activity-error {
+  color: #b23b3b;
+}
+
+.chatgml-transcript {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  margin: 4px 0;
+}
+
+.chatgml-sources {
+  flex: 0 0 auto;
+}
+.chatgml-sources-title {
+  font-weight: bold;
+}
+.chatgml-source {
+  font-family: monospace;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.chatgml-proposals {
+  flex: 0 0 auto;
+  overflow-y: auto;
+  max-height: 40%;
+}
+.chatgml-proposal {
+  border: 1px solid #948d8d;
+  margin: 6px 0;
+  padding: 4px;
+}
+.chatgml-proposal-header {
+  font-weight: bold;
+}
+.chatgml-diff {
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 12px;
+  margin: 4px 0;
+}
+.chatgml-diff-add {
+  background-color: rgba(80, 200, 80, 0.18);
+}
+.chatgml-diff-del {
+  background-color: rgba(200, 80, 80, 0.18);
+}
+.chatgml-diff-hunk {
+  color: #6a7ec0;
+}
+.chatgml-proposal-note {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.chatgml-input-row {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+}
+.chatgml-input {
+  flex: 1 1 auto;
+  resize: vertical;
+  min-height: 48px;
+}
+
+.chatgml-error {
+  color: #b23b3b;
 }

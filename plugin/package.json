@@ -1,0 +1,4 @@
+{
+  "//": "Marks plugin/*.js as CommonJS (overriding the repo root's type:module) so the Electron-renderer plugin glue can use require()/module.exports and the Node-based parity test can require() these files directly. This file is NOT shipped to GMEdit; the plugin is just config.json + the *.js scripts.",
+  "type": "commonjs"
+}
