@@ -14,6 +14,9 @@ import type { IgnoreFilter } from '../types.js';
 export type { IgnoreFilter };
 export { deriveGmlMeta } from './gml.js';
 export type { GmlMeta } from './gml.js';
+// fs-aware GameMaker enrichment deriver (collision targets + parent inheritance), memoized per root.
+// Falls back to the pure path-only `deriveGmlMeta` when there is no `.yyp`/sidecar.
+export { gmlDeriverForRoot, clearGmlDeriverCache } from './gml-enrich.js';
 
 /**
  * Directories never walked. Node-style noise + GameMaker output/noise + ChatGML's own store.

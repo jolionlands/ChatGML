@@ -116,9 +116,10 @@ async function cmdIndex(root: string, flags: GlobalFlags, deps: CliDeps): Promis
   const config = buildConfig(root, flags, io);
   const indexDeps = deps.makeEmbeddings ? { embeddings: deps.makeEmbeddings(config) } : {};
   const result = await runIndexCommand(config, indexDeps);
+  const gmSuffix = result.gmEnriched > 0 ? `; ${result.gmEnriched} GameMaker-enriched` : '';
   io.stdout.write(
     `indexed: ${result.added} added, ${result.modified} modified, ${result.unchanged} unchanged, ` +
-      `${result.deleted} deleted${result.fullRebuild ? ' (full rebuild)' : ''}\n`,
+      `${result.deleted} deleted${result.fullRebuild ? ' (full rebuild)' : ''}${gmSuffix}\n`,
   );
   return EXIT_OK;
 }

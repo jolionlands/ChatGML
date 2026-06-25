@@ -39,6 +39,17 @@ export interface GmlEventMeta {
   eventNumber: number;
   /** Raw token (a GUID on GMS2.3+, an object name on legacy); NOT a resolved object name. */
   collisionWithRaw?: string;
+  /**
+   * fs-AWARE enrichment (optional): the resolved NAME of the OTHER object this collision event
+   * targets, read from the authoritative `eventList` in the object's `.yy` (NOT the .gml filename).
+   * Absent unless a `.yyp` resolver enriched this meta.
+   */
+  collisionWith?: string;
+  /**
+   * fs-AWARE enrichment (optional): the resolved NAME of this object's parent (inheritance), read
+   * from `parentObjectId` in the object's `.yy`. Absent unless a `.yyp` resolver enriched this meta.
+   */
+  parentObject?: string;
   displayName: string;
 }
 

@@ -16,6 +16,18 @@ import type { Embeddings } from './embeddings.js';
 import { buildIgnoreFilter, walkFiles, type WalkOptions } from './files.js';
 import { chunkFile, hashContent } from './chunk.js';
 import { readJson, writeJsonAtomic } from '../memory/persist.js';
+import { deriveGmlMeta } from './gml.js';
+import {
+  buildGmResolver,
+  findYypOnDisk,
+  defaultReader,
+  type GmResolver,
+} from './gm-resolver.js';
+import {
+  writeEnrichmentSidecar,
+  clearGmlDeriverCache,
+  type GmEnrichment,
+} from './gml-enrich.js';
 
 interface ManifestEntry {
   contentHash: string;
@@ -44,6 +56,12 @@ export interface IndexResult {
   unchanged: number;
   deleted: number;
   fullRebuild: boolean;
+  /**
+   * Number of `.gml` object-event files whose citation meta was enriched with fs-aware `.yy`/`.yyp`
+   * data (resolved collision targets and/or parent inheritance). 0 when the root is not a GameMaker
+   * project or when no event file resolved anything.
+   */
+  gmEnriched: number;
 }
 
 export interface IndexerDeps {
@@ -89,6 +107,7 @@ export async function runIndex(
     unchanged: 0,
     deleted: 0,
     fullRebuild,
+    gmEnriched: 0,
   };
 
   const chunkOpts: { chunkSize?: number; chunkOverlap?: number } = {};
@@ -96,10 +115,13 @@ export async function runIndex(
   if (opts.chunkOverlap !== undefined) chunkOpts.chunkOverlap = opts.chunkOverlap;
 
   const seen = new Set<string>();
+  // Every `.gml` path seen this pass (changed or not), for the post-walk fs-aware enrichment.
+  const gmlPaths: string[] = [];
 
   for await (const file of walkFiles(root, (p) => ignore.ignores(p), opts.walk ?? {})) {
     result.scanned++;
     seen.add(file.relPath);
+    if (file.relPath.toLowerCase().endsWith('.gml')) gmlPaths.push(file.relPath);
 
     let stat: { mtimeMs: number; size: number };
     try {
@@ -153,7 +175,63 @@ export async function runIndex(
 
   manifest.files = nextFiles;
   await writeJsonAtomic(manifestPath(root), manifest);
+
+  // fs-aware GameMaker enrichment (best-effort): when the root is a GM project, resolve each `.gml`
+  // object-event's collision target + parent from the `.yyp`/`.yy` and persist a sidecar the citation
+  // layer layers over the path-only meta. ANY failure here is swallowed — indexing must not break.
+  result.gmEnriched = await enrichGmlSidecar(root, gmlPaths);
+
   return result;
+}
+
+/**
+ * Resolve fs-aware GameMaker enrichment for every walked `.gml` and persist it to the sidecar.
+ * Returns the number of `.gml` files that resolved at least one enrichment field. Fully GRACEFUL:
+ * no `.yyp`/parse failure/unknown ref => writes an empty sidecar (or none) and returns 0; never throws.
+ */
+async function enrichGmlSidecar(root: string, gmlPaths: string[]): Promise<number> {
+  let resolver: GmResolver | undefined;
+  try {
+    const yypRel = await findYypOnDisk(root);
+    if (yypRel === undefined) return 0; // not a GM project: nothing to enrich.
+    resolver = await buildGmResolver({ root, yypPath: yypRel, readFile: defaultReader(root) });
+  } catch {
+    return 0;
+  }
+  if (!resolver) return 0;
+
+  const byPath: Record<string, GmEnrichment> = {};
+  let count = 0;
+  for (const relPath of gmlPaths) {
+    const base = deriveGmlMeta(relPath);
+    if (!base || base.kind !== 'event' || base.resource !== 'object') continue;
+    let enriched;
+    try {
+      enriched = await resolver.enrich(base);
+    } catch {
+      continue; // one bad object .yy must not poison the rest.
+    }
+    if (enriched === base) continue;
+    const fields: GmEnrichment = {};
+    if (enriched.kind === 'event' && enriched.resource === 'object') {
+      if (enriched.collisionWith !== undefined) fields.collisionWith = enriched.collisionWith;
+      if (enriched.parentObject !== undefined) fields.parentObject = enriched.parentObject;
+    }
+    if (fields.collisionWith !== undefined || fields.parentObject !== undefined) {
+      const posix = relPath.replace(/\\/g, '/').replace(/^\.\//, '');
+      byPath[posix] = fields;
+      count++;
+    }
+  }
+
+  try {
+    await writeEnrichmentSidecar(root, byPath);
+    // A same-process serve should pick up freshly-resolved enrichment, not a stale cached deriver.
+    clearGmlDeriverCache();
+  } catch {
+    // Sidecar write failure is non-fatal: citations simply stay path-only.
+  }
+  return count;
 }
 
 interface Purgeable {

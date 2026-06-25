@@ -8,7 +8,7 @@ import type { ToolDef, ToolResult, ToolContext, Citation } from '../types.js';
 import { z } from 'zod';
 import type { TemporalQuery } from '../memory/types.js';
 import { hitToCitation } from '../memory/types.js';
-import { deriveGmlMeta } from '../index/files.js';
+import { gmlDeriverForRoot } from '../index/files.js';
 import { formatHits } from './search.js';
 
 const TemporalArgs = z.object({
@@ -42,7 +42,8 @@ export const temporalTool: ToolDef<TemporalArgs> = defineTool<TemporalArgs>({
     } catch (err) {
       throw new ToolError('provider_error', `temporal_query failed: ${(err as Error).message}`);
     }
-    const citations: Citation[] = hits.map((h) => hitToCitation(h, ctx.memory.id, deriveGmlMeta));
+    const derive = gmlDeriverForRoot(ctx.root);
+    const citations: Citation[] = hits.map((h) => hitToCitation(h, ctx.memory.id, derive));
     return { content: formatHits('temporal', hits), citations };
   },
 });

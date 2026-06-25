@@ -6,7 +6,7 @@ import { defineTool, ToolError } from '../tool-error.js';
 import type { ToolDef, ToolResult, ToolContext, Citation } from '../types.js';
 import { z } from 'zod';
 import { hitToCitation } from '../memory/types.js';
-import { deriveGmlMeta } from '../index/files.js';
+import { gmlDeriverForRoot } from '../index/files.js';
 import { formatHits } from './search.js';
 
 const GraphArgs = z.object({
@@ -36,7 +36,8 @@ export const graphTool: ToolDef<GraphArgs> = defineTool<GraphArgs>({
     } catch (err) {
       throw new ToolError('provider_error', `graph_neighbors failed: ${(err as Error).message}`);
     }
-    const citations: Citation[] = hits.map((h) => hitToCitation(h, ctx.memory.id, deriveGmlMeta));
+    const derive = gmlDeriverForRoot(ctx.root);
+    const citations: Citation[] = hits.map((h) => hitToCitation(h, ctx.memory.id, derive));
     return { content: formatHits('graph', hits), citations };
   },
 });

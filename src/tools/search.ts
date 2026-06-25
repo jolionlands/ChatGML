@@ -7,7 +7,7 @@ import { defineTool, ToolError } from '../tool-error.js';
 import type { ToolDef, ToolResult, ToolContext, Citation } from '../types.js';
 import { z } from 'zod';
 import { hitToCitation } from '../memory/types.js';
-import { deriveGmlMeta } from '../index/files.js';
+import { gmlDeriverForRoot } from '../index/files.js';
 
 const SearchArgs = z.object({
   query: z.string().min(1).describe('natural-language or keyword query'),
@@ -30,7 +30,8 @@ export const searchTool: ToolDef<SearchArgs> = defineTool<SearchArgs>({
       throw new ToolError('provider_error', `search failed: ${(err as Error).message}`);
     }
     const provider = ctx.memory.id;
-    const citations: Citation[] = hits.map((h) => hitToCitation(h, provider, deriveGmlMeta));
+    const derive = gmlDeriverForRoot(ctx.root);
+    const citations: Citation[] = hits.map((h) => hitToCitation(h, provider, derive));
     return { content: formatHits('search', hits), citations };
   },
 });

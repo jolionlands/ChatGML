@@ -71,6 +71,33 @@ chatgml index .
 chatgml --scope myproject index path/to/project
 ```
 
+### GameMaker-aware enrichment (`.yy`/`.yyp`)
+
+When the indexed directory is a **GameMaker project** (a `.yyp` exists at its root), indexing performs
+a best-effort, fs-aware resolution pass over the project's `.yy`/`.yyp` files and enriches the
+**citations** the agent returns for `.gml` object events:
+
+- **Collision targets.** A collision event lives on disk as `objects/<Obj>/Collision_<token>.gml`,
+  where `<token>` is a GUID (GameMaker 2.3+) or an object name (legacy) — _not_ a readable target. The
+  authoritative target is the `collisionObjectId` in the object's `.yy` `eventList`. ChatGML resolves
+  it and adds the **resolved target object name** to the citation (`gml.collisionWith`), while keeping
+  the raw filename token in `gml.collisionWithRaw`.
+- **Parent inheritance.** If an object's `.yy` sets `parentObjectId`, every event citation for that
+  object carries the resolved **parent object name** (`gml.parentObject`), so the agent sees the
+  inheritance chain.
+
+GameMaker `.yy`/`.yyp` files are JSON **with trailing commas**, which strict `JSON.parse` rejects;
+ChatGML parses them with a dedicated tolerant parser (it never routes them through the strict store
+reader). The whole pass is **best-effort**: with no `.yyp`, a parse failure, or an unknown reference,
+ChatGML simply falls back to **path-only** GameMaker metadata and indexes normally — enrichment never
+blocks indexing. When at least one event is enriched, the index summary appends
+`; N GameMaker-enriched`.
+
+```bash
+# Point index at a real GameMaker project root (the folder containing <Project>.yyp):
+chatgml --scope mygame index "/path/to/MyGame"
+```
+
 ---
 
 ## `chatgml chat [dir]`

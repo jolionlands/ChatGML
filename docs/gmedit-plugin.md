@@ -113,6 +113,16 @@ minted (`matchApproval` correlates by id only, so two edits to the same path nev
 close / GMEdit cleanup the plugin sends `cancel` then ends stdin (the core exits 0 cleanly), with
 `child.kill()` as a backstop against an orphan.
 
+### GameMaker-aware citations
+
+When the open project is a GameMaker project (a `.yyp` at the project root), the `answer`/`tool_result`
+**sources** carry GameMaker metadata under `citation.gml`. For object events the core resolves the
+project's `.yy`/`.yyp` at index time and adds the **resolved collision target** (`gml.collisionWith`,
+the authoritative `eventList[].collisionObjectId`, alongside the raw filename token in
+`gml.collisionWithRaw`) and the object's **parent** (`gml.parentObject`, from `parentObjectId`). This
+is best-effort: with no `.yyp` or an unresolvable reference the citation stays path-only
+(`gml.collisionWithRaw` only). See [usage.md](./usage.md#gamemaker-aware-enrichment-yyyyp).
+
 ## What cannot be tested here
 
 GMEdit/Electron cannot run in CI, so the DOM/IDE glue (`panel.js`, `diff-view.js` layout, context

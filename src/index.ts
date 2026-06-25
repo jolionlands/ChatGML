@@ -15,6 +15,35 @@ export * from './index/embeddings.js';
 export * from './index/indexer.js';
 export * from './index/run-index.js';
 
+// fs-aware GameMaker .yy/.yyp resolution (collision targets + object inheritance).
+export {
+  parseYy,
+  YyError,
+  loadResourceMap,
+  loadObjectMeta,
+  eventKeyFor,
+} from './index/yy.js';
+export type {
+  ReadFile,
+  YyRef,
+  ResourceKind,
+  ResourceMap,
+  ResourceMapEntry,
+  ObjectMeta,
+  EventKey,
+} from './index/yy.js';
+export { buildGmResolver, findYypOnDisk, defaultReader } from './index/gm-resolver.js';
+export type { GmResolver, BuildResolverOptions } from './index/gm-resolver.js';
+export {
+  applyEnrichment,
+  createEnrichedGmlDeriver,
+  loadEnrichmentSidecar,
+  enrichmentSidecarPath,
+  writeEnrichmentSidecar,
+  ENRICHMENT_VERSION,
+} from './index/gml-enrich.js';
+export type { GmEnrichment, EnrichmentSidecar } from './index/gml-enrich.js';
+
 // Memory layer.
 export * from './memory/types.js';
 export * from './memory/provider.js';
