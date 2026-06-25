@@ -4,7 +4,7 @@
 // capabilities passed (local => all six; hippo => its read set). `assertContractFails` runs the suite
 // programmatically against a deliberately-broken provider and asserts it FAILS — a GREEN negative
 // control that proves the harness actually catches violations (never CI-red).
-import { expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { MemoryProvider } from '../../src/memory/provider.js';
 import type { Scope, Chunk } from '../../src/memory/types.js';
 
@@ -94,6 +94,26 @@ export async function runContractCases(
   }
 
   if (provider.close) await provider.close();
+}
+
+/**
+ * Register the MemoryProvider contract as a vitest `describe`/`it` block, asserting ONLY the
+ * capabilities in `opts.capabilities`. Local providers pass all six; the hippo READ adapter passes
+ * its read set (search/graph) plus the local-shadowed set (temporal/remember/recall/upsert). Each
+ * provider case gets its own fresh `factory()` so a leaked store never crosses cases. Call this from
+ * the top level of a `*.test.ts` file (it registers tests; it does not run them itself).
+ */
+export function runProviderContract(
+  name: string,
+  factory: () => Promise<MemoryProvider> | MemoryProvider,
+  opts: ContractOptions,
+): void {
+  const caps = new Set(opts.capabilities);
+  describe(`provider contract: ${name}`, () => {
+    it(`satisfies the contract for capabilities [${[...caps].sort().join(', ')}]`, async () => {
+      await runContractCases(factory, { capabilities: [...caps] });
+    });
+  });
 }
 
 /**
