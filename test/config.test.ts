@@ -332,3 +332,72 @@ describe('DEFAULTS', () => {
     expect(DEFAULTS.embed.batchSize).toBe(64);
   });
 });
+
+describe('resolveConfig — required-field + hippo-key branches', () => {
+  it("missing chat.model throws ConfigError referencing 'chat.model'", () => {
+    const h = harness();
+    expect(() =>
+      resolveConfig({
+        root: h.root,
+        env: {},
+        flags: { chatBaseUrl: 'http://chat/v1', embedModel: 'e', scope: 's' },
+      }),
+    ).toThrow(/chat\.model/);
+  });
+
+  it("missing chat.baseURL throws ConfigError referencing 'chat.baseURL'", () => {
+    const h = harness();
+    expect(() =>
+      resolveConfig({
+        root: h.root,
+        env: {},
+        flags: { chatModel: 'm', embedModel: 'e', scope: 's' },
+      }),
+    ).toThrow(/chat\.baseURL/);
+  });
+
+  it("missing scope throws ConfigError referencing 'scope'", () => {
+    const h = harness();
+    expect(() =>
+      resolveConfig({
+        root: h.root,
+        env: {},
+        flags: { chatModel: 'm', chatBaseUrl: 'http://c/v1', embedModel: 'e' },
+      }),
+    ).toThrow(/scope/);
+  });
+
+  it('resolves a hippo key from env:NAME (trusted global file)', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      memory: { provider: 'hippo', url: 'http://127.0.0.1:7077', key: 'env:HIPPO_KEY' },
+    });
+    const cfg = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg, HIPPO_KEY: SENTINEL },
+      flags: {},
+    });
+    expect(cfg.memory.provider).toBe('hippo');
+    if (cfg.memory.provider === 'hippo') expect(cfg.memory.key).toBe(SENTINEL);
+  });
+
+  it('drops a hippo key whose env:NAME is absent (no key on the lane)', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      memory: { provider: 'hippo', url: 'http://127.0.0.1:7077', key: 'env:ABSENT_HIPPO' },
+    });
+    const cfg = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: {},
+    });
+    expect(cfg.memory.provider).toBe('hippo');
+    if (cfg.memory.provider === 'hippo') expect(cfg.memory.key).toBeUndefined();
+  });
+});

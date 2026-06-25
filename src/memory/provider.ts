@@ -1,7 +1,9 @@
 // src/memory/provider.ts — the single MemoryProvider seam.
 //
-// M1 scope: the interface + the MemoryProviderInput type (declared exactly once). The runtime
-// `createMemoryProvider` (dynamic import('./local.js') / import('./hippo.js')) lands in M2 (task 2.8).
+// The interface + the MemoryProviderInput type (declared exactly once) plus the runtime
+// `createMemoryProvider`, which selects a backend via dynamic `import()` of a STATIC path
+// (`./local.js` or `./hippo.js`) so choosing one never loads the other. The discriminated
+// `MemoryConfig` makes the never-branch real (exhaustiveness is meaningful).
 import type { Config } from '../types.js';
 import type { Scope } from '../types.js';
 import type { Chunk, Hit, SymbolRef, TemporalQuery, SessionNote } from './types.js';
@@ -27,3 +29,30 @@ export interface MemoryDeps {
 
 // audit: provider input declared ONCE; root is explicit, not an ad-hoc intersection at the call site.
 export type MemoryProviderInput = Config['memory'] & { root: string };
+
+/**
+ * Construct the configured memory provider. Switches on `input.provider` with a dynamic import of a
+ * static path (the unselected backend is never loaded). The `never`-branch is a real compile-time
+ * exhaustiveness check AND a runtime throw for a bogus provider passed via `as any`.
+ */
+export async function createMemoryProvider(
+  input: MemoryProviderInput,
+  deps: MemoryDeps,
+): Promise<MemoryProvider> {
+  switch (input.provider) {
+    case 'local': {
+      const { LocalMemoryProvider } = await import('./local.js');
+      return new LocalMemoryProvider(input, deps);
+    }
+    case 'hippo': {
+      const { HippoMemoryProvider } = await import('./hippo.js');
+      return new HippoMemoryProvider(input, deps);
+    }
+    default: {
+      const _exhaustive: never = input;
+      throw new Error(
+        `unknown memory provider: ${String((_exhaustive as { provider?: unknown }).provider)}`,
+      );
+    }
+  }
+}
