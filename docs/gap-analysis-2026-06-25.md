@@ -39,8 +39,9 @@ from the binary handling in `read_file`/`grep` (which both already NUL-sniff): t
 ## Agent-loop dogfooding gaps (driving `serve` over NDJSON vs a stub)
 
 A second pass drove the real `node dist/cli.js serve` over NDJSON against an OpenAI-compatible stub
-and surfaced five turn-lifecycle gaps. GAP1–GAP3 + the grep CLEANUP are **FIXED** (this commit);
-GAP4 + GAP5 are **DEFERRED / needs-decision** (documented below).
+and surfaced five turn-lifecycle gaps. GAP1–GAP3 + the grep CLEANUP were fixed earlier; **GAP4 + GAP5
+are now also RESOLVED** (auto-mode destructive-edit backstop + slow-stream idle heartbeat) — see the
+flipped entries in the deferred section below.
 
 ### GAP1 — non-answer exits had no uniform terminal marker — MEDIUM — **FIXED**
 **Area:** agent loop / serve contract. **File:** `src/agent.ts` (`runAgent`).
@@ -411,37 +412,52 @@ optional `[dir]`/`--local` that writes `<dir>/.chatgml.json` (refusing secrets t
 and/or print the destination path more prominently; at minimum document that
 `config set` is global-only.
 
-### GAP4 — in `auto` approval mode an injection-driven edit auto-applies with no human and no secondary backstop — MEDIUM (policy, deferred)
-**Area:** approval gate / prompt-injection defense. **Files:** `src/agent.ts`
-(`createApprovalGate` — `autoApprove` resolves synchronously `true`), `buildSystemPrompt` (the
-"edits require an explicit user request" instruction is the *only* line of defense in `auto`).
-**Observation:** in `auto` mode the gate emits `edit_proposal` then immediately resolves approved, so
-an `apply_patch` that the model was coerced into proposing (e.g. by injected file/tool content saying
-"apply this patch") applies with **no human in the loop and no secondary backstop**. The gated path is
-robust (the prompt-injection test proves a human `reject` blocks the write); `auto` is the documented
-opt-in trade-off — it exists precisely to skip the human — so this is **working as designed**, not a
-bug. **Why deferred:** changing `auto`'s behavior is a policy decision (it would partially defeat the
-mode's purpose). **Behavior is UNCHANGED.** **Proposed hardening (needs decision):** even in `auto`,
-require explicit approval for the higher-blast-radius edits — whole-file rewrites or deletions, or any
-edit when there is no explicit user edit request in the turn's user message — falling back to the
-gated path for those while auto-applying small, in-place, user-requested diffs. Optionally add a
-content heuristic that flags a proposal whose diff originated from text that appeared in a prior
-tool_result (a signal of injection).
+### GAP4 — in `auto` approval mode an injection-driven edit auto-applies with no human and no secondary backstop — MEDIUM (policy) — **RESOLVED (auto now backstops destructive edits)**
+**Area:** approval gate / prompt-injection defense. **Files:** `src/tools/edit.ts`
+(`assessEditRisk` + `forceGate`), `src/agent.ts` (`createApprovalGate` honors `forceGate`),
+`src/types.ts` (`ApprovalRequest.forceGate`).
+**Was:** in `auto` mode the gate emitted `edit_proposal` then immediately resolved approved, so an
+`apply_patch` the model was coerced into proposing (e.g. by injected file/tool content saying "apply
+this patch") applied with **no human in the loop and no secondary backstop**.
+**Fix (shipped):** a **deterministic destructive-edit backstop**. Before the approval round-trip the
+edit tool runs `assessEditRisk(diff, originalLineCount)` — computed only from cheap unified-diff facts
+(added/removed line counts vs the file size). A diff is **HIGH-RISK** if it is a whole-file wipe (removes
+the entire file, adds nothing), a whole-file rewrite (removes the whole file and rewrites it with ≥
+`WHOLE_FILE_REPLACE_MIN_LINES` = 20 new lines), a mass deletion (net `-` lines >
+`DESTRUCTIVE_NET_DELETE_LINES` = 50), or a proportional deletion (net deletes >
+`DESTRUCTIVE_DELETE_FRACTION` = 50% of the file). A high-risk request sets `forceGate:true`, and the
+`ApprovalGate` then **WAITS for an explicit human approve/reject EVEN in auto mode** (it emits
+`approval_request` and blocks). A small, additive, in-place diff leaves `forceGate` unset and still
+auto-applies — normal auto edits are **unchanged**. **Gated mode is entirely unaffected** (it always
+waits regardless of the flag). This **caps an injection's blast radius in auto mode** without defeating
+the mode's purpose. Tests: in auto mode a small additive patch auto-applies (no `approval_request`),
+but a whole-file-delete patch emits `approval_request` and does NOT write until approved (and stays
+unwritten on reject); `assessEditRisk` unit tests cover each rule; gated mode is unchanged. Documented
+in `docs/usage.md` ("Destructive-edit backstop in `auto` mode").
 
-### GAP5 — Node25/undici on Windows ARM64 batches HTTP body chunks, so a SLOW upstream yields no incremental `token` events — MEDIUM (transport/dep, deferred)
-**Area:** streaming transport. **Files:** `src/llm.ts` / the SSE reader (consumes `fetch` body),
-`src/agent.ts` `streamTurn` (emits every delta it reads).
-**Observation:** ChatGML's loop is **correct** — `streamTurn` emits a `token` event for every
-non-empty delta it reads from the model stream. But on Node 25 / undici on Windows ARM64, a slow
-upstream's HTTP body chunks are **batched by the transport**, so the deltas arrive in bursts rather
-than incrementally; the UI sees a long quiet gap then a flood of tokens. The buffering is below
-ChatGML (the global `fetch` / undici read path), not in the agent loop. **Why deferred:** this is a
-platform/dependency characteristic; re-architecting the transport now is out of scope and risks
-regressions. **Behavior is UNCHANGED.** **Options (needs decision):** (a) an idle-read heartbeat —
-emit a low-frequency `status` (e.g. `thinking`) when no delta has arrived for N ms so the client knows
-the turn is alive during a buffered gap; (b) document the Node/undici dependency and the platform
-caveat in `docs/agent-api.md`; (c) evaluate a streaming-friendlier fetch (e.g. a different HTTP client
-or undici options that reduce body-chunk batching) and benchmark incremental delivery on Win ARM64.
+### GAP5 — Node25/undici on Windows ARM64 batches HTTP body chunks, so a SLOW upstream yields no incremental `token` events — MEDIUM (transport/dep) — **RESOLVED / mitigated (idle heartbeat)**
+**Area:** streaming transport. **Files:** `src/agent.ts` (`streamTurn` idle watchdog, `IDLE_MS`),
+`src/types.ts` (`status` phase `streaming`), `src/cli.ts` (`CHATGML_IDLE_MS`).
+**Was:** ChatGML's loop is **correct** — `streamTurn` emits a `token` for every non-empty delta — but
+on Node 25 / undici on Windows ARM64 a slow upstream's HTTP body chunks are **batched by the
+transport**, so deltas arrive in bursts; the client sees a long quiet gap then a flood. The buffering
+is below ChatGML (the global `fetch`/undici read path), not in the agent loop.
+**Fix (shipped):** a **timer-based idle heartbeat** in `streamTurn`, independent of the blocked body
+read. After `IDLE_MS` (= 5000ms, a named const) with no new token it emits
+`{type:'status', phase:'streaming'}` — at most once per `IDLE_MS` — so a serve client knows the turn is
+alive during a buffered stall. The watchdog is **reset on every token** and **stopped on turn end /
+abort** (the interval is `unref`'d and cleared in a `finally`), so it **never fires on a normal fast
+stream** (the docs-conformance fixture + existing tests are unaffected). `IDLE_MS` is **injectable**
+(`AgentOptions.idleMs` / `createAgentLike({ idleMs })` / the CLI's `CHATGML_IDLE_MS` env) so a test can
+force a heartbeat with a slow FakeLlm without real waiting, and an operator can tune the keep-alive for
+a known-slow upstream. The `AbortSignal` still aborts the underlying fetch promptly (unchanged;
+`init.signal` is set in `src/llm.ts` and the stream-read loop honors it). Tests: a slow stream (first
+token after > shrunken `IDLE_MS`) emits ≥1 `status:streaming` before the token, then the token +
+answer; a fast stream emits none; the watchdog stops at turn end. A live demo against the real
+`node dist/cli.js serve` shows 3 heartbeats during a 1.1s upstream stall (IDLE_MS=300ms). Documented in
+`docs/agent-api.md` ("Slow-upstream idle heartbeat") + `docs/usage.md`. *(Option (c) — a
+streaming-friendlier fetch / undici body-chunk tuning — remains a future optimization; the heartbeat
+makes the stall observable now without re-architecting the transport.)*
 
 ---
 

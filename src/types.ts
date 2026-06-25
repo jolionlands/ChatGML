@@ -72,7 +72,10 @@ export interface Usage {
 export type AgentEvent =
   | {
       type: 'status';
-      phase: 'ready' | 'thinking' | 'indexing' | 'idle' | 'done' | 'cancelled';
+      // `streaming` is the IDLE HEARTBEAT (GAP5): a slow upstream whose body chunks undici batches on
+      // Node25/Win-ARM64 can stall the token read for seconds; the streaming-turn watchdog emits this
+      // (at most every IDLE_MS) so a serve client knows the turn is alive during the buffered gap.
+      phase: 'ready' | 'thinking' | 'streaming' | 'indexing' | 'idle' | 'done' | 'cancelled';
       detail?: string;
       protocolVersion?: number;
     }
@@ -97,6 +100,14 @@ export interface ApprovalRequest {
   kind: 'edit';
   path: string;
   diff: string;
+  /**
+   * AUTO-MODE DESTRUCTIVE-EDIT BACKSTOP (GAP4). When `true`, the gate WAITS for an explicit human
+   * approve/reject EVEN in `auto` mode (it does not auto-resolve). The edit tool sets this for
+   * HIGH-RISK diffs (whole-file rewrite / mass deletion / net deletion beyond a threshold) so an
+   * injection-driven destructive edit cannot apply with no human in the loop. Small, additive,
+   * in-place auto edits leave it unset and still auto-apply. Absent ⇒ false (existing behavior).
+   */
+  forceGate?: boolean;
 }
 
 // ToolErrorCode is a type (the ToolError CLASS lives in src/tool-error.ts to keep this file runtime-free).

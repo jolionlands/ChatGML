@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { runAgent, createApprovalGate, DEFAULT_MAX_STEPS, STUCK_TOOL_LIMIT } from '../src/agent.js';
-import { FakeLlm, ThrowingLlm } from './helpers/fake-llm.js';
+import { runAgent, createApprovalGate, DEFAULT_MAX_STEPS, STUCK_TOOL_LIMIT, IDLE_MS } from '../src/agent.js';
+import { FakeLlm, ThrowingLlm, SlowLlm } from './helpers/fake-llm.js';
 import { LlmError } from '../src/llm.js';
 import { buildToolRegistry } from '../src/tools/index.js';
 import { makeTmpRepo, FakeEmbeddings } from './helpers/fakes.js';
@@ -397,5 +397,159 @@ describe('runAgent terminal-event contract', () => {
     // It answered, not stuck_tool — alternating fingerprints never reached 3-in-a-row.
     expectSingleTerminal(events, 'answer');
     expect(events.some((e) => e.type === 'error')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GAP4 — AUTO-MODE DESTRUCTIVE-EDIT BACKSTOP (end-to-end through runAgent + the real ApprovalGate).
+// In auto mode a small additive patch auto-applies (NO approval_request); a whole-file-delete patch
+// emits approval_request and does NOT write until approved. Gated mode is unchanged.
+// ---------------------------------------------------------------------------
+const STEP_TARGET = 'objects/obj_player/Step_0.gml';
+const STEP_ORIGINAL = 'hp -= 1;\nif (hp <= 0) instance_destroy();\n';
+// Small additive: insert a line after line 1 (net +1, in-place) -> NOT high-risk.
+const ADDITIVE_DIFF =
+  '--- a\n+++ b\n@@ -1,2 +1,3 @@\n hp -= 1;\n+hp = max(hp, 0);\n if (hp <= 0) instance_destroy();\n';
+const STEP_ADDITIVE_APPLIED = 'hp -= 1;\nhp = max(hp, 0);\nif (hp <= 0) instance_destroy();\n';
+// Whole-file wipe: remove every existing line, add nothing -> HIGH-RISK (forceGate).
+const WIPE_DIFF = '--- a\n+++ b\n@@ -1,2 +0,0 @@\n-hp -= 1;\n-if (hp <= 0) instance_destroy();\n';
+
+describe('runAgent auto-mode destructive-edit backstop (GAP4)', () => {
+  it('auto mode: a SMALL additive apply_patch auto-applies with NO approval_request and writes', async () => {
+    const { config, memory, ignore, root } = await setup('auto');
+    const llm = new FakeLlm([
+      { toolCalls: [{ id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: STEP_TARGET, diff: ADDITIVE_DIFF }) }] },
+      { tokens: ['Applied the guard.'] },
+    ]);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: true, emit });
+    await runAgent('add an hp guard', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    // Auto-applied: edit_proposal is emitted, but NO approval_request (no human prompted).
+    expect(events.some((e) => e.type === 'edit_proposal')).toBe(true);
+    expect(events.some((e) => e.type === 'approval_request')).toBe(false);
+    // The write actually happened.
+    expect(readFileSync(`${root}/${STEP_TARGET}`, 'utf8')).toBe(STEP_ADDITIVE_APPLIED);
+    expect(events.some((e) => e.type === 'answer')).toBe(true);
+  });
+
+  it('auto mode: a WHOLE-FILE-DELETE apply_patch emits approval_request and does NOT write until approved', async () => {
+    const { config, memory, ignore, root } = await setup('auto');
+    const before = readFileSync(`${root}/${STEP_TARGET}`, 'utf8');
+    expect(before).toBe(STEP_ORIGINAL);
+    const llm = new FakeLlm([
+      { toolCalls: [{ id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: STEP_TARGET, diff: WIPE_DIFF }) }] },
+      { tokens: ['Wiped the file.'] },
+    ]);
+    const events: AgentEvent[] = [];
+    // The backstop forces the gate to WAIT even in auto mode. Capture the request id and, to PROVE the
+    // file is untouched while pending, approve out-of-band on a later tick.
+    const holder: { gate?: ReturnType<typeof createApprovalGate> } = {};
+    let sawApprovalRequest = false;
+    const emit = (e: AgentEvent): void => {
+      events.push(e);
+      if (e.type === 'approval_request') {
+        sawApprovalRequest = true;
+        const id = e.id;
+        // The destructive edit must NOT have been written at the moment the human is asked.
+        expect(readFileSync(`${root}/${STEP_TARGET}`, 'utf8')).toBe(before);
+        queueMicrotask(() => holder.gate?.resolve(id, true)); // now approve
+      }
+    };
+    const gate = createApprovalGate({ autoApprove: true, emit });
+    holder.gate = gate;
+    await runAgent('delete everything', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+
+    // Even in AUTO mode the destructive edit was gated: an approval_request WAS emitted ...
+    expect(sawApprovalRequest).toBe(true);
+    expect(events.some((e) => e.type === 'approval_request')).toBe(true);
+    // ... and only after the (out-of-band) approve did the write land.
+    expect(readFileSync(`${root}/${STEP_TARGET}`, 'utf8')).toBe('');
+  });
+
+  it('auto mode: a WHOLE-FILE-DELETE that the human REJECTS is not written (blast radius capped)', async () => {
+    const { config, memory, ignore, root } = await setup('auto');
+    const before = readFileSync(`${root}/${STEP_TARGET}`, 'utf8');
+    const llm = new FakeLlm([
+      { toolCalls: [{ id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: STEP_TARGET, diff: WIPE_DIFF }) }] },
+      { tokens: ['Edit was declined.'] },
+    ]);
+    const events: AgentEvent[] = [];
+    const holder: { gate?: ReturnType<typeof createApprovalGate> } = {};
+    const emit = (e: AgentEvent): void => {
+      events.push(e);
+      if (e.type === 'approval_request') {
+        const id = e.id;
+        queueMicrotask(() => holder.gate?.resolve(id, false)); // reject
+      }
+    };
+    const gate = createApprovalGate({ autoApprove: true, emit });
+    holder.gate = gate;
+    await runAgent('delete everything', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    expect(events.some((e) => e.type === 'approval_request')).toBe(true);
+    // Rejected -> the file is UNCHANGED. An injection-driven wipe applied nothing in auto mode.
+    expect(readFileSync(`${root}/${STEP_TARGET}`, 'utf8')).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GAP5 — SLOW-UPSTREAM IDLE HEARTBEAT. A slow stream (first token after > IDLE_MS, IDLE_MS shrunk for
+// the test) emits >= 1 status:streaming heartbeat BEFORE the token, then the token + answer. A fast
+// stream emits NO heartbeat. The heartbeat is gated on REAL idle time and injectable, so the
+// docs-conformance fixture + existing fast-stream tests are unaffected.
+// ---------------------------------------------------------------------------
+describe('runAgent slow-upstream idle heartbeat (GAP5)', () => {
+  it('IDLE_MS is exported and a sane positive default', () => {
+    expect(IDLE_MS).toBeGreaterThan(0);
+  });
+
+  it('a slow stream emits >=1 status:streaming heartbeat BEFORE the first token, then token + answer', async () => {
+    const { config, memory, ignore } = await setup();
+    // Stall 80ms before the first token; shrink IDLE_MS to 20ms so the watchdog trips ~3x during the gap.
+    const llm = new SlowLlm('slow answer', 80);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { idleMs: 20 });
+
+    const types = events.map((e) => e.type);
+    const firstStreaming = types.findIndex((t, i) => t === 'status' && events[i]!.type === 'status' && (events[i] as { phase?: string }).phase === 'streaming');
+    const firstToken = types.indexOf('token');
+    const heartbeats = events.filter((e) => e.type === 'status' && e.phase === 'streaming');
+    expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+    // The heartbeat(s) arrived BEFORE the first token (during the idle stall).
+    expect(firstStreaming).toBeGreaterThanOrEqual(0);
+    expect(firstStreaming).toBeLessThan(firstToken);
+    // The token + final answer still arrive normally after the stall.
+    expect(types).toContain('token');
+    const answer = events.find((e) => e.type === 'answer');
+    expect(answer && answer.type === 'answer' && answer.text).toBe('slow answer');
+  });
+
+  it('a FAST stream emits NO heartbeat (real-idle gating; fixture/fast tests unaffected)', async () => {
+    const { config, memory, ignore } = await setup();
+    const llm = new FakeLlm([{ tokens: ['Hello ', 'world'] }]);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    // Even with a small idleMs, a synchronous (no-stall) FakeLlm never idles long enough to trip it.
+    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { idleMs: 20 });
+    expect(events.some((e) => e.type === 'status' && e.phase === 'streaming')).toBe(false);
+    // It still streams tokens and answers.
+    expect(events.some((e) => e.type === 'token')).toBe(true);
+    expect(events.some((e) => e.type === 'answer')).toBe(true);
+  });
+
+  it('the watchdog stops at turn end (no heartbeat fires after the answer)', async () => {
+    const { config, memory, ignore } = await setup();
+    const llm = new SlowLlm('done', 50);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { idleMs: 15 });
+    const answerIdx = events.findIndex((e) => e.type === 'answer');
+    expect(answerIdx).toBeGreaterThanOrEqual(0);
+    // Nothing after the answer (the interval was cleared in the finally).
+    const after = events.slice(answerIdx + 1);
+    expect(after).toHaveLength(0);
+    // Give any leaked interval a chance to fire; assert none did.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events.slice(answerIdx + 1)).toHaveLength(0);
   });
 });

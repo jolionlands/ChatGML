@@ -133,6 +133,23 @@ chatgml chat .
 - `--approval auto` applies edits without the per-edit prompt.
 - `--no-color` (or `NO_COLOR` / `FORCE_COLOR` env) controls ANSI styling.
 
+### Destructive-edit backstop in `auto` mode
+
+`--approval auto` skips the per-edit prompt — **except for high-risk, destructive edits, which are
+always sent through approval even in auto mode.** This caps the blast radius of a prompt-injection that
+coerces the model into proposing a destructive `apply_patch`: the dangerous edit still waits for a
+human, while ordinary small edits auto-apply untouched. An edit is treated as **high-risk** when, judged
+purely from the unified diff vs the target file:
+
+- it is a **whole-file wipe** (removes the entire file and adds nothing back), or
+- it is a **whole-file rewrite** (removes the whole file and rewrites it with ≥ 20 new lines), or
+- it is a **mass deletion** (net removes more than **50 lines**), or
+- it **deletes more than 50%** of the file.
+
+For these, `auto` falls back to the gated path (you are prompted / a `serve` client gets an
+`approval_request`) and **nothing is written until you approve**. A small, additive, in-place diff is
+not high-risk and still auto-applies. Gated mode (the default) is unchanged — it always prompts.
+
 ---
 
 ## `chatgml serve [dir]`
@@ -249,6 +266,7 @@ ChatGML raises a config error (exit 3) if any of these is missing after merging:
 | `CHATGML_SCOPE` | `scope` |
 | `CHATGML_APPROVAL` | `approval` (`gated` \| `auto`) |
 | `CHATGML_SEARCH_MIN_SCORE` | `search.minScore` (absolute cosine floor, `0`..`1`) |
+| `CHATGML_IDLE_MS` | slow-upstream idle-heartbeat period in ms (default `5000`; see agent-api.md) |
 | `XDG_CONFIG_HOME` | base for the user-global config dir |
 | `NO_COLOR` / `FORCE_COLOR` | REPL color |
 

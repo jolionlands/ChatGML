@@ -47,7 +47,7 @@ async-iterable of events per `user`/`reindex` command.
 
 | event | shape | meaning |
 |---|---|---|
-| status | `{"type":"status","phase":…}` | lifecycle: `ready\|thinking\|indexing\|idle\|done\|cancelled` |
+| status | `{"type":"status","phase":…}` | lifecycle: `ready\|thinking\|streaming\|indexing\|idle\|done\|cancelled` |
 | token | `{"type":"token","text":"…"}` | streamed assistant text delta |
 | tool_call | `{"type":"tool_call","id","name","args"}` | a tool is about to run (`args` already parsed) |
 | tool_result | `{"type":"tool_result","id","name","ok","content","citations?"}` | tool finished (`ok:false` on a tool error) |
@@ -72,6 +72,31 @@ can wait for a single terminal event and never hang:
 On cancel, a non-terminal `status:cancelled` may be emitted for the UI, but it is **never** the
 terminator — the terminal `error{code:"aborted"}` is, and nothing follows it. No turn ends on a bare
 `status`.
+
+## Slow-upstream idle heartbeat
+
+ChatGML streams over the platform global `fetch` (Node 25 / undici). On some platforms (notably
+**Windows ARM64**) undici **batches a slow upstream's HTTP body chunks**, so a slow model can stall the
+token read for seconds with no incremental `token` events — the deltas then arrive in a burst. ChatGML's
+loop is correct (it emits a `token` for every delta it reads); the buffering is in the transport beneath
+it.
+
+To keep a client from mistaking a buffered stall for a hung turn, the streaming turn runs a **timer-based
+idle watchdog**, independent of the blocked read. After **`IDLE_MS` (default 5000ms)** with no new token
+it emits a non-terminal heartbeat:
+
+```
+{"type":"status","phase":"streaming"}
+```
+
+at most once per `IDLE_MS`. The watchdog is **reset on every token** and **stopped when the turn ends or
+is aborted**, so it **never fires on a normal fast stream** — only during a real idle gap. A
+`status:streaming` is **not** a terminator (the turn still ends on exactly one `{answer, error}`); a
+client should treat it purely as a keep-alive ("still working").
+
+The period is tunable via the **`CHATGML_IDLE_MS`** environment variable (ms; `<=0` disables the
+watchdog) for a known-slow upstream. The `AbortSignal` from a `cancel`/disconnect still aborts the
+underlying fetch promptly — the heartbeat does not interfere with cancellation.
 
 ## Correlation
 

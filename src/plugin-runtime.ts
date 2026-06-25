@@ -189,6 +189,7 @@ export function resolveServeBinary(opts: ResolveBinaryOpts): ResolvedBinary {
 export type PluginStatusPhase =
   | 'ready'
   | 'thinking'
+  | 'streaming'
   | 'indexing'
   | 'idle'
   | 'done'

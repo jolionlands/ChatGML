@@ -65,3 +65,21 @@ export class ThrowingLlm implements LlmLike {
     throw this.err;
   }
 }
+
+/**
+ * An LlmLike that STALLS for `delayMs` before yielding its first text token, then answers. Models a
+ * slow upstream whose body chunks the transport batches (GAP5): the idle-heartbeat watchdog must fire
+ * during the stall. `delayMs` should be > the test's shrunken IDLE_MS so the watchdog trips deterministically.
+ */
+export class SlowLlm implements LlmLike {
+  constructor(
+    private readonly answer: string,
+    private readonly delayMs: number,
+  ) {}
+  async *chatStream(): AsyncGenerator<StreamDelta, ChatResult, void> {
+    await new Promise((r) => setTimeout(r, this.delayMs));
+    yield { kind: 'text', text: this.answer };
+    yield { kind: 'finish', reason: 'stop' };
+    return { message: { role: 'assistant', content: this.answer }, finishReason: 'stop' };
+  }
+}

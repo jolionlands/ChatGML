@@ -198,12 +198,18 @@ async function buildAgent(
   const embeddings = makeEmbeddings(deps, config);
   const memory = await makeMemory(deps, config, embeddings);
   const ignore = await buildIgnoreFilter(config.index.root);
+  // GAP5 idle-heartbeat period: optional CHATGML_IDLE_MS override (ms) for a known-slow upstream or a
+  // deterministic integration test; otherwise streamTurn uses its default IDLE_MS (5s). A non-finite
+  // or empty value is ignored (keeps the default).
+  const idleEnv = Number(io.env['CHATGML_IDLE_MS']);
+  const idleMs = io.env['CHATGML_IDLE_MS'] && Number.isFinite(idleEnv) ? idleEnv : undefined;
   const agent = createAgentLike({
     llm,
     tools: buildToolRegistry(),
     config,
     memory,
     ignore,
+    ...(idleMs !== undefined ? { idleMs } : {}),
     runReindex: async function* () {
       yield { type: 'status', phase: 'indexing' };
       const result = await runIndexCommand(config, { embeddings });

@@ -2,7 +2,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
-import { editTool, editProposalId } from '../../src/tools/edit.js';
+import {
+  editTool,
+  editProposalId,
+  assessEditRisk,
+  DESTRUCTIVE_NET_DELETE_LINES,
+} from '../../src/tools/edit.js';
+import { parsePatch } from 'diff';
 import { makeToolContext } from '../helpers/tool-context.js';
 import type { ApprovalRequest } from '../../src/types.js';
 
@@ -322,6 +328,105 @@ describe('apply_patch (M4) — TEST 2/3/4: symlink / TOCTOU safety on the write 
     } finally {
       await cleanup();
       await fsp.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GAP4 — auto-mode destructive-edit backstop: assessEditRisk classification + the edit tool sets
+// forceGate for high-risk diffs (so the gate waits even in auto mode).
+// ---------------------------------------------------------------------------
+describe('assessEditRisk — destructive-edit classification', () => {
+  const risk = (diff: string, lines: number) => assessEditRisk(parsePatch(diff), lines);
+
+  it('a small additive in-place edit is NOT high-risk', () => {
+    const small = '--- a\n+++ b\n@@ -1,1 +1,2 @@\n hp -= 1;\n+hp = max(hp, 0);\n';
+    const r = risk(small, 1);
+    expect(r.highRisk).toBe(false);
+    expect(r.added).toBe(1);
+    expect(r.removed).toBe(0);
+  });
+
+  it('a one-line in-place replace is NOT high-risk', () => {
+    expect(risk(DIFF, 1).highRisk).toBe(false);
+  });
+
+  it('a whole-file wipe (removes every existing line, adds nothing) IS high-risk', () => {
+    const wipe = '--- a\n+++ b\n@@ -1,2 +0,0 @@\n-line one;\n-line two;\n';
+    const r = risk(wipe, 2);
+    expect(r.highRisk).toBe(true);
+    expect(r.reason).toMatch(/whole-file/i);
+  });
+
+  it('net deletion beyond the line threshold IS high-risk', () => {
+    // Build a hunk that removes N+5 lines and adds none, over a big file.
+    const removed = DESTRUCTIVE_NET_DELETE_LINES + 5;
+    const body = Array.from({ length: removed }, (_, i) => `-old line ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${removed} +0,0 @@\n${body}\n`;
+    const r = risk(diff, 1000); // huge file so the FRACTION rule doesn't also fire — isolate the count rule
+    expect(r.highRisk).toBe(true);
+    expect(r.reason).toMatch(/mass deletion/i);
+  });
+
+  it('deleting more than half of a file IS high-risk (proportional rule)', () => {
+    // 10-line file, remove 6 net -> 60% > 50%.
+    const body = Array.from({ length: 6 }, (_, i) => `-line ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,6 +0,0 @@\n${body}\n`;
+    const r = risk(diff, 10);
+    expect(r.highRisk).toBe(true);
+    expect(r.reason).toMatch(/% of the file/);
+  });
+
+  it('creating a NEW file (no original) is NOT high-risk by deletion', () => {
+    const create = '--- /dev/null\n+++ b/new.gml\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n';
+    expect(risk(create, 0).highRisk).toBe(false);
+  });
+});
+
+describe('apply_patch — auto-mode backstop sets forceGate for destructive edits', () => {
+  it('auto mode: a SMALL additive edit auto-applies (forceGate false) and writes', async () => {
+    const { root, cleanup } = await makeRepo({ 'a.gml': 'hp -= 1;\n' });
+    try {
+      const seen: ApprovalRequest[] = [];
+      const { ctx } = makeToolContext({
+        root,
+        approval: 'auto',
+        requestApproval: async (req) => {
+          seen.push(req);
+          return true; // emulate the auto gate: a non-forced request resolves true
+        },
+      });
+      const additive = '--- a\n+++ b\n@@ -1,1 +1,2 @@\n hp -= 1;\n+hp = max(hp, 0);\n';
+      const res = await editTool.execute({ path: 'a.gml', diff: additive }, ctx);
+      expect(res.isError).not.toBe(true);
+      expect(seen[0]?.forceGate).toBe(false);
+      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe('hp -= 1;\nhp = max(hp, 0);\n');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('auto mode: a WHOLE-FILE wipe sets forceGate true (the gate must ask a human)', async () => {
+    const { root, cleanup } = await makeRepo({ 'a.gml': 'line one;\nline two;\n' });
+    try {
+      const seen: ApprovalRequest[] = [];
+      const { ctx } = makeToolContext({
+        root,
+        approval: 'auto',
+        // Decline to prove no write happens when the human is asked.
+        requestApproval: async (req) => {
+          seen.push(req);
+          return false;
+        },
+      });
+      const wipe = '--- a\n+++ b\n@@ -1,2 +0,0 @@\n-line one;\n-line two;\n';
+      const res = await editTool.execute({ path: 'a.gml', diff: wipe }, ctx);
+      expect(seen[0]?.forceGate).toBe(true);
+      expect(res.content).toMatch(/not approved/i);
+      // The file is UNCHANGED — the destructive edit did not auto-apply.
+      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe('line one;\nline two;\n');
+    } finally {
+      await cleanup();
     }
   });
 });

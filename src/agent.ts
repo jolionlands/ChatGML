@@ -68,7 +68,11 @@ export function createApprovalGate(opts: {
     request(req: ApprovalRequest): Promise<boolean> {
       // The diff is surfaced once (edit_proposal), then the client is asked to approve/reject.
       opts.emit({ type: 'edit_proposal', id: req.id, path: req.path, diff: req.diff });
-      if (opts.autoApprove) {
+      // AUTO-MODE DESTRUCTIVE-EDIT BACKSTOP (GAP4): auto-approve only when the request is NOT
+      // flagged high-risk. A `forceGate` request (whole-file rewrite / mass deletion — see
+      // assessEditRisk in src/tools/edit.ts) always falls through to the human-approval path even in
+      // auto mode, capping an injection's blast radius without breaking normal small auto edits.
+      if (opts.autoApprove && req.forceGate !== true) {
         return Promise.resolve(true);
       }
       opts.emit({ type: 'approval_request', id: req.id, kind: req.kind, path: req.path });
@@ -155,6 +159,12 @@ export interface AgentOptions {
   history?: ChatMessage[];
   maxSteps?: number;
   systemPrompt?: string;
+  /**
+   * Slow-upstream idle-heartbeat period in ms (GAP5), forwarded to streamTurn. Defaults to IDLE_MS
+   * (5s). Injectable so a test can force a heartbeat with a slow FakeLlm without real waiting; <=0
+   * disables the watchdog.
+   */
+  idleMs?: number;
 }
 
 export interface AgentRunResult {
@@ -229,7 +239,12 @@ export async function runAgent(
 
     let result: ChatResult;
     try {
-      result = await streamTurn(deps.llm, { messages, tools: toolSpecs, signal }, deps.emit);
+      result = await streamTurn(
+        deps.llm,
+        { messages, tools: toolSpecs, signal },
+        deps.emit,
+        opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {},
+      );
     } catch (err) {
       if (err instanceof LlmError) {
         finalMessage = { role: 'assistant', content: null };
@@ -304,22 +319,64 @@ function canonicalJson(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
 }
 
-/** Stream one model turn, emitting token events; returns the assembled ChatResult. */
+/**
+ * SLOW-UPSTREAM IDLE HEARTBEAT (GAP5). Node 25 / undici on Windows ARM64 batches a slow upstream's
+ * HTTP body chunks, so a slow model can stall the token read for seconds with NO incremental output.
+ * To prove the turn is still alive, a timer-based watchdog — independent of the blocked
+ * `gen.next()` read — emits `{type:'status', phase:'streaming'}` once per IDLE_MS of true idleness
+ * (no new token). It is reset on every token, and stopped on turn end / abort.
+ *
+ * The default IDLE_MS is conservative (5s) so a normal fast stream NEVER trips it; it is injectable
+ * (opts.idleMs) so a test can force a heartbeat with a slow FakeLlm without real waiting.
+ */
+export const IDLE_MS = 5000;
+
+interface StreamTurnOpts {
+  /** Idle-heartbeat period in ms. Defaults to IDLE_MS. Set <=0 to disable the watchdog. */
+  idleMs?: number;
+}
+
+/** Stream one model turn, emitting token events (+ an idle heartbeat); returns the ChatResult. */
 async function streamTurn(
   llm: LlmLike,
   req: ChatRequest,
   emit: (e: AgentEvent) => void,
+  opts: StreamTurnOpts = {},
 ): Promise<ChatResult> {
+  const idleMs = opts.idleMs ?? IDLE_MS;
   const gen = llm.chatStream(req);
-  let next = await gen.next();
-  while (!next.done) {
-    const delta = next.value;
-    if (delta.kind === 'text' && delta.text.length > 0) {
-      emit({ type: 'token', text: delta.text });
-    }
-    next = await gen.next();
+
+  // Idle watchdog: fires a heartbeat after `idleMs` of no token. `lastActivity` is reset whenever a
+  // token is emitted, so the heartbeat only marks REAL idle gaps and never fires on a fast stream.
+  // The interval lives outside the blocked read; abort settles it via the finally below.
+  let lastActivity = Date.now();
+  let watchdog: ReturnType<typeof setInterval> | undefined;
+  if (idleMs > 0) {
+    watchdog = setInterval(() => {
+      if (req.signal?.aborted) return; // abort path tears down separately; don't emit on a dead turn
+      if (Date.now() - lastActivity >= idleMs) {
+        lastActivity = Date.now(); // re-arm so we emit at most once per idleMs
+        emit({ type: 'status', phase: 'streaming' });
+      }
+    }, idleMs);
+    // Do not keep the event loop alive solely for the heartbeat (serve/CLI own the lifecycle).
+    (watchdog as { unref?: () => void }).unref?.();
   }
-  return next.value;
+
+  try {
+    let next = await gen.next();
+    while (!next.done) {
+      const delta = next.value;
+      if (delta.kind === 'text' && delta.text.length > 0) {
+        lastActivity = Date.now(); // a token arrived -> the turn is demonstrably alive; re-arm idle
+        emit({ type: 'token', text: delta.text });
+      }
+      next = await gen.next();
+    }
+    return next.value;
+  } finally {
+    if (watchdog !== undefined) clearInterval(watchdog);
+  }
 }
 
 /** The outcome of one tool call, used by the loop's stuck-tool detection. */
@@ -395,6 +452,12 @@ export interface AgentLikeDeps {
   /** Inject the indexer runner (reindex command). Optional; reindex is a no-op stub if absent. */
   runReindex?: (signal: AbortSignal) => AsyncIterable<AgentEvent>;
   ignore?: IgnoreFilter;
+  /**
+   * Slow-upstream idle-heartbeat period in ms (GAP5), forwarded to each run's streamTurn. Defaults to
+   * IDLE_MS (5s). The CLI may shrink it via CHATGML_IDLE_MS so a serve client gets a faster
+   * keep-alive on a known-slow upstream; <=0 disables the watchdog.
+   */
+  idleMs?: number;
 }
 
 /**
@@ -464,7 +527,7 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
           signal: controller.signal,
           ...(deps.ignore ? { ignore: deps.ignore } : {}),
         },
-        {},
+        deps.idleMs !== undefined ? { idleMs: deps.idleMs } : {},
       )
         .then(finalize)
         .catch((err: unknown) => {
