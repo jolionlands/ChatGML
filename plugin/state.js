@@ -13,9 +13,11 @@
   // --- 1. NDJSON line buffer (raw-chunk, tolerant of a malformed line) -----------------------
   function NdjsonLineBuffer() {
     this.buffer = '';
+    // Persistent decoder so a multibyte UTF-8 codepoint split across stdout chunks is carried over.
+    this.decoder = new TextDecoder();
   }
   NdjsonLineBuffer.prototype.push = function (chunk) {
-    this.buffer += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    this.buffer += typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true });
     const events = [];
     const malformed = [];
     let nl;
@@ -33,6 +35,7 @@
     return { events: events, malformed: malformed };
   };
   NdjsonLineBuffer.prototype.flush = function () {
+    this.buffer += this.decoder.decode(); // drain any bytes held back by a split multibyte sequence
     const rest = this.buffer;
     this.buffer = '';
     const line = rest.endsWith('\r') ? rest.slice(0, -1) : rest;

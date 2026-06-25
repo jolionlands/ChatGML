@@ -25,6 +25,24 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
     expect(jsBuf.flush()).toEqual(tsBuf.flush());
   });
 
+  it('NdjsonLineBuffer: streaming UTF-8 — a multibyte codepoint split across byte chunks is not corrupted', () => {
+    // '€' = UTF-8 0xE2 0x82 0xAC. Split those 3 bytes across two stdout chunks (mid-codepoint).
+    // Before the persistent-decoder fix this corrupted the euro into replacement chars (U+FFFD).
+    const line = '{"type":"token","text":"€"}\n';
+    const bytes = new TextEncoder().encode(line);
+    const splitAt = new TextEncoder().encode(line.slice(0, line.indexOf('€'))).length + 1; // after 1st euro byte
+    const a = bytes.slice(0, splitAt);
+    const b = bytes.slice(splitAt);
+
+    const tsBuf = new ts.NdjsonLineBuffer();
+    const jsBuf = new js.NdjsonLineBuffer();
+    const tsOut = [...tsBuf.push(a).events, ...tsBuf.push(b).events];
+    const jsOut = [...jsBuf.push(a).events, ...jsBuf.push(b).events];
+
+    expect(tsOut).toEqual([{ type: 'token', text: '€' }]);
+    expect(jsOut).toEqual(tsOut);
+  });
+
   it('isReadyHandshake: identical truth table', () => {
     const cases: unknown[] = [
       { type: 'status', phase: 'ready', protocolVersion: 1 },

@@ -26,6 +26,9 @@ export interface DecodeResult {
 
 export class NdjsonLineBuffer {
   private buffer = '';
+  // One persistent decoder so a multibyte UTF-8 codepoint split across two chunks is carried over;
+  // a fresh decoder per push() would drop the partial-byte state and corrupt the split codepoint.
+  private readonly decoder = new TextDecoder();
 
   /**
    * Feed a chunk; returns the parsed values for every complete line plus the raw text of any
@@ -36,7 +39,7 @@ export class NdjsonLineBuffer {
    */
   push(chunk: string | Uint8Array): DecodeResult {
     this.buffer +=
-      typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk, { stream: true });
+      typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true });
     const events: unknown[] = [];
     const malformed: string[] = [];
     let nl: number;
@@ -56,6 +59,7 @@ export class NdjsonLineBuffer {
 
   /** Flush a trailing buffered partial line (no terminating '\n'), if any. */
   flush(): DecodeResult {
+    this.buffer += this.decoder.decode(); // drain any bytes held back by a split multibyte sequence
     const rest = this.buffer;
     this.buffer = '';
     const line = rest.endsWith('\r') ? rest.slice(0, -1) : rest;

@@ -20,3 +20,6 @@ vector_store/
 # ChatGML local store + project config (never commit secrets)
 /.chatgml/
 /.chatgml.json
+
+# GMEdit plugin runtime prefs (written when plugin/ is symlinked into a GMEdit install)
+/plugin/chatgml-prefs.json
