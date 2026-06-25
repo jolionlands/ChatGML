@@ -59,8 +59,8 @@ describe('hippo wire mapping (pure)', () => {
     });
     expect(url.startsWith(`${URL}/api/recall?`)).toBe(true);
     const qs = new URLSearchParams(url.split('?')[1]);
-    expect(qs.get('q')).toBe('a b & c'); // round-trips the raw value (was percent-encoded on the wire)
-    expect(url).toContain('a+b+%26+c'); // actually percent-encoded in the URL string
+    expect(qs.get('query')).toBe('a b & c'); // hippo's real param name is `query` (round-trips the raw value)
+    expect(url).toContain('query=a+b+%26+c'); // percent-encoded under the `query` key in the URL string
     expect(qs.get('k')).toBe('5');
     expect(qs.get('ppr')).toBe('true');
     expect(qs.get('hyde')).toBe('false');
@@ -198,9 +198,11 @@ describe('HippoMemoryProvider.search', () => {
         match: '/api/recall',
         responder: () =>
           jsonResponse({
+            ok: true,
+            query: 'how does the player lose health',
             results: [
-              { id: 1, kind: 'code_file', topic: 'objects/obj_player/Step_0.gml', text: 'hp -= dmg;', score: 0.9 },
-              { id: 2, kind: 'concept', topic: 'health system', text: 'hp model', score: 0.7 },
+              { id: 1, kind: 'code_file', topic: 'objects/obj_player/Step_0.gml', content: 'hp -= dmg;', score: 0.9 },
+              { id: 2, kind: 'concept', topic: 'health system', content: 'hp model', score: 0.7 },
             ],
           }),
       },
@@ -212,6 +214,7 @@ describe('HippoMemoryProvider.search', () => {
     expect(recall).toHaveLength(1);
     // GET-with-flags is used...
     expect(recall[0]!.method).toBe('GET');
+    expect(recall[0]!.url).toContain('query='); // hippo's real recall param (not `q`)
     expect(recall[0]!.url).toContain('ppr=true');
     expect(recall[0]!.url).toContain('hyde=true');
     expect(recall[0]!.url).toContain('rerank=true');
@@ -222,6 +225,7 @@ describe('HippoMemoryProvider.search', () => {
     // Mapping: path only for the code node.
     expect(hits.map((h) => h.chunkId)).toEqual(['hippo:node:1', 'hippo:node:2']);
     expect(hits[0]!.path).toBe('objects/obj_player/Step_0.gml');
+    expect(hits[0]!.text).toBe('hp -= dmg;'); // body comes from hippo's `content` field
     expect(hits[1]!.path).toBeUndefined();
     expect(hits.every((h) => h.startLine === undefined && h.endLine === undefined)).toBe(true);
   });
@@ -260,7 +264,8 @@ describe('HippoMemoryProvider.graphNeighbors', () => {
         match: '/api/walk',
         responder: () =>
           jsonResponse({
-            nodes: [
+            ok: true,
+            walk: [
               { id: 43, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', score: 0.5 },
               { id: 44, kind: 'concept', topic: 'clamping values', score: 0.3 },
             ],
@@ -294,7 +299,7 @@ describe('HippoMemoryProvider.graphNeighbors', () => {
             ],
           }),
       },
-      { match: '/api/walk', responder: () => jsonResponse({ nodes: [] }) },
+      { match: '/api/walk', responder: () => jsonResponse({ walk: [] }) },
     ]);
     const p = make(fetch);
     const neighbors = await p.graphNeighbors({ name: 'doThing', path: 'a.gml' }, SCOPE);
@@ -305,7 +310,7 @@ describe('HippoMemoryProvider.graphNeighbors', () => {
   it('returns [] when the name resolves to nothing', async () => {
     const { recorder, fetch } = installFetchMock([
       { match: '/api/recall', responder: () => jsonResponse({ results: [] }) },
-      { match: '/api/walk', responder: () => jsonResponse({ nodes: [] }) },
+      { match: '/api/walk', responder: () => jsonResponse({ walk: [] }) },
     ]);
     const p = make(fetch);
     expect(await p.graphNeighbors({ name: 'ghost', path: 'p.gml' }, SCOPE)).toEqual([]);
@@ -395,6 +400,13 @@ describe('hippo wire mapping edge cases (pure)', () => {
     expect(hits[0]!.extra).toEqual({ nodeId: 1 });
     expect(hits[1]!.text).toBe('');
     expect(hits[1]!.extra).toEqual({ nodeId: 2 });
+  });
+
+  it('fromRecallResults prefers the `content` body field over text/topic', () => {
+    const [hit] = fromRecallResults([
+      { id: 1, kind: 'concept', topic: 't', text: 'old', content: 'real body', score: 0.5 },
+    ]);
+    expect(hit!.text).toBe('real body');
   });
 
   it('fromWalk skips non-numeric ids and fills text/score/extra fallbacks', () => {
@@ -585,13 +597,14 @@ function hippoContractFactory(): MemoryProvider {
     if (url.includes('/api/recall')) {
       // Return a code node whose topic matches the contract's graph ref so resolveNodeId succeeds.
       return jsonResponse({
+        ok: true,
         results: [
-          { id: 1, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', text: 'clampHealth', score: 0.9 },
+          { id: 1, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', content: 'clampHealth', score: 0.9 },
         ],
       });
     }
     if (url.includes('/api/walk')) {
-      return jsonResponse({ nodes: [{ id: 2, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', score: 0.5 }] });
+      return jsonResponse({ ok: true, walk: [{ id: 2, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', score: 0.5 }] });
     }
     return jsonResponse({});
   };

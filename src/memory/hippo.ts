@@ -28,6 +28,8 @@ const DEFAULT_URL = 'http://127.0.0.1:7077';
 export interface HippoNode {
   id: number;
   topic?: string;
+  /** Body text. hippo's `/api/recall` rows expose this under `content`; `text` kept as a tolerated alias. */
+  content?: string;
   text?: string;
   score?: number;
   kind?: string; // e.g. 'code_file' | 'code_symbol' | 'note' | 'concept' | ...
@@ -39,8 +41,9 @@ interface RecallResponse {
 }
 
 interface WalkResponse {
-  nodes?: HippoNode[];
-  neighbors?: HippoNode[]; // tolerate either field name
+  walk?: HippoNode[]; // hippo's real neighbor-array key (GET /api/walk -> {"ok":true,...,"walk":[...]})
+  nodes?: HippoNode[]; // tolerated aliases
+  neighbors?: HippoNode[];
 }
 
 interface StatsResponse {
@@ -70,7 +73,7 @@ export function queryFlags(query: string): RecallFlags {
 export function toRecallQuery(baseURL: string, query: string, k: number, flags: RecallFlags): string {
   const trimmed = baseURL.replace(/\/+$/, '');
   const params = new URLSearchParams();
-  params.set('q', query);
+  params.set('query', query); // hippo GET /api/recall reads param `query` (serve.zig parseQueryParam "query")
   params.set('k', String(k));
   params.set('ppr', flags.ppr ? 'true' : 'false');
   params.set('hyde', flags.hyde ? 'true' : 'false');
@@ -109,7 +112,7 @@ export function fromRecallResults(nodes: HippoNode[]): Hit[] {
   const out: Hit[] = [];
   for (const node of nodes) {
     if (typeof node.id !== 'number') continue;
-    const text = node.text ?? node.topic ?? '';
+    const text = node.content ?? node.text ?? node.topic ?? '';
     const hit: Hit = {
       chunkId: `hippo:node:${node.id}`,
       text,
@@ -317,7 +320,7 @@ export class HippoMemoryProvider implements MemoryProvider {
     } catch {
       throw new HippoError('failed to parse hippo /api/walk response');
     }
-    const neighbors = walkJson.nodes ?? walkJson.neighbors ?? [];
+    const neighbors = walkJson.walk ?? walkJson.nodes ?? walkJson.neighbors ?? [];
     return fromWalk(neighbors);
   }
 
