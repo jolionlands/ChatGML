@@ -139,6 +139,92 @@ describe('resolveConfig precedence', () => {
   });
 });
 
+// D1 — the opt-in search relevance floor (search.minScore). Default OFF (undefined); resolves with the
+// usual flag > env > file precedence; redaction surfaces it only when set; config set persists it.
+describe('search.minScore (D1 relevance floor)', () => {
+  it('defaults to undefined (no floor) when no layer sets it', () => {
+    const h = harness();
+    const cfg = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: baseFlags() });
+    expect(cfg.search.minScore).toBeUndefined();
+  });
+
+  it('reads minScore from the config file', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      search: { minScore: 0.3 },
+    });
+    const cfg = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} });
+    expect(cfg.search.minScore).toBe(0.3);
+  });
+
+  it('flag > env > file for minScore', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      search: { minScore: 0.1 },
+    });
+    const cfg = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg, CHATGML_SEARCH_MIN_SCORE: '0.2' },
+      flags: { minScore: 0.4 },
+    });
+    expect(cfg.search.minScore).toBe(0.4);
+    // env wins over file when no flag:
+    const cfg2 = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg, CHATGML_SEARCH_MIN_SCORE: '0.2' },
+      flags: {},
+    });
+    expect(cfg2.search.minScore).toBe(0.2);
+  });
+
+  it('rejects an out-of-range minScore in the config file', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      search: { minScore: 1.5 },
+    });
+    expect(() => resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('redact omits the search lane by default and surfaces it when minScore is set', () => {
+    const h = harness();
+    const off = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: baseFlags() });
+    expect((redact(off) as Record<string, unknown>).search).toBeUndefined();
+
+    const on = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: { ...baseFlags(), minScore: 0.35 },
+    });
+    expect((redact(on) as { search?: { minScore?: number } }).search?.minScore).toBe(0.35);
+  });
+
+  it('config set persists search.minScore (coerced to a number)', () => {
+    const h = harness();
+    const res = setUserGlobalConfigField('search.minScore', '0.25', { XDG_CONFIG_HOME: h.xdg });
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.search.minScore).toBe(0.25);
+    expect(typeof written.search.minScore).toBe('number');
+  });
+
+  it('config set rejects an out-of-range search.minScore', () => {
+    const h = harness();
+    expect(() =>
+      setUserGlobalConfigField('search.minScore', '2', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(ConfigError);
+  });
+});
+
 describe('secret resolution + env:NAME', () => {
   it('resolves env:NAME secrets into the resolved config (chat + embed)', () => {
     const h = harness();

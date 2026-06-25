@@ -153,6 +153,85 @@ describe('buildGmResolver — enrich path-only GmlMeta', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// D2 — safe multi-collision resolution. A synthetic GM project with one object that has TWO collision
+// events, NAME-encoded on disk (`Collision_<TargetName>.gml`), each resolving to its OWN distinct
+// target; plus a canonical-GUID-encoded collision file on the same object that stays path-only.
+// ---------------------------------------------------------------------------
+describe('multi-collision resolution (D2): name-encoded resolve, GUID stays path-only', () => {
+  // obj_hero collides BOTH obj_enemy AND obj_coin. Modern GMS files name the .gml by GUID; this project
+  // mixes a real canonical GUID file (stays path-only) with two name-encoded files (both resolve).
+  const GUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'; // a canonical GameMaker GUID token
+  const MULTI: Record<string, string> = {
+    'game.yyp': `{
+      "resources":[
+        {"id":{"name":"obj_hero","path":"objects/obj_hero/obj_hero.yy",},},
+        {"id":{"name":"obj_enemy","path":"objects/obj_enemy/obj_enemy.yy",},},
+        {"id":{"name":"obj_coin","path":"objects/obj_coin/obj_coin.yy",},},
+      ],"resourceType":"GMProject","resourceVersion":"2.0",
+    }`,
+    'objects/obj_hero/obj_hero.yy': `{
+      "name":"obj_hero","parentObjectId":null,"spriteId":null,
+      "eventList":[
+        {"$GMEvent":"v1","collisionObjectId":{"name":"obj_enemy","path":"objects/obj_enemy/obj_enemy.yy",},"eventNum":0,"eventType":4,"name":"",},
+        {"$GMEvent":"v1","collisionObjectId":{"name":"obj_coin","path":"objects/obj_coin/obj_coin.yy",},"eventNum":1,"eventType":4,"name":"",},
+      ],"resourceType":"GMObject","resourceVersion":"2.0",
+    }`,
+    'objects/obj_enemy/obj_enemy.yy': `{"name":"obj_enemy","eventList":[],}`,
+    'objects/obj_coin/obj_coin.yy': `{"name":"obj_coin","eventList":[],}`,
+  };
+
+  it('BOTH name-encoded collision events resolve to their OWN distinct target', async () => {
+    const resolver = await buildGmResolver({ yypPath: 'game.yyp', readFile: memReader(MULTI) });
+    expect(resolver).toBeDefined();
+
+    const enemyEvt = deriveGmlMeta('objects/obj_hero/Collision_obj_enemy.gml') as GmlEventMeta;
+    const coinEvt = deriveGmlMeta('objects/obj_hero/Collision_obj_coin.gml') as GmlEventMeta;
+
+    const enemy = (await resolver!.enrich(enemyEvt)) as GmlEventMeta;
+    const coin = (await resolver!.enrich(coinEvt)) as GmlEventMeta;
+
+    // Distinct targets — NOT both collapsed to a single fallback, NOT swapped.
+    expect(enemy.collisionWith).toBe('obj_enemy');
+    expect(enemy.collisionWithRaw).toBe('obj_enemy'); // raw token preserved
+    expect(coin.collisionWith).toBe('obj_coin');
+    expect(coin.collisionWith).not.toBe(enemy.collisionWith);
+  });
+
+  it('a canonical GUID-encoded collision file on a multi-collision object stays path-only', async () => {
+    const resolver = await buildGmResolver({ yypPath: 'game.yyp', readFile: memReader(MULTI) });
+    const guidEvt = deriveGmlMeta(`objects/obj_hero/Collision_${GUID}.gml`) as GmlEventMeta;
+
+    const enriched = (await resolver!.enrich(guidEvt)) as GmlEventMeta;
+    // Unmappable GUID + >1 target -> never guess. collisionWith absent; raw token kept for the citation.
+    expect(enriched.collisionWith).toBeUndefined();
+    expect(enriched.collisionWithRaw).toBe(GUID);
+  });
+
+  it('a SINGLE-collision object still resolves even from a GUID filename', async () => {
+    // The lone target is unambiguous, so a single-collision object keeps resolving (no regression).
+    const single: Record<string, string> = {
+      'game.yyp': `{
+        "resources":[
+          {"id":{"name":"obj_solo","path":"objects/obj_solo/obj_solo.yy",},},
+          {"id":{"name":"obj_door","path":"objects/obj_door/obj_door.yy",},},
+        ],"resourceType":"GMProject","resourceVersion":"2.0",
+      }`,
+      'objects/obj_solo/obj_solo.yy': `{
+        "name":"obj_solo","parentObjectId":null,"spriteId":null,
+        "eventList":[
+          {"$GMEvent":"v1","collisionObjectId":{"name":"obj_door","path":"objects/obj_door/obj_door.yy",},"eventNum":0,"eventType":4,"name":"",},
+        ],"resourceType":"GMObject","resourceVersion":"2.0",
+      }`,
+      'objects/obj_door/obj_door.yy': `{"name":"obj_door","eventList":[],}`,
+    };
+    const resolver = await buildGmResolver({ yypPath: 'game.yyp', readFile: memReader(single) });
+    const guidEvt = deriveGmlMeta(`objects/obj_solo/Collision_${GUID}.gml`) as GmlEventMeta;
+    const enriched = (await resolver!.enrich(guidEvt)) as GmlEventMeta;
+    expect(enriched.collisionWith).toBe('obj_door'); // lone target -> safe
+  });
+});
+
 describe('findYypOnDisk + defaultReader (real fs)', () => {
   it('finds the .yyp at a real project root and reads through defaultReader', async () => {
     const repo = makeTmpRepo({

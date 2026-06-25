@@ -170,6 +170,7 @@ describe('runIndexCommand (CLI wiring)', () => {
         scope: 'idx-repo',
         approval: 'gated',
         index: { chunkSize: 1500, chunkOverlap: 200, root: repo.root },
+        search: {},
       };
       const res = await runIndexCommand(config, { embeddings: new FakeEmbeddings() });
       expect(res.added).toBe(1);
@@ -206,6 +207,7 @@ describe('runIndexCommand (CLI wiring)', () => {
         scope: 'idx-repo',
         approval: 'gated',
         index: { chunkSize: 1500, chunkOverlap: 200, root: repo.root },
+        search: {},
       };
       const res = await runIndexCommand(config, { fetch });
       expect(res.added).toBe(1);
@@ -238,6 +240,7 @@ describe('runIndexCommand (CLI wiring)', () => {
         scope: 'idx-repo-2',
         approval: 'gated',
         index: { chunkSize: 1500, chunkOverlap: 200, root: repo.root },
+        search: {},
       };
       const res = await runIndexCommand(config);
       expect(res.added).toBe(1);

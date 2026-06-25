@@ -124,27 +124,42 @@ export async function buildGmResolver(
 }
 
 /**
- * Resolve a collision event's target object name from a resolved {@link ObjectMeta}.
+ * Resolve a collision event's target object NAME from a resolved {@link ObjectMeta}, SAFELY — never
+ * guessing. The `.gml` filename's collision token is a GUID (GMS2.3+) or an object NAME (legacy); the
+ * path-only `deriveGmlMeta` cannot map a GUID to an `eventNum` (it always reports `eventNumber: 0`),
+ * so the raw token — NOT the event key — is the discriminator. Resolution order:
  *
- * The `.gml` filename's collision token is a GUID (GMS2.3+) or an object NAME (legacy); the path-only
- * `deriveGmlMeta` cannot map a GUID to an `eventNum` (it always reports `eventNumber: 0`), so the
- * raw token — NOT the event key — is the discriminator. Preference order:
- *  1. if the raw filename token (`collisionWithRaw`) names a known collision target, use that name
- *     (legacy filenames, and any 2.3 token that happens to equal a name);
- *  2. if the object has exactly one collision target, use it (single-collision objects — the common
- *     case, and the only safe resolution for a GUID token we cannot otherwise map).
- * A multi-collision object addressed by an unmappable GUID token resolves to `undefined` (stays
- * path-only) rather than guessing. The per-event key map is retained on {@link ObjectMeta} for
- * callers that DO know the real `eventNum`.
+ *  1. NAME MATCH (the primary path, and the ONLY thing that makes MULTI-collision objects resolvable):
+ *     if the raw filename token names exactly one of the object's known collision targets, use it.
+ *     This resolves legacy name-encoded files AND every name-encoded file of a multi-collision object
+ *     (each `Collision_<TargetName>.gml` maps to its own distinct target).
+ *  2. SINGLE-TARGET FALLBACK (GUID files only): if the token is an unmappable GUID and the object has
+ *     EXACTLY ONE collision target, use that lone target — the only safe resolution for a GUID we
+ *     cannot map by name. Single-collision objects therefore keep resolving as before.
+ *
+ * Everything else stays path-only (returns `undefined`): an unmappable token (GUID, or a name that
+ * matched nothing) on a MULTI-collision object is AMBIGUOUS — we will not pick one of several. The
+ * per-event key map is retained on {@link ObjectMeta} for callers that DO know the real `eventNum`.
  */
 function resolveCollisionTarget(meta: GmlEventMeta, om: ObjectMeta): string | undefined {
-  // The raw token is a GUID (2.3+) or a name (legacy). If it matches a known target name, trust it.
-  if (meta.collisionWithRaw !== undefined && om.collisionTargets.has(meta.collisionWithRaw)) {
-    return meta.collisionWithRaw;
+  const raw = meta.collisionWithRaw;
+
+  // 1. Name match: the raw token names a known collision target -> trust it. Works for a legacy
+  //    filename and for any name-encoded file of a multi-collision object (disambiguates among many).
+  if (raw !== undefined && om.collisionTargets.has(raw)) {
+    return raw;
   }
+
+  // 2. Single-target fallback, restricted to UNMAPPABLE tokens (a GUID, or any token that did not name
+  //    a target): resolve ONLY when there is exactly one target, so we never pick among several. A name
+  //    token that failed the match is treated the same as a GUID here — a lone target is still the only
+  //    safe answer, and with >1 target we (correctly) decline.
   if (om.collisionTargets.size === 1) {
     return [...om.collisionTargets][0];
   }
+
+  // Ambiguous: a multi-collision object addressed by an unmappable token (a GUID, or a name that did
+  // not match any target). We cannot pick one of several targets without guessing — stay path-only.
   return undefined;
 }
 

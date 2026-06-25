@@ -26,6 +26,7 @@ function cfg(root: string): Config {
     scope: 'smoke-game',
     approval: 'gated',
     index: { chunkSize: 1500, chunkOverlap: 200, root },
+    search: {},
   };
 }
 

@@ -188,6 +188,7 @@ export async function runAgent(
     approval: deps.config.approval,
     ignore,
     signal,
+    searchMinScore: deps.config.search.minScore,
     emit: deps.emit,
     requestApproval: (req) => deps.approvals.request(req),
     log: () => {},

@@ -60,6 +60,7 @@ function fakeConfig(approval: 'gated' | 'auto'): Config {
     scope: 'game',
     approval,
     index: { chunkSize: 1500, chunkOverlap: 200, root: '/r' },
+    search: {},
   };
 }
 

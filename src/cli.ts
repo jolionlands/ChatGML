@@ -91,6 +91,7 @@ interface GlobalFlags {
   embedModel?: string;
   scope?: string;
   approval?: string;
+  minScore?: string;
   color?: boolean;
   trustProjectConfig?: boolean;
 }
@@ -339,6 +340,10 @@ export function buildProgram(deps: CliDeps): {
     .option('--scope <scope>', 'memory scope (repo or repo::sub)')
     .addOption(
       new Option('--approval <mode>', 'edit approval policy').choices(['gated', 'auto']),
+    )
+    .option(
+      '--min-score <n>',
+      'absolute cosine floor for search_code (0..1); off unless set (search.minScore)',
     )
     .option('--no-color', 'disable ANSI colors')
     .option('--trust-project-config', 'trust a project-local .chatgml.json (allows auto + secrets)')

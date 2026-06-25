@@ -165,6 +165,14 @@ const PartialIndexSchema = z
   .partial()
   .strict();
 
+const PartialSearchSchema = z
+  .object({
+    // Absolute cosine floor for search_code. ~[0,1] (raw cosine of L2-normalized embeddings).
+    minScore: z.number().min(0).max(1),
+  })
+  .partial()
+  .strict();
+
 const PartialConfigSchema = z
   .object({
     chat: PartialChatSchema,
@@ -173,6 +181,7 @@ const PartialConfigSchema = z
     scope: z.string(),
     approval: z.enum(['gated', 'auto']),
     index: PartialIndexSchema,
+    search: PartialSearchSchema,
   })
   .partial()
   .strict();
@@ -244,6 +253,8 @@ function layerFromFlags(flags: Record<string, unknown>): PartialConfig {
   if (flags['approval'] === 'gated' || flags['approval'] === 'auto') {
     out.approval = flags['approval'];
   }
+  const minScore = num(flags['minScore']);
+  if (minScore !== undefined) out.search = { minScore };
   return out;
 }
 
@@ -265,6 +276,8 @@ function layerFromEnv(env: NodeJS.ProcessEnv): PartialConfig {
   if (str(env['CHATGML_SCOPE'])) out.scope = str(env['CHATGML_SCOPE']);
   const approval = env['CHATGML_APPROVAL'];
   if (approval === 'gated' || approval === 'auto') out.approval = approval;
+  const minScore = num(env['CHATGML_SEARCH_MIN_SCORE']);
+  if (minScore !== undefined) out.search = { minScore };
   return out;
 }
 
@@ -313,6 +326,7 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
   const approval =
     flagLayer.approval ?? envLayer.approval ?? fileLayer.approval ?? DEFAULTS.approval;
   const index = mergeIndex(fileLayer.index, root);
+  const search = mergeSearch(fileLayer.search, envLayer.search, flagLayer.search);
 
   // --- Required-field validation (paths only in error messages, never values).
   if (chat.baseURL === undefined) {
@@ -388,6 +402,7 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
     scope,
     approval,
     index,
+    search,
   };
   return config;
 }
@@ -475,6 +490,19 @@ function mergeIndex(
   };
 }
 
+/**
+ * Merge the search-tuning lane (flags > env > file). `minScore` has NO default: when unset across all
+ * layers it stays `undefined`, which means "no relevance floor" — existing search behavior is unchanged.
+ */
+function mergeSearch(
+  file: PartialConfig['search'],
+  env: PartialConfig['search'],
+  flags: PartialConfig['search'],
+): { minScore?: number } {
+  const minScore = pick(flags?.minScore, env?.minScore, file?.minScore);
+  return minScore !== undefined ? { minScore } : {};
+}
+
 // ---------------------------------------------------------------------------
 // Untrusted-config endpoint guard.
 // ---------------------------------------------------------------------------
@@ -554,6 +582,9 @@ export function redact(config: Config): unknown {
     scope: config.scope,
     approval: config.approval,
     index: config.index,
+    // Only surface the search lane when a floor is actually configured (keeps default `config show`
+    // output unchanged: no `search` key appears unless minScore is set).
+    ...(config.search.minScore !== undefined ? { search: config.search } : {}),
   };
   return out;
 }
@@ -593,6 +624,7 @@ const SETTABLE_FIELDS: Record<string, { path: string[]; type: 'string' | 'number
   'index.chunkSize': { path: ['index', 'chunkSize'], type: 'number' },
   'index.chunkOverlap': { path: ['index', 'chunkOverlap'], type: 'number' },
   'index.root': { path: ['index', 'root'], type: 'string' },
+  'search.minScore': { path: ['search', 'minScore'], type: 'number' },
 };
 
 /** The dotted field names `config set` accepts (sorted), for help text and validation hints. */

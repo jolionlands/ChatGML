@@ -91,9 +91,16 @@ a best-effort, fs-aware resolution pass over the project's `.yy`/`.yyp` files an
 
 - **Collision targets.** A collision event lives on disk as `objects/<Obj>/Collision_<token>.gml`,
   where `<token>` is a GUID (GameMaker 2.3+) or an object name (legacy) — _not_ a readable target. The
-  authoritative target is the `collisionObjectId` in the object's `.yy` `eventList`. ChatGML resolves
-  it and adds the **resolved target object name** to the citation (`gml.collisionWith`), while keeping
-  the raw filename token in `gml.collisionWithRaw`.
+  authoritative targets are the `collisionObjectId` refs in the object's `.yy` `eventList`. ChatGML
+  resolves the target and adds the **resolved target object name** to the citation
+  (`gml.collisionWith`), while keeping the raw filename token in `gml.collisionWithRaw`.
+  - **Multi-collision objects** (an object with several collision events) resolve **safely, without
+    guessing.** A **name-encoded** file (`Collision_obj_wall.gml`) is matched against the object's
+    collision-target names, so each event resolves to its **own distinct** target. A **single-collision**
+    object resolves its lone target regardless of the filename token (the only possibility). A
+    **GUID-encoded** file on a **multi-collision** object is _ambiguous_ — there is no name to match and
+    ChatGML will not pick one of several — so it **stays path-only** (`collisionWithRaw` kept,
+    `collisionWith` absent) rather than risk a wrong citation.
 - **Parent inheritance.** If an object's `.yy` sets `parentObjectId`, every event citation for that
   object carries the resolved **parent object name** (`gml.parentObject`), so the agent sees the
   inheritance chain.
@@ -178,6 +185,7 @@ embed.baseURL       embed.apiKey     embed.model    embed.batchSize
 memory.provider     memory.hippo.url memory.hippo.key
 scope               approval
 index.chunkSize     index.chunkOverlap  index.root
+search.minScore
 ```
 
 Secret fields (`chat.apiKey`, `embed.apiKey`, `memory.hippo.key`) accept only an **`env:NAME`**
@@ -216,6 +224,7 @@ Highest precedence first, deep-merged per key:
 | `index.chunkSize` | `1500` |
 | `index.chunkOverlap` | `200` |
 | `index.root` | `dir` |
+| `search.minScore` | _(unset — no relevance floor)_ |
 
 ### Required fields
 
@@ -239,6 +248,7 @@ ChatGML raises a config error (exit 3) if any of these is missing after merging:
 | `CHATGML_EMBED_MODEL` | `embed.model` |
 | `CHATGML_SCOPE` | `scope` |
 | `CHATGML_APPROVAL` | `approval` (`gated` \| `auto`) |
+| `CHATGML_SEARCH_MIN_SCORE` | `search.minScore` (absolute cosine floor, `0`..`1`) |
 | `XDG_CONFIG_HOME` | base for the user-global config dir |
 | `NO_COLOR` / `FORCE_COLOR` | REPL color |
 
@@ -247,6 +257,36 @@ ChatGML raises a config error (exit 3) if any of these is missing after merging:
 `chat` and `embed` are independent. The embed lane inherits the chat lane's `baseURL` and `apiKey`
 when its own are unset, but **never** the model. This lets you, for example, chat against a large
 hosted model while embedding with a small local one.
+
+### Search relevance floor (`search.minScore`)
+
+`search.minScore` is an **opt-in absolute floor** on the **semantic (cosine) similarity** of
+`search_code` hits. It is the **raw cosine** of the L2-normalized query and chunk embeddings (range
+≈ `[0, 1]`; `1.0` is an exact semantic match), checked **before** fusion — _not_ the min-max-normalized
+fused score, whose top hit is always `~1.0` and therefore carries no cross-query meaning and makes a
+poor threshold. When a floor is set, any hit whose cosine is **below** it is dropped; if that empties
+the set, `search_code` returns **no results** (an honest "nothing is relevant enough") rather than a
+misleading top-_k_. Surviving hits keep their fused ranking for order.
+
+- **Default: off.** Unset across all layers ⇒ no floor ⇒ behavior is exactly as before.
+- **It is an _absolute_ threshold — tune it against your _real_ embedder.** Different embedding models
+  put "relevant" at different cosine values; a value learned on one embedder does not transfer. Start
+  **conservative** (a low floor, or off) and raise it only after observing real scores. A typical
+  useful range against a modern sentence/code embedder is roughly **`0.2`–`0.4`**; this is a starting
+  point, not a guarantee. Setting it too high silently hides good results.
+- **Where to set it** (flags > env > config; per-call wins over config):
+  - Config file / `config set`: `search.minScore` (validated to `0`..`1`).
+  - Env: `CHATGML_SEARCH_MIN_SCORE`.
+  - CLI: `--min-score <n>` (a global flag — must precede the subcommand).
+  - Per call: the `search_code` tool's `minScore` argument **overrides** the configured floor for that
+    one search.
+- **Local provider only.** The floor is a raw-cosine operation; the `hippo` backend has no cosine
+  surface and ignores `minScore`.
+
+```bash
+# Conservative absolute floor for one project (tune against your embedder):
+chatgml config set search.minScore 0.25
+```
 
 ### Secrets
 

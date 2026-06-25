@@ -263,7 +263,13 @@ export const GML_EVENT_TABLE: ReadonlyMap<string, EventTableEntry> = new Map(
 // deriveGmlMeta — pure, path-only classifier.
 // ---------------------------------------------------------------------------
 
-const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+/**
+ * A canonical GameMaker GUID (the token GMS 2.3+ encodes into a `Collision_<guid>.gml` filename).
+ * Exported so the fs-aware resolver can DISCRIMINATE a GUID token (unmappable by name) from a legacy
+ * object-name token and never guess a multi-collision target from an unmappable GUID.
+ */
+export const GUID_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /** Normalize separators to forward slashes and drop a leading `./`. */
 function toPosixPath(p: string): string {
@@ -366,5 +372,3 @@ export function deriveGmlMeta(relPath: string): GmlMeta | undefined {
 
   return undefined;
 }
-
-void GUID_RE; // reserved: GUID-vs-name discrimination is a deferred fs-aware pass

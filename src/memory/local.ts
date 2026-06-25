@@ -240,21 +240,38 @@ export class LocalMemoryProvider implements MemoryProvider {
     await this.persist(scope, st);
   }
 
-  async search(query: string, opts: { k: number; scope: Scope }): Promise<Hit[]> {
+  async search(
+    query: string,
+    opts: { k: number; scope: Scope; minScore?: number },
+  ): Promise<Hit[]> {
     const st = this.state(opts.scope);
     if (st.chunks.size === 0) return [];
     const [qVec] = await this.embeddings.embed([query]);
 
+    // RAW cosine per chunk (NOT the minmax-normalized fused score). This is the cross-query-comparable
+    // similarity an absolute floor (`minScore`) is checked against; the fused score is only for order.
+    const cosineById = new Map<string, number>();
     const vectorScores: Scored[] = [];
     if (qVec) {
       for (const { meta, vector } of st.chunks.values()) {
-        vectorScores.push({ id: meta.id, score: cosineSim(qVec, vector) });
+        const cos = cosineSim(qVec, vector);
+        cosineById.set(meta.id, cos);
+        vectorScores.push({ id: meta.id, score: cos });
       }
     }
     const keywordScores: Scored[] = st.bm25.search(query);
 
     const fused = fuse(vectorScores, keywordScores, { method: 'minmax', k: opts.k });
-    return fused.flatMap((f) => {
+
+    // OPT-IN absolute relevance floor: drop any hit whose RAW cosine is below `minScore`. A hit with no
+    // computed cosine (no query vector / not in the vector set) cannot clear a SEMANTIC floor, so it is
+    // dropped too. If this empties the set, return [] — never substitute a wrong top-k. Off by default.
+    const floored =
+      opts.minScore === undefined
+        ? fused
+        : fused.filter((f) => (cosineById.get(f.id) ?? -Infinity) >= opts.minScore!);
+
+    return floored.flatMap((f) => {
       const c = st.chunks.get(f.id);
       if (!c) return [];
       return [this.toHit(c.meta, f.score, 'fused')];

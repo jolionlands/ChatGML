@@ -30,6 +30,7 @@ export interface FakeCtxOptions {
   ignore?: IgnoreFilter;
   approval?: 'gated' | 'auto';
   signal?: AbortSignal;
+  searchMinScore?: number;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
 }
 
@@ -49,6 +50,7 @@ export function makeToolContext(opts: FakeCtxOptions): FakeCtx {
     approval: opts.approval ?? 'gated',
     ignore: opts.ignore ?? ALLOW_ALL,
     signal: opts.signal ?? new AbortController().signal,
+    searchMinScore: opts.searchMinScore,
     emit(e) {
       events.push(e);
     },

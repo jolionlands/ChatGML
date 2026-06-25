@@ -17,6 +17,7 @@ function cfg(root: string, approval: 'gated' | 'auto' = 'gated'): Config {
     scope: 'game',
     approval,
     index: { chunkSize: 1500, chunkOverlap: 200, root },
+    search: {},
   };
 }
 

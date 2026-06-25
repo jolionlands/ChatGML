@@ -70,6 +70,62 @@ describe('search_code tool', () => {
     expect(k).toBe(8);
   });
 
+  it('forwards a per-call minScore arg to the provider (D1)', async () => {
+    let seenMin: number | undefined = -1;
+    const memory = fakeProvider({
+      async search(_q, opts) {
+        seenMin = opts.minScore;
+        return [];
+      },
+    });
+    const { ctx } = makeToolContext({ root: '/r', memory });
+    await searchTool.execute({ query: 'x', minScore: 0.3 }, ctx);
+    expect(seenMin).toBe(0.3);
+  });
+
+  it('falls back to the config-level searchMinScore when no arg is given (D1)', async () => {
+    let seenMin: number | undefined = -1;
+    const memory = fakeProvider({
+      async search(_q, opts) {
+        seenMin = opts.minScore;
+        return [];
+      },
+    });
+    // ctx.searchMinScore comes from config.search.minScore at the agent wiring seam.
+    const { ctx } = makeToolContext({ root: '/r', memory, searchMinScore: 0.25 });
+    await searchTool.execute({ query: 'x' }, ctx);
+    expect(seenMin).toBe(0.25);
+  });
+
+  it('a per-call minScore arg overrides the config floor (D1)', async () => {
+    let seenMin: number | undefined = -1;
+    const memory = fakeProvider({
+      async search(_q, opts) {
+        seenMin = opts.minScore;
+        return [];
+      },
+    });
+    const { ctx } = makeToolContext({ root: '/r', memory, searchMinScore: 0.25 });
+    await searchTool.execute({ query: 'x', minScore: 0.7 }, ctx);
+    expect(seenMin).toBe(0.7);
+  });
+
+  it('passes minScore: undefined (no floor) when neither arg nor config sets it (D1)', async () => {
+    let called = false;
+    let seenMin: number | undefined = 0.5;
+    const memory = fakeProvider({
+      async search(_q, opts) {
+        called = true;
+        seenMin = opts.minScore;
+        return [];
+      },
+    });
+    const { ctx } = makeToolContext({ root: '/r', memory });
+    await searchTool.execute({ query: 'x' }, ctx);
+    expect(called).toBe(true);
+    expect(seenMin).toBeUndefined();
+  });
+
   it('surfaces a throwing provider as provider_error (no leak)', async () => {
     const memory = fakeProvider({
       async search() {

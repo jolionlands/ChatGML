@@ -15,7 +15,13 @@ export interface MemoryProvider {
     'upsert' | 'search' | 'graph' | 'temporal' | 'remember' | 'recall'
   >;
   upsert(chunks: Chunk[], scope: Scope): Promise<void>;
-  search(query: string, opts: { k: number; scope: Scope }): Promise<Hit[]>;
+  /**
+   * Semantic + keyword search. `minScore` (optional) is an ABSOLUTE cosine floor on the SEMANTIC
+   * similarity: a hit whose raw cosine (of the L2-normalized embeddings) is below it is dropped, even
+   * if it would otherwise rank top-k. Undefined = no floor (default). Fused ranking still orders the
+   * survivors. A cosine-less backend (e.g. hippo) ignores it.
+   */
+  search(query: string, opts: { k: number; scope: Scope; minScore?: number }): Promise<Hit[]>;
   graphNeighbors(ref: SymbolRef, scope: Scope): Promise<Hit[]>;
   temporalQuery(q: TemporalQuery, scope: Scope): Promise<Hit[]>;
   remember(note: SessionNote, scope: Scope): Promise<void>;

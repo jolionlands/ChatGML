@@ -158,6 +158,69 @@ describe('runIndex — fs-aware GameMaker enrichment (end-to-end)', () => {
   });
 });
 
+// D2: a multi-collision object (TWO collision events). Name-encoded `.gml` files resolve to their own
+// distinct targets end-to-end through the sidecar; a GUID-encoded file on the same object stays
+// path-only (never guessed). Single-collision objects are already covered above.
+describe('runIndex — multi-collision GameMaker enrichment (D2, end-to-end)', () => {
+  const GUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  function multiCollisionFiles(): Record<string, string> {
+    return {
+      'game.yyp': `{
+        "resources":[
+          {"id":{"name":"obj_hero","path":"objects/obj_hero/obj_hero.yy",},},
+          {"id":{"name":"obj_enemy","path":"objects/obj_enemy/obj_enemy.yy",},},
+          {"id":{"name":"obj_coin","path":"objects/obj_coin/obj_coin.yy",},},
+        ],"resourceType":"GMProject","resourceVersion":"2.0",
+      }`,
+      'objects/obj_hero/obj_hero.yy': `{
+        "name":"obj_hero","parentObjectId":null,"spriteId":null,
+        "eventList":[
+          {"$GMEvent":"v1","collisionObjectId":{"name":"obj_enemy","path":"objects/obj_enemy/obj_enemy.yy",},"eventNum":0,"eventType":4,"name":"",},
+          {"$GMEvent":"v1","collisionObjectId":{"name":"obj_coin","path":"objects/obj_coin/obj_coin.yy",},"eventNum":1,"eventType":4,"name":"",},
+        ],"resourceType":"GMObject","resourceVersion":"2.0",
+      }`,
+      'objects/obj_enemy/obj_enemy.yy': `{"name":"obj_enemy","eventList":[],}`,
+      'objects/obj_coin/obj_coin.yy': `{"name":"obj_coin","eventList":[],}`,
+      // The GML the agent searches. Two NAME-encoded collisions + one canonical-GUID collision.
+      'objects/obj_hero/Collision_obj_enemy.gml': 'hp -= 1;',
+      'objects/obj_hero/Collision_obj_coin.gml': 'score += 10;',
+      [`objects/obj_hero/Collision_${GUID}.gml`]: 'instance_destroy();',
+    };
+  }
+
+  it('records distinct collisionWith for each name-encoded event; GUID file stays path-only', async () => {
+    const repo = makeTmpRepo(multiCollisionFiles());
+    try {
+      const res = await runIndex(repo.root, SCOPE, deps(repo.root));
+      expect(res.gmEnriched).toBeGreaterThanOrEqual(2); // both name-encoded events resolved
+      const sidecar = loadEnrichmentSidecar(repo.root);
+      expect(sidecar).toBeDefined();
+
+      // Each name-encoded collision resolved to its OWN distinct target.
+      expect(sidecar!.byPath['objects/obj_hero/Collision_obj_enemy.gml']).toEqual({
+        collisionWith: 'obj_enemy',
+      });
+      expect(sidecar!.byPath['objects/obj_hero/Collision_obj_coin.gml']).toEqual({
+        collisionWith: 'obj_coin',
+      });
+      // The GUID-encoded file on this MULTI-collision object has NO enrichment entry (path-only).
+      expect(sidecar!.byPath[`objects/obj_hero/Collision_${GUID}.gml`]).toBeUndefined();
+
+      // Through the enriched deriver (the citation surface): the GUID file keeps its raw token only.
+      const derive = createEnrichedGmlDeriver(repo.root);
+      const enemy = derive('objects/obj_hero/Collision_obj_enemy.gml') as GmlEventMeta;
+      const coin = derive('objects/obj_hero/Collision_obj_coin.gml') as GmlEventMeta;
+      const guid = derive(`objects/obj_hero/Collision_${GUID}.gml`) as GmlEventMeta;
+      expect(enemy.collisionWith).toBe('obj_enemy');
+      expect(coin.collisionWith).toBe('obj_coin');
+      expect(guid.collisionWith).toBeUndefined();
+      expect(guid.collisionWithRaw).toBe(GUID);
+    } finally {
+      repo.cleanup();
+    }
+  });
+});
+
 // F8: read_file and glob must cite GML metadata WITH the enrichment sidecar (collisionWith /
 // parentObject), exactly like search/graph/temporal — not the path-only deriver.
 describe('read_file/glob use the ENRICHED GML deriver — F8', () => {

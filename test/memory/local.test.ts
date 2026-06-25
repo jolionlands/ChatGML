@@ -57,6 +57,84 @@ describe('LocalMemoryProvider', () => {
     }
   });
 
+  it('minScore drops semantically-irrelevant hits; only the relevant doc survives (D1)', async () => {
+    const repo = makeTmpRepo({});
+    try {
+      const p = provider(repo.root);
+      const query = 'the player loses health when damaged by enemies';
+      await p.upsert(
+        [
+          chunk('c1', 'a.gml', query, 'h1'), // identical text -> cosine 1.0 with the query
+          chunk('c2', 'b.gml', 'render the user interface and draw buttons', 'h2'), // unrelated
+          chunk('c3', 'c.gml', 'completely different lexical content here', 'h3'), // unrelated
+        ],
+        SCOPE,
+      );
+
+      // No floor: existing behavior — all candidates fused, the relevant one ranks first.
+      const unfloored = await p.search(query, { k: 5, scope: SCOPE });
+      expect(unfloored.length).toBeGreaterThan(1);
+      expect(unfloored[0]!.chunkId).toBe('c1');
+
+      // With an absolute cosine floor (FakeEmbeddings: exact-text cosine 1.0, unrelated ~[-0.3,0.3]),
+      // only the genuinely-relevant doc clears 0.9; the irrelevant ones are dropped.
+      const floored = await p.search(query, { k: 5, scope: SCOPE, minScore: 0.9 });
+      expect(floored.map((h) => h.chunkId)).toEqual(['c1']);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('minScore returns [] (never a wrong top-k) when nothing clears the floor (D1)', async () => {
+    const repo = makeTmpRepo({});
+    try {
+      const p = provider(repo.root);
+      await p.upsert(
+        [
+          chunk('c1', 'a.gml', 'render the user interface and draw buttons', 'h1'),
+          chunk('c2', 'b.gml', 'completely different lexical content here', 'h2'),
+        ],
+        SCOPE,
+      );
+      // A query unrelated to every doc: with a high floor the result set is EMPTY, not a misleading top-k.
+      const hits = await p.search('the player loses health when damaged by enemies', {
+        k: 5,
+        scope: SCOPE,
+        minScore: 0.9,
+      });
+      expect(hits).toEqual([]);
+
+      // Sanity: with no floor the same query still returns the (irrelevant-but-best) candidates.
+      const unfloored = await p.search('the player loses health when damaged by enemies', {
+        k: 5,
+        scope: SCOPE,
+      });
+      expect(unfloored.length).toBeGreaterThan(0);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('minScore drops a keyword-overlapping hit whose cosine is below the floor (D1)', async () => {
+    const repo = makeTmpRepo({});
+    try {
+      const p = provider(repo.root);
+      // c2 shares the literal token "quokka" with the query (BM25 would surface it) but is a different
+      // text, so its raw cosine is low. The SEMANTIC floor drops it even though BM25 liked it.
+      await p.upsert(
+        [
+          chunk('c1', 'a.gml', 'quokka', 'h1'), // identical to the query -> cosine 1.0
+          chunk('c2', 'b.gml', 'quokka unicorn zebra wildebeest', 'h2'), // keyword overlap, low cosine
+        ],
+        SCOPE,
+      );
+      const floored = await p.search('quokka', { k: 5, scope: SCOPE, minScore: 0.9 });
+      expect(floored.map((h) => h.chunkId)).toEqual(['c1']);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
   it('re-upsert with the same hash does not re-embed and keeps count stable', async () => {
     const repo = makeTmpRepo({});
     try {

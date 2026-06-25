@@ -12,6 +12,14 @@ import { gmlDeriverForRoot } from '../index/files.js';
 const SearchArgs = z.object({
   query: z.string().min(1).describe('natural-language or keyword query'),
   k: z.number().int().positive().max(50).optional().describe('max results (default 8)'),
+  minScore: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe(
+      'absolute cosine-similarity floor (0..1); semantic hits below it are dropped (may return none). Off unless set; overrides search.minScore config.',
+    ),
 });
 type SearchArgs = z.infer<typeof SearchArgs>;
 
@@ -23,9 +31,16 @@ export const searchTool: ToolDef<SearchArgs> = defineTool<SearchArgs>({
   schema: SearchArgs,
   async execute(args: SearchArgs, ctx: ToolContext): Promise<ToolResult> {
     const k = args.k ?? 8;
+    // The per-call arg overrides the config-level floor; undefined in both means NO floor.
+    const minScore = args.minScore ?? ctx.searchMinScore;
+    const searchOpts: { k: number; scope: ToolContext['scope']; minScore?: number } = {
+      k,
+      scope: ctx.scope,
+    };
+    if (minScore !== undefined) searchOpts.minScore = minScore;
     let hits;
     try {
-      hits = await ctx.memory.search(args.query, { k, scope: ctx.scope });
+      hits = await ctx.memory.search(args.query, searchOpts);
     } catch (err) {
       throw new ToolError('provider_error', `search failed: ${(err as Error).message}`);
     }

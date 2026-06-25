@@ -123,6 +123,11 @@ export interface ToolContext {
   readonly approval: 'gated' | 'auto';
   readonly ignore: IgnoreFilter;
   readonly signal: AbortSignal;
+  /**
+   * Optional config-level absolute cosine floor for `search_code` (`search.minScore`). A per-call
+   * `minScore` tool arg overrides it; undefined here AND in the arg means no floor.
+   */
+  readonly searchMinScore?: number;
   emit(event: AgentEvent): void;
   requestApproval(req: ApprovalRequest): Promise<boolean>;
   log(level: 'debug' | 'info' | 'warn', msg: string, meta?: Record<string, unknown>): void;
@@ -163,6 +168,13 @@ export type MemoryConfig =
   | { provider: 'local' }
   | { provider: 'hippo'; url: string; key?: string };
 
+// Retrieval-tuning lane. `minScore` is an OPT-IN absolute cosine floor for `search_code` (raw cosine
+// of the L2-normalized query/chunk embeddings, ~[0,1]); when set, semantic hits below it are dropped.
+// Undefined (the default) means NO floor — existing behavior is unchanged. Tune against a REAL embedder.
+export interface SearchConfig {
+  minScore?: number;
+}
+
 export interface Config {
   chat: ChatLane;
   embed: EmbedLane;
@@ -170,4 +182,5 @@ export interface Config {
   scope: string; // converted to Scope via makeScope at the wiring seam
   approval: 'gated' | 'auto';
   index: { chunkSize: number; chunkOverlap: number; root: string };
+  search: SearchConfig;
 }

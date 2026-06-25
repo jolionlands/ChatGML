@@ -248,8 +248,12 @@ export class HippoMemoryProvider implements MemoryProvider {
    * effect (POST /api/recall's ppr is a no-op, so POST is never used). Maps results to Hit[];
    * `Citation.path` is later set only for code nodes with path-shaped topics (see fromRecallResults).
    */
-  async search(query: string, opts: { k: number; scope: Scope }): Promise<Hit[]> {
+  async search(
+    query: string,
+    opts: { k: number; scope: Scope; minScore?: number },
+  ): Promise<Hit[]> {
     void opts.scope; // hippo isolation is per-url (one serve per repo); scope is informational here
+    void opts.minScore; // hippo has no raw-cosine surface; the absolute cosine floor is local-only
     const flags = queryFlags(query);
     const url = toRecallQuery(this.url, query, opts.k, flags);
     let res: Response;
