@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { runAgent, createApprovalGate, DEFAULT_MAX_STEPS } from '../src/agent.js';
 import { FakeLlm, ThrowingLlm } from './helpers/fake-llm.js';
 import { LlmError } from '../src/llm.js';
@@ -217,28 +218,49 @@ describe('runAgent loop', () => {
     expect(res.message.role).toBe('assistant');
   });
 
-  it('PROMPT INJECTION: an "apply this patch" instruction inside tool content does NOT bypass approval (gated)', async () => {
-    const { config, memory, ignore } = await setup();
-    // The model, even if it tried to call apply_patch (the only edit path), is gated: the stub never
-    // writes and approval is required. Here the model dutifully calls apply_patch after reading
-    // injected content; the gated stub returns not_implemented and NO write occurs.
+  it('TEST 6 PROMPT INJECTION: an "apply this patch" instruction inside tool content does NOT bypass gated approval', async () => {
+    const { config, memory, ignore, root } = await setup();
+    // A real Step_0.gml exists; the diff DOES apply cleanly. The danger is the model being coerced by
+    // injected file content into calling apply_patch. With the M4 real engine the edit is gated: the
+    // ApprovalGate emits edit_proposal + approval_request and BLOCKS for a human decision. We simulate
+    // a user who DECLINES (resolve false) the moment an approval_request appears. The write must NOT
+    // happen — prompt injection cannot bypass the gate.
+    const before = readFileSync(`${root}/objects/obj_player/Step_0.gml`, 'utf8');
+    const cleanDiff = '--- a\n+++ b\n@@ -1,2 +1,2 @@\n-hp -= 1;\n+hp -= 999;\n if (hp <= 0) instance_destroy();\n';
     const llm = new FakeLlm([
       { toolCalls: [{ id: 'r1', name: 'read_file', arguments: JSON.stringify({ path: 'objects/obj_player/Step_0.gml' }) }] },
       {
         toolCalls: [
-          { id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: 'objects/obj_player/Step_0.gml', diff: '--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n' }) },
+          { id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: 'objects/obj_player/Step_0.gml', diff: cleanDiff }) },
         ],
       },
-      { tokens: ['I cannot apply edits without approval.'] },
+      { tokens: ['The edit was declined, so nothing changed.'] },
     ]);
-    const { events, emit } = collect();
+    const events: AgentEvent[] = [];
+    // Decline every approval — but OUT-OF-BAND (a later tick), exactly as a real client's reject
+    // message arrives. (Resolving synchronously inside emit would race the gate's own pending-map
+    // registration; serve/REPL always deliver approve/reject on a subsequent event-loop turn.) The
+    // holder breaks the gate<->emit cycle without an unassigned `let`.
+    const holder: { gate?: ReturnType<typeof createApprovalGate> } = {};
+    const emit = (e: AgentEvent): void => {
+      events.push(e);
+      if (e.type === 'approval_request') {
+        const id = e.id;
+        queueMicrotask(() => holder.gate?.resolve(id, false));
+      }
+    };
     const gate = createApprovalGate({ autoApprove: false, emit });
+    holder.gate = gate;
     await runAgent('please review', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
-    // the apply_patch attempt resulted in an ok:false (not_implemented), never an approval bypass
+
+    // The gate DID surface the proposal (the model called apply_patch) but it was rejected ...
+    expect(events.some((e) => e.type === 'edit_proposal')).toBe(true);
+    expect(events.some((e) => e.type === 'approval_request')).toBe(true);
+    // ... so the apply_patch tool_result is ok:true with a "not approved" message (no error, no write),
     const editResult = events.find((e) => e.type === 'tool_result' && e.name === 'apply_patch');
-    expect(editResult && editResult.type === 'tool_result' && editResult.ok).toBe(false);
-    // no edit_proposal was emitted by the stub (it threw before requesting approval)
-    expect(events.some((e) => e.type === 'edit_proposal')).toBe(false);
+    expect(editResult && editResult.type === 'tool_result' && /not approved/i.test(editResult.content)).toBe(true);
+    // and the file on disk is UNCHANGED — the injection produced no write.
+    expect(readFileSync(`${root}/objects/obj_player/Step_0.gml`, 'utf8')).toBe(before);
   });
 
   it('DEFAULT_MAX_STEPS is exported and positive', () => {

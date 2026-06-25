@@ -16,6 +16,8 @@
 // case-sensitive filesystems are respected.
 import path from 'node:path';
 import fsp from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 export type SandboxReason =
   | 'escape'
@@ -136,5 +138,89 @@ export async function resolveInsideRoot(root: string, candidate: string): Promis
       }
       probe = parent;
     }
+  }
+}
+
+// On POSIX, opening with O_NOFOLLOW makes open() fail (ELOOP) if the final path component is a
+// symlink — this is the canonical TOCTOU-safe "do not follow the leaf" guarantee. The flag does not
+// exist on Windows (undefined), where symlink creation requires privilege; there the leaf-symlink
+// guard is the explicit lstat check below (and the POSIX no-follow leg is exercised on ubuntu CI).
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+
+/**
+ * Atomically write `data` to `candidate` (a path inside `root`), TOCTOU-safe:
+ *
+ *  1. `resolveInsideRoot` lexically validates the path AND realpaths the deepest EXISTING ancestor,
+ *     re-checking containment — so a symlinked ANCESTOR dir that escapes root is rejected before any
+ *     write occurs (e.g. `<root>/link -> /etc`, target `<root>/link/passwd`).
+ *  2. The parent directory's realpath is re-validated to be inside root (closes the window between
+ *     ancestor check and write; the parent must already exist — new files are only created inside an
+ *     existing, validated directory, never by creating arbitrary parent dirs).
+ *  3. If the LEAF already exists and is a symlink, the write is rejected (`symlink-escape`) — we never
+ *     overwrite a symlink (which could redirect the write outside root). On POSIX the temp-file open
+ *     additionally uses `O_NOFOLLOW` so even a race that swaps in a symlink fails with ELOOP.
+ *  4. Data is written to a randomly-named temp file INSIDE the validated parent dir, then `rename`d
+ *     onto the leaf within that same dir (atomic, no cross-dir move, no partial file ever visible).
+ *
+ * Returns the absolute path written. Throws `SandboxError` on any containment/symlink violation and
+ * cleans up the temp file on failure.
+ */
+export async function safeWriteFileInRoot(
+  root: string,
+  candidate: string,
+  data: string,
+): Promise<string> {
+  // (1) lexical + deepest-existing-ancestor realpath containment.
+  const abs = await resolveInsideRoot(root, candidate);
+  const dir = path.dirname(abs);
+
+  // (2) The parent dir must exist and its realpath must be inside root. resolveInsideRoot on the dir
+  // realpaths it directly (it exists), so a symlinked parent leaving root is caught here too.
+  const dirReal = await resolveInsideRoot(root, dir);
+
+  // (3) Reject overwriting an existing symlink leaf (no-follow at the leaf, eager check).
+  try {
+    const leafStat = await fsp.lstat(abs);
+    if (leafStat.isSymbolicLink()) {
+      throw new SandboxError(candidate, 'symlink-escape');
+    }
+  } catch (err) {
+    if (err instanceof SandboxError) throw err;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') throw err; // leaf may not exist yet (new file) — that's fine
+  }
+
+  // (4) Write to a temp file in the validated dir, then atomic rename within that dir.
+  const tmp = path.join(dirReal, `.chatgml-tmp-${randomBytes(8).toString('hex')}`);
+  let handle: Awaited<ReturnType<typeof fsp.open>> | undefined;
+  try {
+    // O_NOFOLLOW (POSIX) ensures the temp open never follows a symlink at that name; O_EXCL ensures
+    // we created it fresh; O_WRONLY|O_CREAT|O_TRUNC are standard write-create semantics.
+    const flags =
+      fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      fsConstants.O_TRUNC |
+      O_NOFOLLOW;
+    handle = await fsp.open(tmp, flags, 0o644);
+    await handle.writeFile(data, 'utf8');
+    await handle.close();
+    handle = undefined;
+    await fsp.rename(tmp, abs);
+    return abs;
+  } catch (err) {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch {
+        // ignore close errors during cleanup
+      }
+    }
+    try {
+      await fsp.rm(tmp, { force: true });
+    } catch {
+      // best-effort temp cleanup
+    }
+    throw err;
   }
 }

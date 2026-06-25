@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +6,7 @@ import {
   assertInsideRoot,
   resolveInsideRoot,
   isInsideRoot,
+  safeWriteFileInRoot,
   toPosix,
   SandboxError,
 } from '../../src/tools/sandbox.js';
@@ -160,6 +161,79 @@ describe('resolveInsideRoot — symlink escape', () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
       await fsp.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('safeWriteFileInRoot', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('atomically writes a new file inside an existing validated dir (no leftover temp)', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sw-'));
+    try {
+      await fsp.mkdir(path.join(root, 'sub'), { recursive: true });
+      const abs = await safeWriteFileInRoot(root, 'sub/out.gml', 'hello\n');
+      expect(toPosix(abs).endsWith('sub/out.gml')).toBe(true);
+      expect(await fsp.readFile(path.join(root, 'sub', 'out.gml'), 'utf8')).toBe('hello\n');
+      // no .chatgml-tmp-* leftovers
+      const entries = await fsp.readdir(path.join(root, 'sub'));
+      expect(entries.some((e) => e.startsWith('.chatgml-tmp-'))).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('overwrites an existing regular file in place', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sw-'));
+    try {
+      await fsp.writeFile(path.join(root, 'a.gml'), 'old\n');
+      await safeWriteFileInRoot(root, 'a.gml', 'new\n');
+      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe('new\n');
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a ../ escape before any write', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sw-'));
+    try {
+      await expect(safeWriteFileInRoot(root, '../escape.gml', 'x')).rejects.toBeInstanceOf(
+        SandboxError,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects when the leaf is an existing symlink (no privilege needed: lstat is stubbed)', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sw-'));
+    try {
+      await fsp.writeFile(path.join(root, 'a.gml'), 'x\n');
+      vi.spyOn(fsp, 'lstat').mockResolvedValue({
+        isSymbolicLink: () => true,
+      } as unknown as Awaited<ReturnType<typeof fsp.lstat>>);
+      await expect(safeWriteFileInRoot(root, 'a.gml', 'y\n')).rejects.toMatchObject({
+        name: 'SandboxError',
+        reason: 'symlink-escape',
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans up the temp file and rethrows when rename fails', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'sw-'));
+    try {
+      const boom = new Error('disk full');
+      vi.spyOn(fsp, 'rename').mockRejectedValueOnce(boom);
+      await expect(safeWriteFileInRoot(root, 'a.gml', 'data\n')).rejects.toBe(boom);
+      // the temp file must have been removed during cleanup
+      const entries = await fsp.readdir(root);
+      expect(entries.some((e) => e.startsWith('.chatgml-tmp-'))).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

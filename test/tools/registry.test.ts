@@ -104,13 +104,15 @@ describe('dispatchTool', () => {
 
   it('catches a thrown ToolError into an ok:false envelope preserving the code', async () => {
     const { ctx } = makeToolContext({ root: '/proj/root' });
+    // apply_patch throws ToolError('sandbox_escape') for an out-of-root target; dispatchTool must
+    // surface that exact code (not a generic provider_error) in the ok:false envelope.
     const res = await dispatchTool(
       buildToolRegistry(),
       'apply_patch',
-      JSON.stringify({ path: 'a.gml', diff: 'x' }),
+      JSON.stringify({ path: '../escape.gml', diff: '--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n' }),
       ctx,
     );
     expect(res.ok).toBe(false);
-    expect(res.code).toBe('not_implemented');
+    expect(res.code).toBe('sandbox_escape');
   });
 });
