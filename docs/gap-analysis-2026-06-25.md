@@ -1,7 +1,7 @@
 # ChatGML Dogfooding Gap Analysis — 2026-06-25
 
-Branch `agentic-rewrite` (HEAD `9529764`). M1–M7 + fs-aware GML enrichment complete,
-506 tests green, `npm run ci` GREEN. This report synthesizes the dogfooding findings
+Branch `agentic-rewrite`. M1–M7 + fs-aware GML enrichment complete, **576 tests green**,
+`npm run ci` GREEN. This report synthesizes the dogfooding findings
 into one deduplicated, severity-ranked list and splits them into **fixable-now**
 (clear bounded defects with a known fix) and **deferred / needs-decision**
 (design, feature, or ambiguous-policy items).
@@ -13,11 +13,14 @@ All claims below were re-verified against the shipped `dist/` and the source on
 
 ## Summary
 
-- **Total distinct gaps:** 22 (after deduping the raw 32 findings — see "Dedup notes").
-- **Fixable now:** 16 bounded defects with a clear fix.
-- **Deferred / needs-decision:** 6 (relevance scoring, GM multi-collision resolution,
-  embeddings-store identity, graph name-only ranking, ReDoS heuristic completeness,
-  config-set targeting).
+- **Total distinct gaps:** 22 (after deduping the raw 32 findings — see "Dedup notes")
+  plus 5 from the agent-loop pass = 27.
+- **Fixable now:** 16 bounded defects — all fixed (commits `e738945`, `068d7ee`, `0b5c63d`).
+- **Agent-loop fixes:** uniform turn terminator, deduped `cancelled`, stuck-tool guard (`068d7ee`).
+- **Resolved since (design items shipped):** D1 search relevance floor, D2 multi-collision GML
+  (`19d2a80`); GAP4 auto-mode destructive-edit backstop, GAP5 slow-stream idle heartbeat (`5cc5617`).
+- **Deferred / needs-decision:** 4 — embeddings-store identity (D3), graph name-only ranking (D4),
+  ReDoS heuristic completeness (D5), config-set targeting (D6).
 - **The single most consequential cluster** is *index-target validation + empty-index
   silence*: the most common real first run (typo a path, or point at a fresh
   GameMaker project that has no `.gml` yet) produces a green "success" that silently
@@ -86,7 +89,7 @@ deleted (single source of truth, matching `read_file`).
 
 ## What works (verified)
 
-- `npm run ci` is green; 506 tests pass.
+- `npm run ci` is green; 576 tests pass.
 - **Sandbox** is robust for the canonical attacks: `read_file` cleanly rejects `../`,
   absolute, UNC, device, drive-relative, and ADS paths, and realpaths the deepest
   existing ancestor to defeat symlink escapes (`src/tools/sandbox.ts`). `read_file`
@@ -346,29 +349,28 @@ message for codes commander already printed
 
 ## Deferred / needs-decision gaps
 
-### D1 — `search_code` has no relevance floor; minmax fusion always normalizes the top hit to ~max — MEDIUM (design)
-**File:** `src/memory/fusion.ts:42-45,82-85` (confirmed: `minmaxNormalize` maps the
-best item to 1.0 regardless of ABSOLUTE similarity; "all-equal scores map to 1").
-A gibberish query returns confident-looking results indistinguishable from a real
-match — the fused score has no cross-query meaning and there is no threshold to drop
-irrelevant hits. **Why deferred:** the right floor value, and whether to surface "low
-confidence", is a design choice; tested with a stub embedder, so a real model would
-separate scores better, but the structural "no absolute floor" issue remains.
-**Direction:** retain the raw cosine/BM25 max alongside the normalized fused score and
-apply (or expose) a configurable absolute cosine floor; drop or flag hits below it.
+### D1 — `search_code` relevance floor — MEDIUM (design) — ✅ RESOLVED (`19d2a80`)
+The original concern: minmax fusion maps the best hit to ~1.0 regardless of ABSOLUTE
+similarity, so a gibberish query returns confident-looking results with no threshold to
+drop irrelevant hits. **Shipped:** an OPT-IN absolute cosine floor — `search.minScore`
+(config file / `CHATGML_SEARCH_MIN_SCORE` env / `--min-score` flag / per-call tool arg),
+default OFF so existing behavior is unchanged. Applied on RAW cosine (not the minmax-fused
+score) after fusion; sub-floor hits are dropped and an emptied set returns `[]` (never a
+wrong top-k); fused ranking still orders survivors. (`src/memory/local.ts`,
+`src/tools/search.ts`.) **Still needs a real embedder** to tune the right default
+threshold (~0.2–0.4 typical) — see "Not assessed (stub-only)" below.
 
-### D2 — Multi-collision GameMaker objects never resolve `collisionWith` (GUID-named collision events stay path-only) — MEDIUM (design)
-**File:** `src/index/gm-resolver.ts:130-138` (confirmed: `resolveCollisionTarget`
-returns `undefined` for a multi-target object addressed by an unmappable GUID token;
-this is even unit-tested). GameMaker 2.3+ ALWAYS names collision `.gml` files by GUID,
-and modern `.yy`/`.yyp` use `{name,path}` refs with no GUIDs to cross-reference — so in
-practice EVERY multi-collision object loses its collision-target enrichment even though
-the `.yy` lists the targets in order. **Why deferred:** resolving it safely is a design
-choice (guessing risks wrong citations). **Directions:** (a) attach the full target
-list (`collisionCandidates`) so the citation says "collides one of: obj_enemy,
-obj_wall"; or (b) map collision `.gml` files to targets by their stable on-disk order
-against the `eventList` collision entries (GameMaker writes them deterministically). At
-minimum, surface that the object is a multi-collision object.
+### D2 — Multi-collision GameMaker collision resolution — MEDIUM (design) — ✅ RESOLVED (`19d2a80`)
+**File:** `src/index/gm-resolver.ts` (`resolveCollisionTarget`). **Resolved safely (no
+guessing):** a collision `.gml` whose filename token is a target NAME
+(`Collision_<Target>.gml`) now resolves to that distinct object via name-match against the
+`.yy` `eventList` `collisionObjectId` names — so a multi-collision object's events each get
+their own `collisionWith`. A single-collision object still resolves from any token (incl. a
+GUID) to its lone target. A GUID/ambiguous token on a multi-collision object stays path-only
+(`collisionWithRaw` kept, `collisionWith` absent) — we never guess. Covered by synthetic
+fixtures + tests (`test/index/gm-resolver.test.ts`). Mapping GUID-named multi-collision files
+by their deterministic on-disk order remains a possible future enhancement, intentionally not
+guessed today.
 
 ### D3 — Embeddings-store identity is `host:port:model`, so a changed/ephemeral port forces a full re-embed — LOW (design)
 **File:** `src/index/embeddings.ts` (`embeddings.id = '${host}:${model}'`),
@@ -470,9 +472,9 @@ OpenAI-compatible chat + embedding endpoint (`--chat-base-url` / `--embed-base-u
 with a working model and key):
 
 - **Embedding retrieval quality** — whether `search_code` actually surfaces the right
-  GML for a natural-language question (the stub makes all scores degenerate; D1's
-  "no absolute floor" is provable structurally but its practical impact needs a real
-  embedder).
+  GML for a natural-language question (the stub makes all scores degenerate). D1's
+  absolute-cosine floor MECHANISM is shipped (opt-in `search.minScore`); the right
+  default THRESHOLD still needs tuning against a real embedder.
 - **End-to-end chat/serve answer quality** — whether the agent uses tools well, cites
   correctly, and answers GameMaker questions usefully. The double-render (F15) and the
   confident-answer-with-`SOURCES:[]` behavior (F3) were seen with the stub; their
@@ -485,4 +487,5 @@ with a working model and key):
 
 **Recommendation:** before declaring the dogfooding sign-off complete, run one pass
 against a real chat + embedding endpoint over the BLANK GAME (or a richer GameMaker
-project) and re-evaluate D1, F3, F5, and F15 with real outputs.
+project) to TUNE the D1 `search.minScore` threshold and re-check F3, F5, and F15 with
+real outputs.
