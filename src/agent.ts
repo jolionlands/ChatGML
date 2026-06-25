@@ -428,7 +428,7 @@ async function runOneToolCall(
     name,
   });
 
-  return { ok: res.ok, name, fingerprint: `${name} ${canonicalJson(parsedArgs)}` };
+  return { ok: res.ok, name, fingerprint: `${name}\0${canonicalJson(parsedArgs)}` };
 }
 
 // ---------------------------------------------------------------------------
