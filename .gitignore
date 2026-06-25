@@ -10,3 +10,13 @@ __pycache__/
 talk-venv
 project_structure.txt
 vector_store/
+
+# Node / TypeScript (ChatGML rewrite)
+/node_modules/
+/dist/
+/coverage/
+*.tsbuildinfo
+
+# ChatGML local store + project config (never commit secrets)
+/.chatgml/
+/.chatgml.json
