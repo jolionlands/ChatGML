@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { runAgent, createApprovalGate, DEFAULT_MAX_STEPS } from '../src/agent.js';
+import { runAgent, createApprovalGate, DEFAULT_MAX_STEPS, STUCK_TOOL_LIMIT } from '../src/agent.js';
 import { FakeLlm, ThrowingLlm } from './helpers/fake-llm.js';
 import { LlmError } from '../src/llm.js';
 import { buildToolRegistry } from '../src/tools/index.js';
@@ -265,5 +265,136 @@ describe('runAgent loop', () => {
 
   it('DEFAULT_MAX_STEPS is exported and positive', () => {
     expect(DEFAULT_MAX_STEPS).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Terminal-event contract: EVERY turn ends with EXACTLY ONE of {answer, error}, and a non-answer
+// exit never trails a non-terminal status after its terminal error. (GAP1/GAP2/GAP3)
+// ---------------------------------------------------------------------------
+
+/** The set of types that may be a turn TERMINATOR. */
+const TERMINALS = new Set(['answer', 'error']);
+
+/** Assert the event stream ends with exactly one terminal and that it is the LAST event. */
+function expectSingleTerminal(events: AgentEvent[], expected: 'answer' | 'error'): AgentEvent {
+  const terminals = events.filter((e) => TERMINALS.has(e.type));
+  expect(terminals).toHaveLength(1);
+  const last = events[events.length - 1]!;
+  expect(last.type).toBe(expected);
+  // Nothing (not even a status) follows the terminator.
+  expect(TERMINALS.has(last.type)).toBe(true);
+  return last;
+}
+
+describe('runAgent terminal-event contract', () => {
+  it('SUCCESS path still ends with exactly one answer (terminator unchanged)', async () => {
+    const { config, memory, ignore } = await setup();
+    const llm = new FakeLlm([{ tokens: ['done'] }]);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    expectSingleTerminal(events, 'answer');
+  });
+
+  it('LlmError(http) exit ends with exactly one terminal error{http} and no trailing status', async () => {
+    const { config, memory, ignore } = await setup();
+    const llm = new ThrowingLlm(new LlmError('http', 'boom', { status: 503 }));
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    const term = expectSingleTerminal(events, 'error');
+    expect(term.type === 'error' && term.code).toBe('http');
+  });
+
+  it('maxSteps exit ends with exactly one terminal error{max_steps} and no trailing status', async () => {
+    const { config, memory, ignore } = await setup();
+    const turns = Array.from({ length: 5 }, () => ({
+      toolCalls: [{ id: 'loop', name: 'glob', arguments: JSON.stringify({ pattern: '*' }) }],
+    }));
+    const llm = new FakeLlm(turns);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { maxSteps: 3 });
+    const term = expectSingleTerminal(events, 'error');
+    expect(term.type === 'error' && term.code).toBe('max_steps');
+  });
+
+  it('pre-aborted signal: ends with exactly one terminal error{aborted}; cancelled appears EXACTLY ONCE and is NOT the terminator', async () => {
+    const { config, memory, ignore } = await setup();
+    const llm = new FakeLlm([{ tokens: ['unused'] }]);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    const ac = new AbortController();
+    ac.abort();
+    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, signal: ac.signal, ignore });
+    const term = expectSingleTerminal(events, 'error');
+    expect(term.type === 'error' && term.code).toBe('aborted');
+    // GAP2: the cancelled status is emitted at most once (was duplicated before the fix).
+    const cancelledCount = events.filter((e) => e.type === 'status' && e.phase === 'cancelled').length;
+    expect(cancelledCount).toBe(1);
+  });
+
+  it('abort mid-run (after the first tool call) ends with one terminal error{aborted}; cancelled once', async () => {
+    const { config, memory, ignore } = await setup();
+    const llm = new FakeLlm([
+      { toolCalls: [{ id: 't1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }] },
+      { tokens: ['should not reach'] },
+    ]);
+    const events: AgentEvent[] = [];
+    const ac = new AbortController();
+    // Abort the moment the first tool_result is emitted (mid-run), as a real cancel would arrive.
+    const emit = (e: AgentEvent): void => {
+      events.push(e);
+      if (e.type === 'tool_result') ac.abort();
+    };
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('go', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, signal: ac.signal, ignore });
+    const term = expectSingleTerminal(events, 'error');
+    expect(term.type === 'error' && term.code).toBe('aborted');
+    const cancelledCount = events.filter((e) => e.type === 'status' && e.phase === 'cancelled').length;
+    expect(cancelledCount).toBe(1);
+    // The second model turn never ran (we aborted before answering).
+    expect(events.some((e) => e.type === 'answer')).toBe(false);
+  });
+
+  it('stuck tool: the SAME failing tool call N times breaks early with terminal error{stuck_tool} BEFORE maxSteps', async () => {
+    const { config, memory, ignore } = await setup();
+    // read_file of a nonexistent path returns ok:false deterministically; the model re-issues the
+    // IDENTICAL call every turn. maxSteps is generous (10) so the stuck-guard (N=3), not maxSteps,
+    // must be what stops the loop.
+    const args = JSON.stringify({ path: 'does/not/exist.gml' });
+    const turns = Array.from({ length: 10 }, () => ({
+      toolCalls: [{ id: 'r', name: 'read_file', arguments: args }],
+    }));
+    const llm = new FakeLlm(turns);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { maxSteps: 10 });
+    const term = expectSingleTerminal(events, 'error');
+    expect(term.type === 'error' && term.code).toBe('stuck_tool');
+    expect(term.type === 'error' && /read_file/.test(term.message)).toBe(true);
+    // It stopped at the limit, not at maxSteps: exactly STUCK_TOOL_LIMIT failing tool_results ran.
+    const failures = events.filter((e) => e.type === 'tool_result' && !e.ok);
+    expect(failures).toHaveLength(STUCK_TOOL_LIMIT);
+    // The model was NOT polled all 10 times.
+    expect(llm.callCount).toBeLessThan(10);
+  });
+
+  it('stuck guard resets on a DIFFERENT (or succeeding) call: two distinct fails do not trip it', async () => {
+    const { config, memory, ignore } = await setup();
+    // Alternate two DISTINCT failing calls then answer. Never 3 of the SAME in a row -> no stuck error.
+    const llm = new FakeLlm([
+      { toolCalls: [{ id: 'a', name: 'read_file', arguments: JSON.stringify({ path: 'nope-a.gml' }) }] },
+      { toolCalls: [{ id: 'b', name: 'read_file', arguments: JSON.stringify({ path: 'nope-b.gml' }) }] },
+      { toolCalls: [{ id: 'c', name: 'read_file', arguments: JSON.stringify({ path: 'nope-a.gml' }) }] },
+      { tokens: ['gave up cleanly'] },
+    ]);
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { maxSteps: 10 });
+    // It answered, not stuck_tool — alternating fingerprints never reached 3-in-a-row.
+    expectSingleTerminal(events, 'answer');
+    expect(events.some((e) => e.type === 'error')).toBe(false);
   });
 });

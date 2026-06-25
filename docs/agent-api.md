@@ -56,6 +56,23 @@ async-iterable of events per `user`/`reindex` command.
 | answer | `{"type":"answer","text","sources","usage?"}` | final answer + citations |
 | error | `{"type":"error","message","code?"}` | recoverable error; the session survives |
 
+## Turn termination
+
+**Every turn terminates with exactly one of `{answer, error}`.** A client that drives a `user` run
+can wait for a single terminal event and never hang:
+
+- The **success** path ends with one `answer` (its sources/usage attached).
+- Every **non-answer** exit ends with exactly one terminal `error`:
+  - `code:"http"` (and other LlmError codes) — the model/transport failed mid-turn.
+  - `code:"max_steps"` — the loop hit `maxSteps` without a final answer.
+  - `code:"aborted"` — the run was cancelled (`cancel` command or a disconnect).
+  - `code:"stuck_tool"` — the model repeated the SAME failing tool call (name + canonical args)
+    3 times in a row; the loop stops instead of burning every remaining step on it.
+
+On cancel, a non-terminal `status:cancelled` may be emitted for the UI, but it is **never** the
+terminator — the terminal `error{code:"aborted"}` is, and nothing follows it. No turn ends on a bare
+`status`.
+
 ## Correlation
 
 The `id` in `edit_proposal`, `approval_request`, and the client's `approve`/`reject` is the **same**

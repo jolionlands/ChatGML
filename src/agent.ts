@@ -36,6 +36,14 @@ import type { InEvent } from './protocol.js';
 
 export const DEFAULT_MAX_STEPS = 16;
 
+/**
+ * Stuck-loop guard: if the model issues the SAME tool call (name + canonical args) and it returns
+ * ok:false this many times CONSECUTIVELY, the turn is stopped with a terminal `error{code:'stuck_tool'}`
+ * rather than burning every remaining step on an identical failing call (observed: 15x
+ * "diff does not apply cleanly" until max_steps). Kept small so a genuine retry-once still works.
+ */
+export const STUCK_TOOL_LIMIT = 3;
+
 /** Minimal chat-model surface the agent needs (LlmClient satisfies this; tests inject a fake). */
 export interface LlmLike {
   chatStream(req: ChatRequest): AsyncGenerator<StreamDelta, ChatResult, void>;
@@ -194,10 +202,27 @@ export async function runAgent(
 
   let finalMessage: ChatMessage = { role: 'assistant', content: null };
 
+  // TERMINAL-EVENT CONTRACT (see docs/agent-api.md): every turn ends with EXACTLY ONE of
+  // {answer, error}. The success path returns from inside the loop after emitting `answer`. Every
+  // non-answer exit (abort/cancel, LlmError, maxSteps, stuck tool) flows through `errorExit`, which
+  // emits a single terminal `error` and nothing after it. A non-terminal `status:cancelled` is still
+  // emitted once on abort (for UI), but it is NOT the terminator — the terminal `error{aborted}` is.
+  const errorExit = (message: string, code: string): AgentRunResult => {
+    deps.emit({ type: 'error', message, code });
+    return { message: finalMessage, history: messages, sources };
+  };
+
+  // Stuck-loop tracking: the fingerprint of the last tool call that returned ok:false, and how many
+  // times in a row that exact (name + canonical args) call has now failed.
+  let lastFailedFingerprint: string | null = null;
+  let consecutiveFailures = 0;
+
   for (let step = 0; step < maxSteps; step++) {
     if (signal.aborted) {
+      // Emit the cancelled status ONCE (here, at the abort boundary), then terminate with the
+      // single terminal `error{aborted}`. Do not re-emit cancelled after the loop.
       deps.emit({ type: 'status', phase: 'cancelled' });
-      break;
+      return errorExit('run cancelled', 'aborted');
     }
     deps.emit({ type: 'status', phase: 'thinking' });
 
@@ -206,9 +231,8 @@ export async function runAgent(
       result = await streamTurn(deps.llm, { messages, tools: toolSpecs, signal }, deps.emit);
     } catch (err) {
       if (err instanceof LlmError) {
-        deps.emit({ type: 'error', message: `model error: ${err.message}`, code: err.code });
         finalMessage = { role: 'assistant', content: null };
-        break;
+        return errorExit(`model error: ${err.message}`, err.code);
       }
       throw err;
     }
@@ -218,7 +242,7 @@ export async function runAgent(
 
     const toolCalls = assistantMsg.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      // No tool calls -> this is the final answer.
+      // No tool calls -> this is the final answer (the SUCCESS terminator).
       finalMessage = assistantMsg;
       const answerText = assistantMsg.content ?? '';
       const answer: AgentEvent = { type: 'answer', text: answerText, sources };
@@ -227,26 +251,56 @@ export async function runAgent(
       return { message: finalMessage, history: messages, sources };
     }
 
-    // Execute each tool call, append a role:'tool' result keyed to its id.
+    // Execute each tool call, append a role:'tool' result keyed to its id. Track consecutive
+    // identical failures so a model stuck re-issuing one failing call is stopped early.
     for (const call of toolCalls) {
       if (signal.aborted) break;
-      await runOneToolCall(call, deps, ctx, sources, messages);
+      const outcome = await runOneToolCall(call, deps, ctx, sources, messages);
+      if (outcome.ok) {
+        lastFailedFingerprint = null;
+        consecutiveFailures = 0;
+      } else {
+        if (outcome.fingerprint === lastFailedFingerprint) {
+          consecutiveFailures += 1;
+        } else {
+          lastFailedFingerprint = outcome.fingerprint;
+          consecutiveFailures = 1;
+        }
+        if (consecutiveFailures >= STUCK_TOOL_LIMIT) {
+          return errorExit(
+            `model repeated a failing tool call (${outcome.name}) ${STUCK_TOOL_LIMIT}x; stopping`,
+            'stuck_tool',
+          );
+        }
+      }
+    }
+
+    // An abort that landed mid tool-execution: terminate uniformly (status once, then error).
+    if (signal.aborted) {
+      deps.emit({ type: 'status', phase: 'cancelled' });
+      return errorExit('run cancelled', 'aborted');
     }
 
     if (step === maxSteps - 1) {
-      deps.emit({
-        type: 'error',
-        message: `agent exceeded maxSteps (${maxSteps}) without a final answer`,
-        code: 'max_steps',
-      });
+      return errorExit(
+        `agent exceeded maxSteps (${maxSteps}) without a final answer`,
+        'max_steps',
+      );
     }
   }
 
-  // Either aborted, LlmError, or maxSteps exhausted: emit a best-effort answer envelope.
-  if (signal.aborted) {
-    deps.emit({ type: 'status', phase: 'cancelled' });
-  }
-  return { message: finalMessage, history: messages, sources };
+  // Unreachable in practice (every path above returns), but keep a defensive terminal `error` so the
+  // contract — exactly one of {answer, error} per turn — holds even if maxSteps is 0.
+  return errorExit('agent loop ended without a final answer', 'no_answer');
+}
+
+/** A canonical, order-stable JSON of a value so two semantically equal arg objects fingerprint alike. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
 }
 
 /** Stream one model turn, emitting token events; returns the assembled ChatResult. */
@@ -267,6 +321,14 @@ async function streamTurn(
   return next.value;
 }
 
+/** The outcome of one tool call, used by the loop's stuck-tool detection. */
+interface ToolCallOutcome {
+  ok: boolean;
+  name: string;
+  /** Stable identity of this call (name + canonical args) so identical repeats compare equal. */
+  fingerprint: string;
+}
+
 /** Run a single tool call: emit tool_call, dispatch, append role:'tool' result, emit tool_result. */
 async function runOneToolCall(
   call: ToolCall,
@@ -274,7 +336,7 @@ async function runOneToolCall(
   ctx: ToolContext,
   sources: Citation[],
   messages: ChatMessage[],
-): Promise<void> {
+): Promise<ToolCallOutcome> {
   const name = call.function.name;
   let parsedArgs: unknown = undefined;
   try {
@@ -307,6 +369,8 @@ async function runOneToolCall(
     tool_call_id: call.id,
     name,
   });
+
+  return { ok: res.ok, name, fingerprint: `${name} ${canonicalJson(parsedArgs)}` };
 }
 
 // ---------------------------------------------------------------------------

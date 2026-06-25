@@ -11,11 +11,11 @@ import { defineTool, ToolError } from '../tool-error.js';
 import type { ToolDef, ToolResult, ToolContext } from '../types.js';
 import { z } from 'zod';
 import { walkFiles } from '../index/files.js';
+import { MAX_FILE_BYTES } from './limits.js';
 
 const MAX_PATTERN_LEN = 512;
 const DEFAULT_MAX_MATCHES = 100;
 const MAX_MAX_MATCHES = 1000;
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 const GrepArgs = z.object({
   pattern: z.string().min(1).max(MAX_PATTERN_LEN).describe('literal text or regex to search for'),

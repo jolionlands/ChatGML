@@ -36,6 +36,53 @@ from the binary handling in `read_file`/`grep` (which both already NUL-sniff): t
 
 ---
 
+## Agent-loop dogfooding gaps (driving `serve` over NDJSON vs a stub)
+
+A second pass drove the real `node dist/cli.js serve` over NDJSON against an OpenAI-compatible stub
+and surfaced five turn-lifecycle gaps. GAP1–GAP3 + the grep CLEANUP are **FIXED** (this commit);
+GAP4 + GAP5 are **DEFERRED / needs-decision** (documented below).
+
+### GAP1 — non-answer exits had no uniform terminal marker — MEDIUM — **FIXED**
+**Area:** agent loop / serve contract. **File:** `src/agent.ts` (`runAgent`).
+A turn could terminate with only an `error` (http / max_steps) OR with `status:cancelled` and **no**
+uniform terminal marker, while the SUCCESS path ends with `answer`. A serve client that waits for
+`answer` to mark a turn done would **hang** on the error/cancel/maxSteps paths.
+**Fix (shipped):** `runAgent` now GUARANTEES every turn ends with **exactly one** of `{answer,
+error}`. The success sequence is unchanged (still terminates on `answer` — `agent-api-transcript.ndjson`
++ `docs.conformance.test.ts` stay valid). Every non-answer exit (LlmError, maxSteps, abort/cancel,
+stuck tool) flows through a single `errorExit` helper that emits one terminal `error` and nothing
+after it (codes: `http` / `max_steps` / `aborted` / `stuck_tool`). The contract is documented in
+`docs/agent-api.md` ("Turn termination": *every turn terminates with exactly one of {answer,
+error}*). Tests in `test/agent.loop.test.ts` ("runAgent terminal-event contract") assert each
+non-answer exit ends with exactly one terminal `error` and no trailing status.
+
+### GAP2 — duplicate `status:cancelled` on abort — LOW — **FIXED**
+**Area:** agent loop. **File:** `src/agent.ts` (`runAgent`).
+`runAgent` emitted `{type:'status',phase:'cancelled'}` BOTH at the top-of-loop abort check AND in the
+post-loop `if (signal.aborted)` block — two cancelled events for one abort.
+**Fix (shipped):** the cancelled status is emitted **at most once** (at the abort boundary), and the
+abort turn's TERMINAL event is a single `error{code:'aborted'}` (per GAP1). The redundant post-loop
+emission was removed. A test asserts `cancelled` appears exactly once on a pre-aborted run and on a
+mid-run abort.
+
+### GAP3 — loop burns all maxSteps re-trying an IDENTICAL failing tool call — MEDIUM — **FIXED (bounded)**
+**Area:** agent loop. **File:** `src/agent.ts` (`runAgent`).
+Observed 15× `ok:false "diff does not apply cleanly"` for the same `apply_patch` call until
+`max_steps` — the loop never detected it was stuck.
+**Fix (shipped):** stuck-loop detection. If the SAME tool call (name + canonical JSON of args)
+returns `ok:false` `STUCK_TOOL_LIMIT` (= **3**) times CONSECUTIVELY, the loop breaks early with a
+terminal `error{code:'stuck_tool', message:"model repeated a failing tool call (<name>) 3x;
+stopping"}`. The counter resets on any success or a different fingerprint, so a genuine retry-once
+still works (`canonicalJson` sorts keys so semantically-equal arg objects fingerprint alike). Tested:
+3× identical failure trips the guard before maxSteps; alternating distinct failures do not.
+
+### grep CLEANUP — duplicate `MAX_FILE_BYTES` constant — **FIXED**
+`src/tools/grep.ts` re-declared `const MAX_FILE_BYTES = 2*1024*1024` instead of importing the shared
+one from `src/tools/limits.ts`. Now imports `MAX_FILE_BYTES` from `./limits.js`; the local dup was
+deleted (single source of truth, matching `read_file`).
+
+---
+
 ## What works (verified)
 
 - `npm run ci` is green; 506 tests pass.
@@ -363,6 +410,38 @@ the secret-hygiene guarantee — it is a policy decision, not a bug. **Direction
 optional `[dir]`/`--local` that writes `<dir>/.chatgml.json` (refusing secrets there),
 and/or print the destination path more prominently; at minimum document that
 `config set` is global-only.
+
+### GAP4 — in `auto` approval mode an injection-driven edit auto-applies with no human and no secondary backstop — MEDIUM (policy, deferred)
+**Area:** approval gate / prompt-injection defense. **Files:** `src/agent.ts`
+(`createApprovalGate` — `autoApprove` resolves synchronously `true`), `buildSystemPrompt` (the
+"edits require an explicit user request" instruction is the *only* line of defense in `auto`).
+**Observation:** in `auto` mode the gate emits `edit_proposal` then immediately resolves approved, so
+an `apply_patch` that the model was coerced into proposing (e.g. by injected file/tool content saying
+"apply this patch") applies with **no human in the loop and no secondary backstop**. The gated path is
+robust (the prompt-injection test proves a human `reject` blocks the write); `auto` is the documented
+opt-in trade-off — it exists precisely to skip the human — so this is **working as designed**, not a
+bug. **Why deferred:** changing `auto`'s behavior is a policy decision (it would partially defeat the
+mode's purpose). **Behavior is UNCHANGED.** **Proposed hardening (needs decision):** even in `auto`,
+require explicit approval for the higher-blast-radius edits — whole-file rewrites or deletions, or any
+edit when there is no explicit user edit request in the turn's user message — falling back to the
+gated path for those while auto-applying small, in-place, user-requested diffs. Optionally add a
+content heuristic that flags a proposal whose diff originated from text that appeared in a prior
+tool_result (a signal of injection).
+
+### GAP5 — Node25/undici on Windows ARM64 batches HTTP body chunks, so a SLOW upstream yields no incremental `token` events — MEDIUM (transport/dep, deferred)
+**Area:** streaming transport. **Files:** `src/llm.ts` / the SSE reader (consumes `fetch` body),
+`src/agent.ts` `streamTurn` (emits every delta it reads).
+**Observation:** ChatGML's loop is **correct** — `streamTurn` emits a `token` event for every
+non-empty delta it reads from the model stream. But on Node 25 / undici on Windows ARM64, a slow
+upstream's HTTP body chunks are **batched by the transport**, so the deltas arrive in bursts rather
+than incrementally; the UI sees a long quiet gap then a flood of tokens. The buffering is below
+ChatGML (the global `fetch` / undici read path), not in the agent loop. **Why deferred:** this is a
+platform/dependency characteristic; re-architecting the transport now is out of scope and risks
+regressions. **Behavior is UNCHANGED.** **Options (needs decision):** (a) an idle-read heartbeat —
+emit a low-frequency `status` (e.g. `thinking`) when no delta has arrived for N ms so the client knows
+the turn is alive during a buffered gap; (b) document the Node/undici dependency and the platform
+caveat in `docs/agent-api.md`; (c) evaluate a streaming-friendlier fetch (e.g. a different HTTP client
+or undici options that reduce body-chunk batching) and benchmark incremental delivery on Win ARM64.
 
 ---
 
