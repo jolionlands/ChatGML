@@ -110,4 +110,31 @@ describe('chunkFile', () => {
     const chunks = chunkFile('a.gml', 'hello world', { chunkSize: 1000 });
     expect(chunks[0]!.contentHash).toBe(hashContent('hello world'));
   });
+
+  it('NEVER emits a zero-length chunk for a >chunkSize line + trailing newline — F4', () => {
+    // The classic repro: a line longer than chunkSize followed by a trailing newline used to add a
+    // trailing `path#2-2` chunk of length 0 (which got embedded as input:['']).
+    const chunks = chunkFile('test.ts', 'a'.repeat(3000) + '\n', { chunkSize: 1500 });
+    for (const c of chunks) {
+      expect(c.text.trim()).not.toBe('');
+      expect(c.text.length).toBeGreaterThan(0);
+    }
+    // No chunk hashes the empty string (sha256('') = e3b0c442...).
+    expect(chunks.map((c) => c.contentHash)).not.toContain(hashContent(''));
+  });
+
+  it('hard-caps a single oversize line into <=chunkSize character pieces with UNIQUE ids — F5', () => {
+    const oneLine = 'x'.repeat(200_000); // a minified single-line file
+    const chunks = chunkFile('min.js', oneLine, { chunkSize: 1500 });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(c.text.length).toBeLessThanOrEqual(1500);
+    }
+    // Reassembling the pieces reproduces the original line (no data lost).
+    expect(chunks.map((c) => c.text).join('')).toBe(oneLine);
+    // Every chunk id is DISTINCT — otherwise the id-keyed store would drop all but the last piece.
+    const ids = chunks.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids[0]).toBe('min.js#1-1~0');
+  });
 });

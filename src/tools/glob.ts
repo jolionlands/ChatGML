@@ -10,7 +10,7 @@ import { ToolError } from '../tool-error.js';
 import type { ToolDef, ToolResult, ToolContext } from '../types.js';
 import { z } from 'zod';
 import { isInsideRoot, toPosix } from './sandbox.js';
-import { EXCLUDE_DIRS, deriveGmlMeta } from '../index/files.js';
+import { EXCLUDE_DIRS, gmlDeriverForRoot } from '../index/files.js';
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 5000;
@@ -49,16 +49,33 @@ export const globTool: ToolDef<GlobArgs> = defineTool<GlobArgs>({
     for (const m of matches) {
       if (ctx.signal.aborted) throw new ToolError('aborted', 'glob aborted');
       const rel = toPosix(m);
+      // A `..` in the pattern can make fast-glob return `../name/...` that still lexically resolves
+      // back inside root (when root's own dir name appears in the pattern). Treat ANY `../`-leading or
+      // absolute match as out-of-sandbox and skip it — and defensively wrap ignore.ignores, which
+      // THROWS on a non-relative path ("path should be a path.relative()'d string"). Either way we get
+      // a clean filtered result instead of an opaque provider_error. (F9)
+      if (rel.startsWith('../') || rel.startsWith('/') || /^[A-Za-z]:/.test(rel)) continue;
       if (!isInsideRoot(ctx.root, rel)) continue;
-      if (ctx.ignore.ignores(rel)) continue;
+      try {
+        if (ctx.ignore.ignores(rel)) continue;
+      } catch {
+        continue; // a path the ignore lib rejects as non-relative is treated as outside-root
+      }
       out.push(rel);
       if (out.length >= limit) break;
     }
     out.sort();
 
+    // Use the fs-aware enriched deriver (collisionWith/parentObject), consistent with
+    // search/graph/temporal — not the path-only deriver. Surface the RESOLVED collision target (the
+    // GUID-based displayName alone is useless to the agent) when enrichment provided it. (F8)
+    const derive = gmlDeriverForRoot(ctx.root);
     const lines = out.map((p) => {
-      const meta = deriveGmlMeta(p);
-      return meta && meta.kind === 'event' ? `${p}  [${meta.displayName}]` : p;
+      const meta = derive(p);
+      if (!meta || meta.kind !== 'event') return p;
+      const target =
+        meta.collisionWith !== undefined ? `Collision with ${meta.collisionWith}` : meta.displayName;
+      return `${p}  [${target}]`;
     });
     const truncated = matches.length > out.length && out.length >= limit;
     const header = `${out.length} file(s)${truncated ? ' (truncated)' : ''}`;

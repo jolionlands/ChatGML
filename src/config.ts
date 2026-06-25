@@ -53,6 +53,11 @@ function isEnvRef(value: string | undefined): boolean {
   return typeof value === 'string' && value.startsWith('env:');
 }
 
+/** True when a secret field holds a literal (non-`env:`) value — a leak risk in a tracked file. */
+function hasLiteralSecret(value: string | undefined): boolean {
+  return typeof value === 'string' && value.length > 0 && !value.startsWith('env:');
+}
+
 // ---------------------------------------------------------------------------
 // Config file discovery + loading.
 // ---------------------------------------------------------------------------
@@ -177,10 +182,30 @@ type PartialConfig = z.infer<typeof PartialConfigSchema>;
 function parsePartial(value: unknown, source: string): PartialConfig {
   const result = PartialConfigSchema.safeParse(value);
   if (!result.success) {
-    const firstPath = result.error.issues[0]?.path.join('.') ?? '(root)';
-    throw new ConfigError(`invalid config (${source}): bad field '${firstPath}'`);
+    throw new ConfigError(`invalid config (${source}): ${describeZodIssue(result.error)}`);
   }
   return result.data;
+}
+
+/**
+ * A human-readable description of the FIRST zod issue. Unlike `path.join('.')` (which is empty for an
+ * `unrecognized_keys` issue at the root), this names the offending key and, for enum failures, lists
+ * the allowed values — so the message is actionable (F18).
+ */
+function describeZodIssue(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return 'invalid';
+  const at = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+  if (issue.code === 'unrecognized_keys') {
+    const keys = (issue as z.ZodIssue & { keys?: string[] }).keys ?? [];
+    const where = at === '(root)' ? '' : ` under '${at}'`;
+    return `unknown field(s) [${keys.join(', ')}]${where}`;
+  }
+  if (issue.code === 'invalid_enum_value') {
+    const opts = (issue as z.ZodIssue & { options?: readonly unknown[] }).options ?? [];
+    return `bad field '${at}': allowed values are ${opts.map((o) => JSON.stringify(o)).join(', ')}`;
+  }
+  return `bad field '${at}'`;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +277,8 @@ export interface ResolveConfigArgs {
   env: NodeJS.ProcessEnv;
   cwdConfigPath?: string;
   trustProjectConfig?: boolean;
+  /** Optional sink for non-fatal diagnostics (e.g. a plaintext secret in the project file). */
+  warn?: (message: string) => void;
 }
 
 export function resolveConfig(args: ResolveConfigArgs): Config {
@@ -336,8 +363,23 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
         : { provider: 'hippo', url: memoryValue.url };
   }
 
-  const fileTouched = loaded !== null && !fileTrusted ? loaded.path : undefined;
-  void fileTouched; // reserved for future redacted diagnostics
+  // When the loaded layer is the UNTRUSTED project file and it carries a literal (non-env:) secret,
+  // warn loudly (redacted): a raw key in a repo-tracked file is a leak risk. The value is consumed
+  // (and redacted on display) but the on-disk file still holds the secret. (F14)
+  if (loaded !== null && !fileTrusted && args.warn) {
+    const fileLayerRaw = fileLayer;
+    const literals: string[] = [];
+    if (hasLiteralSecret(fileLayerRaw.chat?.apiKey)) literals.push('chat.apiKey');
+    if (hasLiteralSecret(fileLayerRaw.embed?.apiKey)) literals.push('embed.apiKey');
+    if (hasLiteralSecret(fileLayerRaw.memory?.key)) literals.push('memory.hippo.key');
+    if (literals.length > 0) {
+      args.warn(
+        `WARNING: ${loaded.path} contains a literal secret for [${literals.join(', ')}]. ` +
+          `Use an env reference (e.g. "env:OPENAI_API_KEY") and gitignore .chatgml.json so a raw ` +
+          `key is never committed.`,
+      );
+    }
+  }
 
   const config: Config = {
     chat: chatLane,
@@ -553,6 +595,9 @@ const SETTABLE_FIELDS: Record<string, { path: string[]; type: 'string' | 'number
   'index.root': { path: ['index', 'root'], type: 'string' },
 };
 
+/** The dotted field names `config set` accepts (sorted), for help text and validation hints. */
+export const SETTABLE_FIELD_NAMES: readonly string[] = Object.keys(SETTABLE_FIELDS).sort();
+
 export interface SetConfigResult {
   /** The absolute path of the user-global config file that was written. */
   filePath: string;
@@ -612,8 +657,9 @@ export function setUserGlobalConfigField(
   // Validate the merged object so we never write a structurally-invalid config.
   const parsed = PartialConfigSchema.safeParse(current);
   if (!parsed.success) {
-    const firstPath = parsed.error.issues[0]?.path.join('.') ?? '(root)';
-    throw new ConfigError(`config field '${field}' would make the config invalid at '${firstPath}'`);
+    throw new ConfigError(
+      `config field '${field}' would make the config invalid: ${describeZodIssue(parsed.error)}`,
+    );
   }
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

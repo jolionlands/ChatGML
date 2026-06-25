@@ -11,6 +11,10 @@ import {
 } from '../../src/index/gml-enrich.js';
 import type { GmlEventMeta } from '../../src/index/gml.js';
 import type { Scope } from '../../src/memory/types.js';
+import { buildIgnoreFilter } from '../../src/index/files.js';
+import { makeToolContext } from '../helpers/tool-context.js';
+import { readTool } from '../../src/tools/read.js';
+import { globTool } from '../../src/tools/glob.js';
 
 const SCOPE: Scope = { repo: 'gm-enrich' };
 
@@ -148,6 +152,43 @@ describe('runIndex — fs-aware GameMaker enrichment (end-to-end)', () => {
       const sidecar = loadEnrichmentSidecar(repo.root);
       const collisionPath = `objects/obj_enemy/Collision_${COLLISION_GUID}.gml`;
       expect(sidecar!.byPath[collisionPath]!.collisionWith).toBe('obj_player');
+    } finally {
+      repo.cleanup();
+    }
+  });
+});
+
+// F8: read_file and glob must cite GML metadata WITH the enrichment sidecar (collisionWith /
+// parentObject), exactly like search/graph/temporal — not the path-only deriver.
+describe('read_file/glob use the ENRICHED GML deriver — F8', () => {
+  const collisionPath = `objects/obj_enemy/Collision_${COLLISION_GUID}.gml`;
+
+  it('read_file surfaces the resolved collisionWith/parentObject on a collision event', async () => {
+    const repo = makeTmpRepo(gmProjectFiles());
+    try {
+      await runIndex(repo.root, SCOPE, deps(repo.root));
+      clearGmlDeriverCache(); // ensure the tool reads the freshly-written sidecar
+      const { ctx } = makeToolContext({ root: repo.root });
+      const res = await readTool.execute({ path: collisionPath }, ctx);
+      const gml = res.citations?.[0]?.gml as GmlEventMeta | undefined;
+      expect(gml?.kind).toBe('event');
+      expect(gml?.collisionWith).toBe('obj_player');
+      expect(gml?.parentObject).toBe('obj_actor');
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('glob annotates the collision event using the enriched displayName', async () => {
+    const repo = makeTmpRepo(gmProjectFiles());
+    try {
+      await runIndex(repo.root, SCOPE, deps(repo.root));
+      clearGmlDeriverCache();
+      const ignore = await buildIgnoreFilter(repo.root);
+      const { ctx } = makeToolContext({ root: repo.root, ignore });
+      const res = await globTool.execute({ pattern: 'objects/obj_enemy/Collision_*.gml' }, ctx);
+      // The displayName of a resolved collision event includes the target object name.
+      expect(res.content).toContain('obj_player');
     } finally {
       repo.cleanup();
     }

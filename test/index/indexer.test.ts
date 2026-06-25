@@ -104,6 +104,44 @@ describe('runIndex (incremental)', () => {
     }
   });
 
+  it('skips a NUL-bearing file under an indexed extension (binary sniff) — F6', async () => {
+    const repo = makeTmpRepo({ 'good.gml': 'hp -= 1;' });
+    try {
+      // A .txt (indexed extension) that actually contains NUL bytes must not be embedded verbatim.
+      fs.writeFileSync(path.join(repo.root, 'blob.txt'), Buffer.from([0x61, 0x00, 0x62, 0x00]));
+      const emb = new FakeEmbeddings();
+      const spy = vi.spyOn(emb, 'embed');
+      const d = deps(repo.root, emb);
+      const res = await runIndex(repo.root, SCOPE, d);
+      // The binary file is scanned (walked) but NOT added (no chunk upserted for it).
+      expect(res.added).toBe(1); // only good.gml
+      // None of the embedded inputs contain a NUL byte.
+      const embedded = spy.mock.calls.flatMap((c) => c[0]);
+      expect(embedded.some((t) => t.includes('\0'))).toBe(false);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('does NOT index its own project-local .chatgml.json — F7', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'hp -= 1;' });
+    try {
+      fs.writeFileSync(
+        path.join(repo.root, '.chatgml.json'),
+        JSON.stringify({ chat: { model: 'm' } }),
+        'utf8',
+      );
+      const d = deps(repo.root);
+      const res = await runIndex(repo.root, SCOPE, d);
+      // Only a.gml is indexed; the config .json is excluded from the walk.
+      expect(res.added).toBe(1);
+      const hits = await d.memory.search('chat model', { k: 5, scope: SCOPE });
+      expect(hits.every((h) => h.path !== '.chatgml.json')).toBe(true);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
   it('a deleted file is purged and recorded in the changelog', async () => {
     const repo = makeTmpRepo({ 'a.gml': 'aaa', 'b.gml': 'bbb' });
     try {

@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import path from 'node:path';
 import { makeTmpRepo } from '../helpers/fakes.js';
 import { makeToolContext } from '../helpers/tool-context.js';
 import { buildIgnoreFilter } from '../../src/index/files.js';
@@ -70,6 +71,29 @@ describe('glob tool', () => {
     const ignore = await buildIgnoreFilter(repo.root);
     const { ctx } = makeToolContext({ root: repo.root, ignore });
     const res = await globTool.execute({ pattern: '**/*.nonexistent' }, ctx);
+    expect(res.content).toBe('no files matched');
+  });
+
+  it('a ".." pattern that resolves back into root does NOT crash with provider_error — F9', async () => {
+    const repo = makeTmpRepo(FILES);
+    cleanup = repo.cleanup;
+    const ignore = await buildIgnoreFilter(repo.root);
+    const { ctx } = makeToolContext({ root: repo.root, ignore });
+    // fast-glob returns `../<basename>/objects/...` (the `..` lands back inside root because the dir
+    // name is in the pattern). The `ignore` lib used to THROW on the non-relative path, swallowed into
+    // a generic provider_error. It must now cleanly skip out-of-sandbox matches instead.
+    const base = path.basename(repo.root);
+    const res = await globTool.execute({ pattern: `../${base}/objects/**/*.gml` }, ctx);
+    // No throw; the `../`-leading matches are treated as out-of-sandbox and filtered to nothing.
+    expect(res.content).toBe('no files matched');
+  });
+
+  it('a plain "../*" escape pattern returns no files (never throws) — F9', async () => {
+    const repo = makeTmpRepo(FILES);
+    cleanup = repo.cleanup;
+    const ignore = await buildIgnoreFilter(repo.root);
+    const { ctx } = makeToolContext({ root: repo.root, ignore });
+    const res = await globTool.execute({ pattern: '../*' }, ctx);
     expect(res.content).toBe('no files matched');
   });
 });

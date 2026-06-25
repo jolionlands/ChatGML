@@ -40,18 +40,27 @@ describe('EventRenderer (exact transcript, color:false)', () => {
       },
     ];
     for (const e of events) r.render(e);
+    // Tokens were streamed this turn, so the answer text is printed ONCE (streamed) — not re-printed
+    // by the answer event. endStream() emits the newline that finishes the streamed line. (F15)
     expect(text()).toBe(
       [
         '· thinking…',
         '→ glob({"pattern":"**/*.gml"})',
         '  ✓ 3 files',
         'The answer is 42.',
-        'The answer is 42.',
         'sources:',
         '  - objects/obj_player/Step_0.gml:1-2',
         '',
       ].join('\n'),
     );
+  });
+
+  it('prints the answer text when NO tokens streamed (tool-only / non-streaming model)', () => {
+    const { out, text } = stringSink();
+    const r = new EventRenderer({ out, color: false });
+    // No token events this turn -> the answer event must print the text exactly once.
+    r.render({ type: 'answer', text: 'final only', sources: [] });
+    expect(text()).toBe('final only\n');
   });
 
   it('renders an error and a failed tool result', () => {

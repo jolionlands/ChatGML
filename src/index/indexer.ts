@@ -73,6 +73,13 @@ function manifestPath(root: string): string {
   return path.join(root, '.chatgml', 'manifest.json');
 }
 
+/** Cheap binary sniff: a NUL byte in the first ~8KB (same heuristic as read_file/grep). */
+function looksBinary(buf: Buffer): boolean {
+  const n = Math.min(buf.length, 8000);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
+  return false;
+}
+
 function loadManifest(root: string, embeddingsId: string): { manifest: Manifest; fullRebuild: boolean } {
   const loaded = readJson<Manifest>(manifestPath(root));
   if (!loaded || loaded.version !== MANIFEST_VERSION || loaded.embeddingsId !== embeddingsId) {
@@ -141,12 +148,17 @@ export async function runIndex(
     }
 
     // Read + hash. Hash WINS over mtime: an identical mtime but changed content is re-embedded.
-    let text: string;
+    let buf: Buffer;
     try {
-      text = await fsp.readFile(file.absPath, 'utf8');
+      buf = await fsp.readFile(file.absPath);
     } catch {
       continue;
     }
+    // Binary sniff (first ~8KB NUL-byte check), mirroring read_file/grep. A NUL-bearing file under an
+    // indexed extension would otherwise be embedded verbatim as junk. Skip it (not even manifested,
+    // so it is re-checked next pass). (F6)
+    if (looksBinary(buf)) continue;
+    const text = buf.toString('utf8');
     const contentHash = hashContent(text);
     if (prev && prev.contentHash === contentHash) {
       // Content identical despite mtime/size drift: refresh the hint, no re-embed.

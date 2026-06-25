@@ -5,9 +5,12 @@
 // LlmClient over the chat lane, an Embeddings over the (separate) embed lane, a MemoryProvider, and
 // the agent. `main(argv, deps)` returns an exit code (0 ok, 2 usage, 3 config error, 1 other) and
 // never calls process.exit so it is unit-testable. The runtime pieces are injectable via CliDeps.
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import * as readline from 'node:readline';
+import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { argv as processArgv } from 'node:process';
 import {
   resolveConfig,
@@ -16,6 +19,7 @@ import {
   configFilePaths,
   setUserGlobalConfigField,
   SECRET_FIELD_PATHS,
+  SETTABLE_FIELD_NAMES,
 } from './config.js';
 import type { Config } from './types.js';
 import { LlmClient } from './llm.js';
@@ -27,12 +31,28 @@ import { createAgentLike, type AgentLike, type LlmLike } from './agent.js';
 import { runServe, createStdioTransport } from './serve.js';
 import { runChatRepl, type LineSource } from './cli/repl.js';
 import { supportsColor } from './cli/theme.js';
-import { buildIgnoreFilter } from './index/files.js';
+import { buildIgnoreFilter, DEFAULT_INDEX_EXTENSIONS } from './index/files.js';
+import { findYypOnDisk } from './index/gm-resolver.js';
 
 export const EXIT_OK = 0;
 export const EXIT_OTHER = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_CONFIG = 3;
+
+/** The CLI version, read from the bundled package.json (single source of truth; F23). */
+export function readPackageVersion(): string {
+  // dist/cli.js -> ../package.json (package.json ships alongside dist via the `files` allowlist).
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(path.join(here, '..', 'package.json'), 'utf8')) as {
+      version?: string;
+    };
+    if (typeof pkg.version === 'string' && pkg.version.length > 0) return pkg.version;
+  } catch {
+    // fall through to the safe default below
+  }
+  return '0.0.0';
+}
 
 export interface CliIo {
   stdout: NodeJS.WritableStream;
@@ -81,6 +101,7 @@ function buildConfig(root: string, flags: GlobalFlags, io: CliIo): Config {
     flags: flags as Record<string, unknown>,
     env: io.env,
     trustProjectConfig: flags.trustProjectConfig === true,
+    warn: (msg) => io.stderr.write(`${msg}\n`),
   });
 }
 
@@ -114,13 +135,54 @@ async function makeMemory(
 async function cmdIndex(root: string, flags: GlobalFlags, deps: CliDeps): Promise<number> {
   const io = resolveIo(deps.io);
   const config = buildConfig(root, flags, io);
+
+  // Validate the index target UP FRONT, before any `.chatgml` store is created. A typo'd path used
+  // to be brought into existence by the manifest's mkdir (green "success" + junk dir); a file path
+  // leaked a raw ENOTDIR. Both now fail cleanly with a usage exit code.
+  const target = config.index.root;
+  let stat: import('node:fs').Stats;
+  try {
+    stat = await fsp.stat(target);
+  } catch {
+    io.stderr.write(`index: ${target} is not an existing directory\n`);
+    return EXIT_USAGE;
+  }
+  if (!stat.isDirectory()) {
+    io.stderr.write(`index: ${target} is a file, expected a directory\n`);
+    return EXIT_USAGE;
+  }
+
   const indexDeps = deps.makeEmbeddings ? { embeddings: deps.makeEmbeddings(config) } : {};
   const result = await runIndexCommand(config, indexDeps);
   const gmSuffix = result.gmEnriched > 0 ? `; ${result.gmEnriched} GameMaker-enriched` : '';
   io.stdout.write(
-    `indexed: ${result.added} added, ${result.modified} modified, ${result.unchanged} unchanged, ` +
-      `${result.deleted} deleted${result.fullRebuild ? ' (full rebuild)' : ''}${gmSuffix}\n`,
+    `indexed: ${result.scanned} scanned, ${result.added} added, ${result.modified} modified, ` +
+      `${result.unchanged} unchanged, ${result.deleted} deleted` +
+      `${result.fullRebuild ? ' (full rebuild)' : ''}${gmSuffix}\n`,
   );
+
+  // GameMaker confirmation: always note a detected `.yyp`, even when nothing enriched (F22).
+  const yyp = await findYypOnDisk(target).catch(() => undefined);
+  if (yyp !== undefined) {
+    const name = path.basename(yyp);
+    io.stdout.write(`GameMaker project detected (${name})\n`);
+  }
+
+  // Zero-result signal: a fresh/empty/wrong-extension project indexes nothing, which otherwise looks
+  // identical to re-indexing an unchanged repo. Warn, name the indexed extensions, and add a
+  // GameMaker hint when a `.yyp` is present but no `.gml` was scanned (F3).
+  if (result.scanned === 0) {
+    io.stderr.write(
+      `warning: indexed 0 files under ${target}. ` +
+        `Indexed extensions: ${DEFAULT_INDEX_EXTENSIONS.join(', ')}.\n`,
+    );
+    if (yyp !== undefined) {
+      io.stderr.write(
+        `hint: a GameMaker project was detected but it has no .gml files yet — ` +
+          `add object/script code, then re-index.\n`,
+      );
+    }
+  }
   return EXIT_OK;
 }
 
@@ -257,24 +319,38 @@ export function buildProgram(deps: CliDeps): {
   program: Command;
   run: () => Promise<number>;
 } {
+  const io = resolveIo(deps.io);
   const program = new Command();
   let action: (() => Promise<number>) | null = null;
 
   program
     .name('chatgml')
-    .description('GameMaker-aware agentic coding assistant')
-    .version('0.1.0')
-    .option('--chat-base-url <url>')
-    .option('--chat-api-key <key>')
-    .option('--chat-model <model>')
-    .option('--embed-base-url <url>')
-    .option('--embed-api-key <key>')
-    .option('--embed-model <model>')
-    .option('--scope <scope>')
-    .option('--approval <mode>', 'gated | auto')
-    .option('--no-color')
-    .option('--trust-project-config')
+    .description(
+      'GameMaker-aware agentic coding assistant.\n' +
+        'Global options must come BEFORE the subcommand, e.g.  chatgml --scope game index .',
+    )
+    .version(readPackageVersion())
+    .option('--chat-base-url <url>', 'chat endpoint base URL (OpenAI-compatible)')
+    .option('--chat-api-key <key>', 'chat API key (prefer env:NAME)')
+    .option('--chat-model <model>', 'chat model id')
+    .option('--embed-base-url <url>', 'embedding endpoint base URL')
+    .option('--embed-api-key <key>', 'embedding API key (prefer env:NAME)')
+    .option('--embed-model <model>', 'embedding model id')
+    .option('--scope <scope>', 'memory scope (repo or repo::sub)')
+    .addOption(
+      new Option('--approval <mode>', 'edit approval policy').choices(['gated', 'auto']),
+    )
+    .option('--no-color', 'disable ANSI colors')
+    .option('--trust-project-config', 'trust a project-local .chatgml.json (allows auto + secrets)')
     .enablePositionalOptions()
+    // Route commander's own output through the injected io streams (so `--help`/`--version` are
+    // testable and respect a redirected stdout). Suppress commander's stderr write for usage errors:
+    // main() prints the message exactly once (commander used to write it AND main() wrote e.message
+    // again -> duplicate lines). `--help`/`--version` use writeOut (stdout), unaffected. (F16)
+    .configureOutput({
+      writeOut: (s) => io.stdout.write(s),
+      writeErr: () => {},
+    })
     .exitOverride(); // throw instead of process.exit so main() controls the code
 
   const flagsOf = (cmd: Command): GlobalFlags => ({
@@ -316,9 +392,16 @@ export function buildProgram(deps: CliDeps): {
     });
   config
     .command('set')
-    .argument('<field>')
-    .argument('<value>')
-    .description('set a config field (refuses literal secrets)')
+    .argument('<field>', 'a settable field (see below)')
+    .argument('<value>', 'the value (secret fields accept only env:NAME)')
+    .description('set a config field in the user-global config (refuses literal secrets)')
+    .addHelpText(
+      'after',
+      '\nWrites the user-global config (~/.config/chatgml/config.json) — never a repo file.\n' +
+        `Settable fields:\n  ${SETTABLE_FIELD_NAMES.join('\n  ')}\n\n` +
+        `Secret fields (${[...SECRET_FIELD_PATHS].join(', ')}) accept ONLY an env reference,\n` +
+        'e.g.  chatgml config set chat.apiKey env:OPENAI_API_KEY',
+    )
     .action(async (field: string, value: string) => {
       action = () => Promise.resolve(cmdConfigSet(field, value, deps));
     });
@@ -352,7 +435,12 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (e.code === 'commander.version' || e.code === 'commander.helpDisplayed' || e.code === 'commander.help') {
       return EXIT_OK;
     }
-    io.stderr.write(`${e.message ?? 'usage error'}\n`);
+    let msg = e.message ?? 'usage error';
+    // An unknown option is usually a global flag placed AFTER the subcommand. Make that fixable. (F19)
+    if (e.code === 'commander.unknownOption') {
+      msg += '\n(global options like --scope/--approval must come BEFORE the subcommand)';
+    }
+    io.stderr.write(`${msg}\n`);
     return EXIT_USAGE;
   }
   try {

@@ -81,14 +81,49 @@ describe('read_file tool', () => {
     });
   });
 
-  it('rejects a file over the 1MB cap as too_large', async () => {
+  it('rejects a WHOLE-file read over the 2MB cap as too_large', async () => {
     const repo = makeTmpRepo({});
     cleanup = repo.cleanup;
-    writeFileSync(path.join(repo.root, 'big.gml'), 'a'.repeat(1024 * 1024 + 1));
+    writeFileSync(path.join(repo.root, 'big.gml'), 'a'.repeat(2 * 1024 * 1024 + 1));
     const { ctx } = makeToolContext({ root: repo.root });
     await expect(readTool.execute({ path: 'big.gml' }, ctx)).rejects.toMatchObject({
       name: 'ToolError',
       code: 'too_large',
     });
+  });
+
+  it('ALLOWS a windowed line range above the cap (streams, caps only the slice) — F10/F11', async () => {
+    const repo = makeTmpRepo({});
+    cleanup = repo.cleanup;
+    // 3MB file (well over the 2MB whole-file cap), but a small line window must still be readable.
+    const big = Array.from({ length: 50000 }, (_, i) => `line ${i + 1} ` + 'x'.repeat(50)).join('\n');
+    expect(big.length).toBeGreaterThan(2 * 1024 * 1024);
+    writeFileSync(path.join(repo.root, 'huge.gml'), big);
+    const { ctx } = makeToolContext({ root: repo.root });
+    const res = await readTool.execute({ path: 'huge.gml', startLine: 2, endLine: 4 }, ctx);
+    expect(res.content).toContain('2\tline 2 ');
+    expect(res.content).toContain('4\tline 4 ');
+    expect(res.content).not.toContain('5\tline 5 ');
+    expect(res.citations?.[0]?.startLine).toBe(2);
+    expect(res.citations?.[0]?.endLine).toBe(4);
+  });
+
+  it('out-of-range startLine past EOF is bad_args, not a silent clamp — F17', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'l1\nl2\nl3\n' });
+    cleanup = repo.cleanup;
+    const { ctx } = makeToolContext({ root: repo.root });
+    await expect(
+      readTool.execute({ path: 'a.gml', startLine: 9000, endLine: 9100 }, ctx),
+    ).rejects.toMatchObject({ name: 'ToolError', code: 'bad_args' });
+  });
+
+  it('refuses a binary file even on a windowed read', async () => {
+    const repo = makeTmpRepo({});
+    cleanup = repo.cleanup;
+    writeFileSync(path.join(repo.root, 'blob.gml'), Buffer.from([0x61, 0x00, 0x62]));
+    const { ctx } = makeToolContext({ root: repo.root });
+    await expect(
+      readTool.execute({ path: 'blob.gml', startLine: 1, endLine: 1 }, ctx),
+    ).rejects.toMatchObject({ name: 'ToolError', code: 'binary' });
   });
 });

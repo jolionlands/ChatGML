@@ -60,11 +60,23 @@ chatgml <index|chat|serve|config> [dir] [options]
 Builds or incrementally updates the local index for `dir`. Prints a one-line summary:
 
 ```
-indexed: 12 added, 3 modified, 40 unchanged, 1 deleted
+indexed: 56 scanned, 12 added, 3 modified, 40 unchanged, 1 deleted
 ```
 
-(`(full rebuild)` is appended when the whole index was rebuilt.) Indexing embeds chunks through the
-**embed lane**, so `embed.model` (and a reachable embed endpoint) must be configured.
+(`(full rebuild)` is appended when the whole index was rebuilt; a GameMaker `.yyp` is also noted on its
+own line.) Indexing embeds chunks through the **embed lane**, so `embed.model` (and a reachable embed
+endpoint) must be configured.
+
+`dir` must be an **existing directory** — a missing path or a file is a usage error (exit 2) and no
+store is created. When `0` files are scanned (a fresh project, an empty dir, or only non-indexed
+extensions), a warning names the indexed extensions and, for a GameMaker project with no `.gml` yet, a
+GameMaker-specific hint.
+
+The index is stored under `<dir>/.chatgml/` (manifest + vectors + GM enrichment sidecar). Add
+`/.chatgml/` to the project's `.gitignore` so the store is not committed.
+
+**Indexed extensions:** `.gml .js .ts .json .md .txt .shader .vsh .fsh .html .css`. GameMaker
+`.yy`/`.yyp` are read for enrichment but not embedded; binary files and `.chatgml.json` are skipped.
 
 ```bash
 chatgml index .

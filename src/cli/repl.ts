@@ -62,11 +62,19 @@ export class EventRenderer {
         return null;
       case 'approval_request':
         return { approvalId: event.id, path: event.path };
-      case 'answer':
+      case 'answer': {
+        // When tokens were streamed this turn, the full text is already on screen — re-printing
+        // event.text would duplicate the whole reply. Only finish the stream + render sources. The
+        // answer EVENT is untouched (the serve protocol still emits it). When nothing streamed (e.g.
+        // a tool-only turn or a non-streaming model), print the answer text. (F15)
+        const wasStreaming = this.streaming;
         this.endStream();
-        if (event.text.trim() !== '') this.write(this.st.green(event.text) + '\n');
+        if (!wasStreaming && event.text.trim() !== '') {
+          this.write(this.st.green(event.text) + '\n');
+        }
         this.renderSources(event.sources);
         return null;
+      }
       case 'error':
         this.endStream();
         this.write(this.st.red(`! ${event.message}\n`));

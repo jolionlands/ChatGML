@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { Writable, Readable } from 'node:stream';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { main, EXIT_USAGE, EXIT_CONFIG, EXIT_OK } from '../src/cli.js';
+import { main, readPackageVersion, EXIT_USAGE, EXIT_CONFIG, EXIT_OK } from '../src/cli.js';
 import type { CliDeps, CliIo } from '../src/cli.js';
 import { FakeEmbeddings } from './helpers/fakes.js';
 import { FakeLlm } from './helpers/fake-llm.js';
@@ -156,7 +156,7 @@ describe('cli main', () => {
     const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
     const code = await main(['index', repo.root], depsWith({ io }));
     expect(code).toBe(EXIT_OK);
-    expect(out.text()).toMatch(/indexed: \d+ added/);
+    expect(out.text()).toMatch(/indexed: \d+ scanned, \d+ added/);
   });
 
   it('chat runs the REPL over an injected line source and exits 0', async () => {
@@ -219,5 +219,144 @@ describe('cli main', () => {
     const io: CliIo = { stdout: sink().out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
     const code = await main([], { io });
     expect(code).toBe(EXIT_USAGE);
+  });
+
+  // --- F1/F2: index target validation (no stray store on a typo'd / file path). -----------------
+  it('index of a NON-EXISTENT dir errors (exit 2) and creates NO store — F1', async () => {
+    const parent = mkdtempSync(path.join(tmpdir(), 'chatgml-cli-noexist-'));
+    cleanup = () => rmSync(parent, { recursive: true, force: true });
+    const bogus = path.join(parent, 'does-not-exist');
+    const err = sink();
+    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['index', bogus], depsWith({ io }));
+    expect(code).toBe(EXIT_USAGE);
+    expect(err.text()).toContain('is not an existing directory');
+    expect(existsSync(bogus)).toBe(false); // the typo'd path was NOT brought into existence
+    expect(existsSync(path.join(bogus, '.chatgml'))).toBe(false);
+  });
+
+  it('index of a FILE path errors (exit 2) with a clear message — F2', async () => {
+    const repo = makeTmpRepo({ 'BLANK.yyp': '{}' });
+    cleanup = repo.cleanup;
+    const err = sink();
+    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['index', path.join(repo.root, 'BLANK.yyp')], depsWith({ io }));
+    expect(code).toBe(EXIT_USAGE);
+    expect(err.text()).toContain('is a file, expected a directory');
+    expect(err.text()).not.toContain('ENOTDIR');
+  });
+
+  // --- F3/F22: empty-index signal + GameMaker confirmation. -------------------------------------
+  it('indexing a dir with NO indexable files warns and reports scanned:0 — F3', async () => {
+    const repo = makeTmpRepo({ 'data.bin': 'ignored', 'notes.unknownext': 'x' });
+    cleanup = repo.cleanup;
+    const out = sink();
+    const err = sink();
+    const io: CliIo = { stdout: out.out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['index', repo.root], depsWith({ io }));
+    expect(code).toBe(EXIT_OK);
+    expect(out.text()).toContain('0 scanned');
+    expect(err.text()).toContain('indexed 0 files');
+    expect(err.text()).toContain('.gml'); // names the indexed extensions
+  });
+
+  it('a fresh GameMaker project (.yyp, no .gml) is detected and gets a GM hint — F3/F22', async () => {
+    const repo = makeTmpRepo({ 'BLANK GAME.yyp': '{}' });
+    cleanup = repo.cleanup;
+    const out = sink();
+    const err = sink();
+    const io: CliIo = { stdout: out.out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['index', repo.root], depsWith({ io }));
+    expect(code).toBe(EXIT_OK);
+    expect(out.text()).toContain('GameMaker project detected (BLANK GAME.yyp)');
+    expect(err.text()).toContain('no .gml files yet');
+  });
+
+  // --- F13: --approval validation. -------------------------------------------------------------
+  it('--approval with an invalid value is a usage error (exit 2), not silently gated — F13', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'x\n' });
+    cleanup = repo.cleanup;
+    const err = sink();
+    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['--approval', 'BOGUS', 'config', 'show', repo.root], { io });
+    expect(code).toBe(EXIT_USAGE);
+  });
+
+  it('--approval auto is still accepted', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'x\n' });
+    cleanup = repo.cleanup;
+    const out = sink();
+    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(
+      ['--approval', 'auto', '--trust-project-config', 'config', 'show', repo.root],
+      { io },
+    );
+    expect(code).toBe(EXIT_OK);
+    expect(out.text()).toContain('"approval": "auto"');
+  });
+
+  // --- F16: usage error printed EXACTLY once. --------------------------------------------------
+  it('unknown command prints the error exactly once — F16', async () => {
+    const err = sink();
+    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['frobnicate'], { io });
+    expect(code).toBe(EXIT_USAGE);
+    const occurrences = err.text().split('unknown command').length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  // --- F19: unknown-option hint about global placement. ----------------------------------------
+  it('a global flag placed AFTER the subcommand errors with an actionable hint — F19', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'x\n' });
+    cleanup = repo.cleanup;
+    const err = sink();
+    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['index', repo.root, '--scope', 'foo'], depsWith({ io }));
+    expect(code).toBe(EXIT_USAGE);
+    expect(err.text()).toContain('must come BEFORE the subcommand');
+  });
+
+  // --- F14: literal plaintext secret in the untrusted project file warns loudly (redacted). -----
+  it('a literal secret in a project .chatgml.json warns to stderr (redacted) — F14', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'x\n' });
+    cleanup = repo.cleanup;
+    writeFileSync(
+      path.join(repo.root, '.chatgml.json'),
+      JSON.stringify({ chat: { apiKey: 'sk-LITERAL-LEAK' } }),
+      'utf8',
+    );
+    const out = sink();
+    const err = sink();
+    const io: CliIo = { stdout: out.out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['config', 'show', repo.root], { io });
+    expect(code).toBe(EXIT_OK);
+    expect(err.text()).toContain('WARNING');
+    expect(err.text()).toContain('chat.apiKey');
+    // The warning must be REDACTED — never echo the literal key.
+    expect(err.text()).not.toContain('sk-LITERAL-LEAK');
+  });
+
+  // --- F20: config set --help lists settable fields + the env: secret rule. ---------------------
+  it('config set --help lists settable fields and the env-only secret rule — F20', async () => {
+    const out = sink();
+    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['config', 'set', '--help'], { io });
+    expect(code).toBe(EXIT_OK);
+    expect(out.text()).toContain('Settable fields');
+    expect(out.text()).toContain('chat.apiKey');
+    expect(out.text()).toContain('env:');
+  });
+
+  // --- F23: version read from package.json (not hard-coded). ------------------------------------
+  it('--version prints the package.json version — F23', async () => {
+    const out = sink();
+    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const code = await main(['--version'], { io });
+    expect(code).toBe(EXIT_OK);
+    const pkg = JSON.parse(
+      readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'),
+    ) as { version: string };
+    expect(readPackageVersion()).toBe(pkg.version);
+    expect(out.text().trim()).toBe(pkg.version);
   });
 });

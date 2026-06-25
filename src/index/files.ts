@@ -40,6 +40,13 @@ export const EXCLUDE_DIRS: readonly string[] = [
 ];
 
 /**
+ * Specific filenames never indexed: ChatGML's own project-local config (a `.json` that would
+ * otherwise be walked and embedded, polluting the corpus). The `.chatgml/` STORE dir is already
+ * excluded via EXCLUDE_DIRS; this covers the sibling config file. (F7)
+ */
+export const EXCLUDE_FILES: readonly string[] = ['.chatgml.json'];
+
+/**
  * File extensions excluded from indexing (GameMaker binary/output + common binaries).
  * `.yy`/`.yyp` are project JSON we do NOT index in v1 (path-only domain; trailing commas).
  */
@@ -225,6 +232,7 @@ async function* walkDir(
       if (isIgnored(`${rel}/`) || isIgnored(rel)) continue;
       yield* walkDir(root, abs, isIgnored, exts, allExt, visited);
     } else if (e.isFile()) {
+      if (EXCLUDE_FILES.includes(e.name)) continue;
       if (isIgnored(rel)) continue;
       const ext = path.extname(e.name).toLowerCase();
       if (EXCLUDE_EXTENSIONS.includes(ext)) continue;

@@ -27,6 +27,8 @@ interface RawChunk {
   text: string;
   startLine: number; // 1-based inclusive
   endLine: number; // 1-based inclusive
+  /** 0-based piece index when a single oversize line is character-split (else absent). Keeps ids unique. */
+  part?: number;
 }
 
 /**
@@ -57,7 +59,24 @@ export function chunkText(text: string, opts: ChunkOptions = {}): RawChunk[] {
     }
     // `end` is now the exclusive line bound (at least start+1).
     const slice = lines.slice(start, end).join('\n');
-    chunks.push({ text: slice, startLine: start + 1, endLine: end });
+
+    // Hard character cap: a single line longer than chunkSize would otherwise become one giant chunk
+    // that overflows a real embedder's token limit. When this window is a single oversize line, split
+    // it on character boundaries into <=chunkSize pieces (all sharing the same 1-based line range so
+    // citations still point at the line). Empty pieces are never emitted. (F5)
+    if (end === start + 1 && slice.length > chunkSize) {
+      let part = 0;
+      for (let off = 0; off < slice.length; off += chunkSize) {
+        chunks.push({
+          text: slice.slice(off, off + chunkSize),
+          startLine: start + 1,
+          endLine: end,
+          part: part++,
+        });
+      }
+    } else {
+      chunks.push({ text: slice, startLine: start + 1, endLine: end });
+    }
 
     if (end >= n) break;
 
@@ -100,11 +119,18 @@ export function chunkFile(
   text: string,
   opts: ChunkOptions & { lang?: string } = {},
 ): Chunk[] {
-  const raw = chunkText(text, opts);
+  // Drop any empty/whitespace-only window. A `>chunkSize` line followed by a trailing newline used to
+  // produce a zero-length trailing chunk (id `path#2-2`, len 0) whose `''` was then embedded. (F4)
+  const raw = chunkText(text, opts).filter((rc) => rc.text.trim() !== '');
   const functions = relPath.toLowerCase().endsWith('.gml') ? detectFunctionBoundaries(text) : [];
 
   return raw.map((rc) => {
-    const id = `${relPath}#${rc.startLine}-${rc.endLine}`;
+    // A character-split oversize line gets a `~partN` suffix so multiple pieces of the same line range
+    // have DISTINCT ids (otherwise the store's id-keyed map would drop all but the last piece). (F5)
+    const id =
+      rc.part !== undefined
+        ? `${relPath}#${rc.startLine}-${rc.endLine}~${rc.part}`
+        : `${relPath}#${rc.startLine}-${rc.endLine}`;
     const chunk: Chunk = {
       id,
       path: relPath,

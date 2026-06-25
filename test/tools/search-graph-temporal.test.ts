@@ -116,8 +116,9 @@ describe('graph_neighbors tool', () => {
 });
 
 describe('temporal_query tool', () => {
-  it('builds the TemporalQuery and maps temporal hits', async () => {
+  it('builds the TemporalQuery and maps temporal hits (F12: changedAt, not score)', async () => {
     let q: unknown = null;
+    const TS = 1782422357447; // a 2026 epoch ms
     const memory = fakeProvider({
       async temporalQuery(query) {
         q = query;
@@ -126,8 +127,9 @@ describe('temporal_query tool', () => {
             chunkId: 'temporal:a.gml@1',
             path: 'a.gml',
             text: 'modified a.gml',
-            score: 1,
+            score: TS, // local provider sets score = timestamp
             source: 'temporal',
+            extra: { changeKind: 'modified', contentHash: 'h', timestamp: TS },
           },
         ];
       },
@@ -138,8 +140,16 @@ describe('temporal_query tool', () => {
       ctx,
     );
     expect(q).toEqual({ kind: 'changed-since', path: 'a.gml', since: 1000, limit: 5 });
-    expect(res.content).toContain('temporal result');
-    expect(res.citations?.[0]?.path).toBe('a.gml');
+    // Dedicated formatter: ISO date + change kind, NOT "score 1782422357447.000".
+    expect(res.content).toContain('change event(s)');
+    expect(res.content).toContain('modified');
+    expect(res.content).not.toContain('score 1782422357447');
+    const c = res.citations?.[0];
+    expect(c?.path).toBe('a.gml');
+    // The epoch is surfaced in changedAt/changeKind and NEVER leaked into the 0..1 relevance score.
+    expect(c?.changedAt).toBe(TS);
+    expect(c?.changeKind).toBe('modified');
+    expect(c?.score).toBeUndefined();
   });
 
   it('defaults kind to history', async () => {
@@ -153,6 +163,26 @@ describe('temporal_query tool', () => {
     const { ctx } = makeToolContext({ root: '/r', memory });
     await temporalTool.execute({}, ctx);
     expect(kind).toBe('history');
+  });
+
+  it('formats a hit with NO extra/path defensively (unknown time/kind/loc) — F12', async () => {
+    const memory = fakeProvider({
+      async temporalQuery() {
+        // A degenerate hit: no `extra`, a non-finite score, and no path.
+        return [{ chunkId: 'temporal:?', text: 'x', score: NaN, source: 'temporal' }];
+      },
+    });
+    // No path arg either -> exercises the optional `args.path` branch.
+    const { ctx } = makeToolContext({ root: '/r', memory });
+    const res = await temporalTool.execute({}, ctx);
+    expect(res.content).toContain('unknown time');
+    expect(res.content).toContain('changed'); // changeKind fallback
+    expect(res.content).toContain('(unknown)'); // path fallback
+    // Defensive citation: no changedAt (NaN dropped), no changeKind, no score.
+    const c = res.citations?.[0];
+    expect(c?.changedAt).toBeUndefined();
+    expect(c?.changeKind).toBeUndefined();
+    expect(c?.score).toBeUndefined();
   });
 
   it('provider throw -> provider_error', async () => {

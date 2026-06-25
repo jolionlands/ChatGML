@@ -6,10 +6,9 @@
 import { defineTool, ToolError } from '../tool-error.js';
 import type { ToolDef, ToolResult, ToolContext, Citation } from '../types.js';
 import { z } from 'zod';
-import type { TemporalQuery } from '../memory/types.js';
+import type { Hit, TemporalQuery } from '../memory/types.js';
 import { hitToCitation } from '../memory/types.js';
 import { gmlDeriverForRoot } from '../index/files.js';
-import { formatHits } from './search.js';
 
 const TemporalArgs = z.object({
   path: z.string().optional().describe('repo-relative path to query history for (omit for all)'),
@@ -44,6 +43,24 @@ export const temporalTool: ToolDef<TemporalArgs> = defineTool<TemporalArgs>({
     }
     const derive = gmlDeriverForRoot(ctx.root);
     const citations: Citation[] = hits.map((h) => hitToCitation(h, ctx.memory.id, derive));
-    return { content: formatHits('temporal', hits), citations };
+    return { content: formatTemporalHits(hits), citations };
   },
 });
+
+/**
+ * Format temporal change events for the model: an ISO timestamp + change kind, NEWEST first. Does NOT
+ * print the epoch as a "score" (the old `formatHits` did `score 1782422357447.000`, which is
+ * meaningless to the model and conflated with relevance). (F12)
+ */
+export function formatTemporalHits(hits: Hit[]): string {
+  if (hits.length === 0) return 'no temporal results';
+  const lines = hits.map((h, i) => {
+    const extra = h.extra ?? {};
+    const ts = typeof extra['timestamp'] === 'number' ? (extra['timestamp'] as number) : h.score;
+    const when = Number.isFinite(ts) ? new Date(ts).toISOString() : 'unknown time';
+    const kind = typeof extra['changeKind'] === 'string' ? (extra['changeKind'] as string) : 'changed';
+    const loc = h.path ?? '(unknown)';
+    return `${i + 1}. ${when}  ${kind}  ${loc}`;
+  });
+  return `${hits.length} change event(s):\n${lines.join('\n')}`;
+}

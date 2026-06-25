@@ -115,6 +115,18 @@ describe('walkFiles', () => {
     }
   });
 
+  it('never walks ChatGML\'s own project-local .chatgml.json — F7', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'x', '.chatgml.json': '{"chat":{"model":"m"}}' });
+    try {
+      // Even with allExtensions, the config dotfile (a .json) must be excluded.
+      const files = await collect(repo.root, () => false, { allExtensions: true });
+      expect(files).toContain('a.gml');
+      expect(files).not.toContain('.chatgml.json');
+    } finally {
+      repo.cleanup();
+    }
+  });
+
   it('allExtensions:true includes files outside the default extension set', async () => {
     const repo = makeTmpRepo({ 'a.weirdext': 'x', 'b.gml': 'y' });
     try {

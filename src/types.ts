@@ -51,10 +51,15 @@ export interface Citation {
   startLine?: number;
   endLine?: number;
   snippet?: string;
+  /** Relevance score (0..1 for search/graph). NOT a timestamp — temporal hits use `changedAt`. */
   score?: number;
   provider?: 'local' | 'hippo';
   symbol?: SymbolRef;
   gml?: GmlMeta;
+  /** Epoch ms of the change, for temporal-history citations (never overloaded into `score`). */
+  changedAt?: number;
+  /** The kind of change, for temporal-history citations. */
+  changeKind?: 'added' | 'modified' | 'unchanged' | 'deleted';
 }
 
 export interface Usage {

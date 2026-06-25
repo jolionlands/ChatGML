@@ -81,7 +81,21 @@ export function hitToCitation(
   provider: 'local' | 'hippo',
   deriveGmlMeta: (p: string) => GmlMeta | undefined,
 ): Citation {
-  const c: Citation = { snippet: hit.text, score: hit.score, provider };
+  const c: Citation = { snippet: hit.text, provider };
+  // A temporal hit's `score` is the change TIMESTAMP, not a 0..1 relevance — never copy it into
+  // Citation.score (a frontend sorting `sources` by score would rank a 2026 epoch above every real
+  // match). Surface it in dedicated `changedAt`/`changeKind` fields instead. (F12)
+  if (hit.source === 'temporal') {
+    const extra = hit.extra ?? {};
+    const ts = typeof extra['timestamp'] === 'number' ? (extra['timestamp'] as number) : hit.score;
+    if (Number.isFinite(ts)) c.changedAt = ts;
+    const kind = extra['changeKind'];
+    if (kind === 'added' || kind === 'modified' || kind === 'unchanged' || kind === 'deleted') {
+      c.changeKind = kind;
+    }
+  } else {
+    c.score = hit.score;
+  }
   if (hit.path !== undefined) {
     c.path = hit.path;
     const gml = deriveGmlMeta(hit.path);

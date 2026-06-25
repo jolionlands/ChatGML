@@ -225,6 +225,80 @@ describe('required-field validation (paths only, never values)', () => {
       ConfigError,
     );
   });
+
+  // F18: an unrecognized top-level key NAMES the offending key (not '(root)').
+  it('an unknown top-level config key is NAMED in the error — F18', () => {
+    const h = harness();
+    h.writeGlobal({ chatt: { model: 'x' }, scope: 's' }); // typo: "chatt"
+    let msg = '';
+    try {
+      resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: baseFlags() });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain('chatt');
+    expect(msg).not.toContain('(root)');
+  });
+
+  // F18: an enum failure lists the allowed values.
+  it('an invalid approval enum lists the allowed values — F18', () => {
+    const h = harness();
+    h.writeGlobal({ approval: 'sometimes', scope: 's' });
+    let msg = '';
+    try {
+      resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: baseFlags() });
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain('approval');
+    expect(msg).toContain('gated');
+    expect(msg).toContain('auto');
+  });
+});
+
+// F14: a literal plaintext secret in the UNTRUSTED project file emits a redacted warning.
+describe('literal-secret warning on the untrusted project file — F14', () => {
+  it('warns (redacted) when chat.apiKey is a literal in .chatgml.json', () => {
+    const h = harness();
+    h.writeProject({ chat: { apiKey: SENTINEL } });
+    const warnings: string[] = [];
+    resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: baseFlags(),
+      warn: (m) => warnings.push(m),
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('chat.apiKey');
+    expect(warnings[0]).toContain('.chatgml.json');
+    expect(warnings[0]).not.toContain(SENTINEL); // redacted
+  });
+
+  it('does NOT warn when the project secret is an env: reference', () => {
+    const h = harness();
+    h.writeProject({ chat: { apiKey: 'env:SOME_KEY' } });
+    const warnings: string[] = [];
+    resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg, SOME_KEY: SENTINEL },
+      flags: baseFlags(),
+      warn: (m) => warnings.push(m),
+    });
+    expect(warnings.length).toBe(0);
+  });
+
+  it('does NOT warn for a literal secret in the TRUSTED global file', () => {
+    const h = harness();
+    h.writeGlobal({ chat: { apiKey: SENTINEL }, scope: 's' });
+    const warnings: string[] = [];
+    resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: baseFlags(),
+      warn: (m) => warnings.push(m),
+    });
+    expect(warnings.length).toBe(0);
+  });
 });
 
 describe('untrusted project-config guard', () => {
