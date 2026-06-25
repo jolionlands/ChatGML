@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { Writable, Readable } from 'node:stream';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { main, EXIT_USAGE, EXIT_CONFIG, EXIT_OK } from '../src/cli.js';
 import type { CliDeps, CliIo } from '../src/cli.js';
 import { FakeEmbeddings } from './helpers/fakes.js';
@@ -58,21 +61,74 @@ describe('cli main', () => {
     expect(err.text()).not.toContain(SENTINEL);
   });
 
-  it('config set refuses a literal secret and exits usage', async () => {
+  it('config set refuses a literal secret and exits usage (nothing written)', async () => {
+    const xdg = mkdtempSync(path.join(tmpdir(), 'chatgml-cli-xdg-'));
+    cleanup = () => rmSync(xdg, { recursive: true, force: true });
     const out = sink();
     const err = sink();
-    const io: CliIo = { stdout: out.out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: { ...baseEnv(), XDG_CONFIG_HOME: xdg },
+    };
     const code = await main(['config', 'set', 'chat.apiKey', SENTINEL], { io });
     expect(code).toBe(EXIT_USAGE);
     expect(err.text()).toContain('refusing to persist a literal secret');
     expect(out.text()).not.toContain(SENTINEL);
+    // The literal secret must never have been written anywhere.
+    expect(existsSync(path.join(xdg, 'chatgml', 'config.json'))).toBe(false);
   });
 
-  it('config set accepts an env: reference', async () => {
+  it('config set DURABLY persists an env: reference to the user-global file', async () => {
+    const xdg = mkdtempSync(path.join(tmpdir(), 'chatgml-cli-xdg-'));
+    cleanup = () => rmSync(xdg, { recursive: true, force: true });
     const out = sink();
-    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: { ...baseEnv(), XDG_CONFIG_HOME: xdg },
+    };
     const code = await main(['config', 'set', 'chat.apiKey', 'env:MY_KEY'], { io });
     expect(code).toBe(EXIT_OK);
+    const file = path.join(xdg, 'chatgml', 'config.json');
+    expect(existsSync(file)).toBe(true);
+    const written = JSON.parse(readFileSync(file, 'utf8'));
+    // The env: REFERENCE is persisted (never the resolved secret), and re-reads after restart.
+    expect(written.chat.apiKey).toBe('env:MY_KEY');
+    expect(JSON.stringify(written)).not.toContain(SENTINEL);
+  });
+
+  it('config set persists a non-secret field and round-trips', async () => {
+    const xdg = mkdtempSync(path.join(tmpdir(), 'chatgml-cli-xdg-'));
+    cleanup = () => rmSync(xdg, { recursive: true, force: true });
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: { ...baseEnv(), XDG_CONFIG_HOME: xdg },
+    };
+    expect(await main(['config', 'set', 'chat.model', 'persisted-model'], { io })).toBe(EXIT_OK);
+    expect(await main(['config', 'set', 'scope', 'persisted-scope'], { io })).toBe(EXIT_OK);
+    const written = JSON.parse(
+      readFileSync(path.join(xdg, 'chatgml', 'config.json'), 'utf8'),
+    );
+    expect(written.chat.model).toBe('persisted-model');
+    expect(written.scope).toBe('persisted-scope'); // second set merges, not clobbers
+  });
+
+  it('config set on an unknown field -> config error (exit 3)', async () => {
+    const xdg = mkdtempSync(path.join(tmpdir(), 'chatgml-cli-xdg-'));
+    cleanup = () => rmSync(xdg, { recursive: true, force: true });
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: { ...baseEnv(), XDG_CONFIG_HOME: xdg },
+    };
+    const code = await main(['config', 'set', 'chat.bogus', 'x'], { io });
+    expect(code).toBe(EXIT_CONFIG);
   });
 
   it('missing required config field -> exit code 3 (ConfigError)', async () => {

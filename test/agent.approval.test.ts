@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createApprovalGate, buildSystemPrompt } from '../src/agent.js';
+import { buildToolRegistry } from '../src/tools/index.js';
 import type { AgentEvent, Config, ApprovalRequest } from '../src/types.js';
 
 const REQ: ApprovalRequest = { id: 'e1', kind: 'edit', path: 'a.gml', diff: '--- a\n+++ b\n' };
@@ -63,8 +64,8 @@ function fakeConfig(approval: 'gated' | 'auto'): Config {
 }
 
 describe('buildSystemPrompt', () => {
-  it('lists the tools, the approval mode, and the untrusted-content clause', () => {
-    const p = buildSystemPrompt(fakeConfig('gated'));
+  it('lists the tools, the approval mode, and the untrusted-content clause (gated registry)', () => {
+    const p = buildSystemPrompt(fakeConfig('gated'), buildToolRegistry());
     expect(p).toContain('glob');
     expect(p).toContain('search_code');
     expect(p).toContain('apply_patch');
@@ -74,8 +75,25 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('game');
   });
 
-  it('reflects auto mode', () => {
-    const p = buildSystemPrompt(fakeConfig('auto'));
+  it('reflects auto mode when a gated edit tool is present', () => {
+    const p = buildSystemPrompt(fakeConfig('auto'), buildToolRegistry());
     expect(p).toContain('auto-applied');
+    expect(p).toContain('apply_patch');
+  });
+
+  it('omits apply_patch when the registry is read-only (no gated tool)', () => {
+    const p = buildSystemPrompt(fakeConfig('gated'), buildToolRegistry({ readOnly: true }));
+    expect(p).toContain('glob');
+    expect(p).not.toContain('apply_patch');
+    expect(p).not.toContain('APPROVAL-GATED');
+    expect(p).toContain('READ-ONLY');
+    // the untrusted-content clause is always present
+    expect(p).toContain('UNTRUSTED');
+  });
+
+  it('omits apply_patch when no registry is supplied (conservative default)', () => {
+    const p = buildSystemPrompt(fakeConfig('gated'));
+    expect(p).not.toContain('apply_patch');
+    expect(p).toContain('READ-ONLY');
   });
 });

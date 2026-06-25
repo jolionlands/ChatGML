@@ -9,7 +9,10 @@ import {
   ConfigError,
   DEFAULTS,
   configFilePaths,
+  setUserGlobalConfigField,
+  userGlobalConfigPath,
 } from '../src/config.js';
+import { readFileSync, existsSync } from 'node:fs';
 
 const SENTINEL = 'sk-SENTINEL-DEADBEEF';
 
@@ -399,5 +402,88 @@ describe('resolveConfig — required-field + hippo-key branches', () => {
     });
     expect(cfg.memory.provider).toBe('hippo');
     if (cfg.memory.provider === 'hippo') expect(cfg.memory.key).toBeUndefined();
+  });
+});
+
+describe('setUserGlobalConfigField (durable config set)', () => {
+  it('writes a non-secret field to the user-global file and creates the dir', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    const before = userGlobalConfigPath(env);
+    expect(existsSync(before)).toBe(false);
+    const res = setUserGlobalConfigField('chat.model', 'm-1', env);
+    expect(res.filePath).toBe(before);
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.chat.model).toBe('m-1');
+  });
+
+  it('coerces numeric fields', () => {
+    const h = harness();
+    const res = setUserGlobalConfigField('index.chunkSize', '4096', { XDG_CONFIG_HOME: h.xdg });
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.index.chunkSize).toBe(4096);
+    expect(typeof written.index.chunkSize).toBe('number');
+  });
+
+  it('rejects a non-numeric value for a numeric field', () => {
+    const h = harness();
+    expect(() =>
+      setUserGlobalConfigField('chat.temperature', 'hot', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(ConfigError);
+  });
+
+  it('merges into an existing file rather than clobbering it', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    h.writeGlobal({ chat: { model: 'old', baseURL: 'http://c/v1' }, scope: 's' });
+    setUserGlobalConfigField('chat.apiKey', 'env:KEYREF', env);
+    const written = JSON.parse(readFileSync(userGlobalConfigPath(env), 'utf8'));
+    expect(written.chat.model).toBe('old'); // preserved
+    expect(written.chat.baseURL).toBe('http://c/v1'); // preserved
+    expect(written.chat.apiKey).toBe('env:KEYREF'); // added
+    expect(written.scope).toBe('s'); // preserved
+  });
+
+  it('REFUSES a literal secret (never writes the file) for each secret field', () => {
+    for (const field of ['chat.apiKey', 'embed.apiKey', 'memory.hippo.key']) {
+      const h = harness();
+      const env = { XDG_CONFIG_HOME: h.xdg };
+      expect(() => setUserGlobalConfigField(field, SENTINEL, env)).toThrow(/literal secret/);
+      // Nothing was written.
+      expect(existsSync(userGlobalConfigPath(env))).toBe(false);
+    }
+  });
+
+  it('accepts an env: reference for a secret field and writes the REFERENCE only', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    setUserGlobalConfigField('embed.apiKey', 'env:EMBED_KEY', env);
+    const text = readFileSync(userGlobalConfigPath(env), 'utf8');
+    expect(text).toContain('env:EMBED_KEY');
+    expect(text).not.toContain(SENTINEL);
+  });
+
+  it('throws on an unknown field', () => {
+    const h = harness();
+    expect(() =>
+      setUserGlobalConfigField('chat.nope', 'x', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(/unknown config field/);
+  });
+
+  it('rejects a value that would make the merged config invalid', () => {
+    const h = harness();
+    expect(() =>
+      setUserGlobalConfigField('approval', 'maybe', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(ConfigError);
+  });
+
+  it('refuses to overwrite a corrupt existing config file', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    // Write invalid JSON to the user-global file.
+    const dir = path.join(h.xdg, 'chatgml');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'config.json'), '{ not json', 'utf8');
+    expect(() => setUserGlobalConfigField('scope', 's', env)).toThrow(ConfigError);
   });
 });

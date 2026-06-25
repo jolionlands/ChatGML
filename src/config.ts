@@ -58,7 +58,7 @@ function isEnvRef(value: string | undefined): boolean {
 // ---------------------------------------------------------------------------
 
 /** User-global config path: ~/.config/chatgml/config.json (XDG-ish; trusted layer). */
-function userGlobalConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+export function userGlobalConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   const xdg = env['XDG_CONFIG_HOME'];
   const base = xdg && xdg.length > 0 ? xdg : path.join(os.homedir(), '.config');
   return path.join(base, 'chatgml', 'config.json');
@@ -514,4 +514,123 @@ export function redact(config: Config): unknown {
     index: config.index,
   };
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Durable `config set`: write a single field to the user-global config file.
+//
+// The user-global file (~/.config/chatgml/config.json) is the TRUSTED layer and lives OUTSIDE any
+// repo, so it is the only durable target for `config set`. Secret fields (chat.apiKey /
+// embed.apiKey / memory.hippo.key) may only be set to an `env:NAME` reference — a literal key is
+// refused so a raw secret is never written to disk (and never into a repo-tracked file).
+// ---------------------------------------------------------------------------
+
+/** The dotted field paths that carry a secret; only an `env:NAME` reference is persistable. */
+export const SECRET_FIELD_PATHS = new Set(['chat.apiKey', 'embed.apiKey', 'memory.hippo.key']);
+
+/**
+ * The dotted field paths `config set` understands, mapped to where they live in the partial-config
+ * object. `memory.hippo.url`/`memory.hippo.key` write to `memory.url`/`memory.key` (the provider is
+ * implied). Anything else is rejected as an unknown field.
+ */
+const SETTABLE_FIELDS: Record<string, { path: string[]; type: 'string' | 'number' }> = {
+  'chat.baseURL': { path: ['chat', 'baseURL'], type: 'string' },
+  'chat.apiKey': { path: ['chat', 'apiKey'], type: 'string' },
+  'chat.model': { path: ['chat', 'model'], type: 'string' },
+  'chat.temperature': { path: ['chat', 'temperature'], type: 'number' },
+  'chat.maxTokens': { path: ['chat', 'maxTokens'], type: 'number' },
+  'embed.baseURL': { path: ['embed', 'baseURL'], type: 'string' },
+  'embed.apiKey': { path: ['embed', 'apiKey'], type: 'string' },
+  'embed.model': { path: ['embed', 'model'], type: 'string' },
+  'embed.batchSize': { path: ['embed', 'batchSize'], type: 'number' },
+  'memory.provider': { path: ['memory', 'provider'], type: 'string' },
+  'memory.hippo.url': { path: ['memory', 'url'], type: 'string' },
+  'memory.hippo.key': { path: ['memory', 'key'], type: 'string' },
+  scope: { path: ['scope'], type: 'string' },
+  approval: { path: ['approval'], type: 'string' },
+  'index.chunkSize': { path: ['index', 'chunkSize'], type: 'number' },
+  'index.chunkOverlap': { path: ['index', 'chunkOverlap'], type: 'number' },
+  'index.root': { path: ['index', 'root'], type: 'string' },
+};
+
+export interface SetConfigResult {
+  /** The absolute path of the user-global config file that was written. */
+  filePath: string;
+}
+
+/**
+ * Set a single config field in the user-global config file, creating it (and its directory) if
+ * needed. Refuses a literal secret for a secret field (only `env:NAME` is allowed). Coerces numeric
+ * fields. Validates the merged result against the partial-config schema so a bad write is rejected.
+ * Never touches any repo-tracked file (always the user-global path).
+ *
+ * @throws {ConfigError} on an unknown field, a literal secret, a bad numeric value, or a result that
+ *   fails schema validation.
+ */
+export function setUserGlobalConfigField(
+  field: string,
+  value: string,
+  env: NodeJS.ProcessEnv = process.env,
+): SetConfigResult {
+  const spec = SETTABLE_FIELDS[field];
+  if (!spec) {
+    throw new ConfigError(`unknown config field '${field}'`);
+  }
+  if (SECRET_FIELD_PATHS.has(field) && !isEnvRef(value)) {
+    throw new ConfigError(
+      `refusing to persist a literal secret for '${field}'; use an env reference (env:NAME)`,
+    );
+  }
+
+  // Coerce the value to the field's type.
+  let coerced: string | number;
+  if (spec.type === 'number') {
+    const n = num(value);
+    if (n === undefined) {
+      throw new ConfigError(`config field '${field}' expects a number, got '${value}'`);
+    }
+    coerced = n;
+  } else {
+    coerced = value;
+  }
+
+  const filePath = userGlobalConfigPath(env);
+
+  // Load the existing user-global file (if any) as a mutable object. A corrupt file is a hard error
+  // rather than a silent overwrite (so a typo never nukes the user's config).
+  let current: Record<string, unknown> = {};
+  const existing = readJsonFile(filePath); // throws ConfigError on invalid JSON
+  if (existing !== undefined) {
+    if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) {
+      throw new ConfigError(`existing config file is not a JSON object: ${filePath}`);
+    }
+    current = { ...(existing as Record<string, unknown>) };
+  }
+
+  setNested(current, spec.path, coerced);
+
+  // Validate the merged object so we never write a structurally-invalid config.
+  const parsed = PartialConfigSchema.safeParse(current);
+  if (!parsed.success) {
+    const firstPath = parsed.error.issues[0]?.path.join('.') ?? '(root)';
+    throw new ConfigError(`config field '${field}' would make the config invalid at '${firstPath}'`);
+  }
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
+  return { filePath };
+}
+
+/** Set a nested value, creating intermediate plain objects as needed. */
+function setNested(obj: Record<string, unknown>, keys: string[], value: unknown): void {
+  let node = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const k = keys[i]!;
+    const child = node[k];
+    if (typeof child !== 'object' || child === null || Array.isArray(child)) {
+      node[k] = {};
+    }
+    node = node[k] as Record<string, unknown>;
+  }
+  node[keys[keys.length - 1]!] = value;
 }

@@ -113,6 +113,13 @@ function mapUsage(raw: RawUsage | null | undefined): Usage | undefined {
  * JSON values (or the literal string '[DONE]' sentinel handled by the caller).
  *
  * `push(chunk)` returns the complete payloads found so far; partial trailing lines are buffered.
+ *
+ * Tolerance: a COMPLETE `data:` line whose payload is not valid JSON (and is not the `[DONE]`
+ * sentinel) is SKIPPED rather than fatal. Some OpenAI-compatible gateways interleave non-JSON
+ * `data:` frames (proxy keep-alives, server pings, gateway error annotations) into the stream; a
+ * single junk frame must not abort an otherwise-good stream, so the parser drops it and continues
+ * with the real token frames. (Truly unrecoverable framing — e.g. a never-terminated payload — is
+ * surfaced elsewhere; this parser only sees complete lines here.)
  */
 export class SseParser {
   private buffer = '';
@@ -135,14 +142,11 @@ export class SseParser {
         out.push(DONE);
         continue;
       }
-      try {
-        out.push(JSON.parse(payload));
-      } catch {
-        // A JSON object split across the data: prefix is unusual; if a server splits a single
-        // JSON object across multiple `data:` lines we cannot recover, but the standard contract
-        // is one JSON object per data: line. Re-buffer to be safe is not possible here; skip.
-        throw new LlmError('parse', 'failed to parse SSE data payload');
+      const parsed = tryParseJson(payload);
+      if (parsed.ok) {
+        out.push(parsed.value);
       }
+      // else: a complete-but-non-JSON `data:` line (gateway noise) -> skip it and keep going.
     }
     return out;
   }
@@ -154,11 +158,18 @@ export class SseParser {
     if (!rest.startsWith('data:')) return [];
     const payload = rest.slice('data:'.length).trim();
     if (payload === '' || payload === '[DONE]') return [];
-    try {
-      return [JSON.parse(payload)];
-    } catch {
-      throw new LlmError('parse', 'failed to parse trailing SSE data payload');
-    }
+    const parsed = tryParseJson(payload);
+    // A junk trailing payload is dropped (tolerant), same as mid-stream.
+    return parsed.ok ? [parsed.value] : [];
+  }
+}
+
+/** Parse JSON without throwing: `{ ok:true, value }` or `{ ok:false }`. */
+function tryParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch {
+    return { ok: false };
   }
 }
 

@@ -1,12 +1,18 @@
-# This workflow will upload a Python Package using Twine when a release is created
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
+# NEUTRALIZED — this workflow is retained for history only, NOT deleted.
+#
+# It previously published the Python `talk_codebase` package to PyPI. That
+# package is part of the legacy Python tree which the TypeScript rewrite no
+# longer ships (and which must never be auto-published). The Python sources
+# (`talk_codebase/`, `setup.py`, `pyproject.toml`, ...) are kept in-repo as
+# recoverable history, but this publish pipeline is intentionally inert:
+#
+#   * the trigger is `workflow_dispatch` only (it never runs on push/release),
+#   * the single job is a documented no-op that builds/publishes nothing.
+#
+# If a future maintainer ever revives Python publishing, restore the original
+# build+twine steps from git history (commit before the TS rewrite).
 
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-name: Upload Python Package
+name: Upload Python Package (neutralized)
 
 on:
   workflow_dispatch:
@@ -15,24 +21,12 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
-
+  noop:
+    name: no-op (Python publishing is disabled)
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v3
-      with:
-        python-version: '3.x'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install build
-    - name: Build package
-      run: python -m build
-    - name: Publish package
-      uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29
-      with:
-        user: __token__
-        password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Explain why this workflow does nothing
+        run: |
+          echo "This workflow is intentionally neutralized."
+          echo "The Python talk_codebase package is no longer published from this repo."
+          echo "See the comment block at the top of this file for details."

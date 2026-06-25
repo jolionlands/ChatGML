@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SseParser, DONE, assembleToolCalls, LlmError } from '../src/llm.js';
+import { SseParser, DONE, assembleToolCalls } from '../src/llm.js';
 
 describe('SseParser', () => {
   it('parses a single data line', () => {
@@ -40,9 +40,34 @@ describe('SseParser', () => {
     expect(p.flush()).toEqual([{ n: 9 }]);
   });
 
-  it('throws LlmError(parse) on malformed JSON payload', () => {
+  it('SKIPS a stray non-JSON data line instead of throwing (tolerant)', () => {
     const p = new SseParser();
-    expect(() => p.push('data: {not json}\n')).toThrow(LlmError);
+    // A complete junk `data:` line in the middle of a stream is dropped, not fatal.
+    expect(() => p.push('data: {not json}\n')).not.toThrow();
+    expect(p.push('data: {not json}\n')).toEqual([]);
+  });
+
+  it('a stream containing a junk data line still yields the real token frames', () => {
+    const p = new SseParser();
+    const out = p.push(
+      'data: {"choices":[{"delta":{"content":"hi"}}]}\n' +
+        'data: this-is-not-json\n' +
+        'data: {"choices":[{"delta":{"content":" there"}}]}\n' +
+        'data: [DONE]\n',
+    );
+    // The two valid frames survive; the junk frame is skipped; [DONE] passes through.
+    expect(out).toEqual([
+      { choices: [{ delta: { content: 'hi' } }] },
+      { choices: [{ delta: { content: ' there' } }] },
+      DONE,
+    ]);
+  });
+
+  it('flush drops a junk trailing payload rather than throwing', () => {
+    const p = new SseParser();
+    expect(p.push('data: {bad')).toEqual([]); // buffered, no newline
+    expect(() => p.flush()).not.toThrow();
+    expect(p.flush()).toEqual([]);
   });
 });
 

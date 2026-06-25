@@ -30,27 +30,30 @@ export class FakeAgent implements AgentLike {
   }
 
   run(_command: InEvent, signal: AbortSignal): AsyncIterable<AgentEvent> {
-    const self = this;
+    // Register the release gate synchronously at call time (so release() before iteration works),
+    // then delegate to a generator method where `this` is available directly (no this-alias).
     const gate =
       this.script.after !== undefined
-        ? new Promise<void>((resolve) => self.releaseResolvers.push(resolve))
+        ? new Promise<void>((resolve) => this.releaseResolvers.push(resolve))
         : Promise.resolve();
-    return (async function* () {
-      for (const e of self.script.before ?? []) {
-        yield e;
-      }
-      if (self.script.after !== undefined) {
-        await gate;
-      }
-      if (signal.aborted) {
-        self.lastSignalAborted = true;
-        yield { type: 'status', phase: 'cancelled' } as AgentEvent;
-        return;
-      }
-      for (const e of self.script.after ?? []) {
-        yield e;
-      }
-    })();
+    return this.runGen(signal, gate);
+  }
+
+  private async *runGen(signal: AbortSignal, gate: Promise<void>): AsyncGenerator<AgentEvent> {
+    for (const e of this.script.before ?? []) {
+      yield e;
+    }
+    if (this.script.after !== undefined) {
+      await gate;
+    }
+    if (signal.aborted) {
+      this.lastSignalAborted = true;
+      yield { type: 'status', phase: 'cancelled' } as AgentEvent;
+      return;
+    }
+    for (const e of this.script.after ?? []) {
+      yield e;
+    }
   }
 
   resolveApproval(id: string, approved: boolean): void {

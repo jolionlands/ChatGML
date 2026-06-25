@@ -197,10 +197,16 @@ describe('runServe', () => {
 
   it('emits an error event if the agent run throws', async () => {
     const agent = new FakeAgent();
-    agent.run = () =>
-      (async function* () {
-        throw new Error('run blew up');
-      })();
+    // An AgentLike whose run() yields a stream that rejects on the first pull (the agent threw
+    // before emitting anything). Expressed as an explicit async-iterable so it has no empty
+    // generator body.
+    agent.run = () => ({
+      [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+        return {
+          next: () => Promise.reject(new Error('run blew up')),
+        };
+      },
+    });
     const { transport, input, outEvents } = makeTransport();
     const serve = runServe(agent, { transport });
     input.write('{"type":"user","text":"hi"}\n');

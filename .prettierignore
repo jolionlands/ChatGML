@@ -1,0 +1,19 @@
+# Build output / generated
+dist/
+coverage/
+node_modules/
+*.tsbuildinfo
+package-lock.json
+
+# Legacy Python tree (never touched / reformatted)
+talk_codebase/
+*.py
+
+# Legacy plugin (modernized in M6, left as-is until then)
+plugin/
+
+# Test fixtures with exact byte content
+test/fixtures/
+
+# Docs and config we don't want reflowed
+*.md

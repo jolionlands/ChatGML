@@ -9,7 +9,14 @@ import { Command } from 'commander';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { argv as processArgv } from 'node:process';
-import { resolveConfig, redact, ConfigError, configFilePaths } from './config.js';
+import {
+  resolveConfig,
+  redact,
+  ConfigError,
+  configFilePaths,
+  setUserGlobalConfigField,
+  SECRET_FIELD_PATHS,
+} from './config.js';
 import type { Config } from './types.js';
 import { LlmClient } from './llm.js';
 import { OpenAIEmbeddings, type Embeddings } from './index/embeddings.js';
@@ -196,23 +203,22 @@ function cmdConfigShow(root: string, flags: GlobalFlags, deps: CliDeps): number 
   return EXIT_OK;
 }
 
-const SECRET_FIELDS = new Set(['chat.apiKey', 'embed.apiKey', 'memory.hippo.key']);
-
 function cmdConfigSet(field: string, value: string, deps: CliDeps): number {
   const io = resolveIo(deps.io);
-  if (SECRET_FIELDS.has(field) && !value.startsWith('env:')) {
+  // Refuse a literal secret up front (so the user sees an actionable usage error, exit 2) before we
+  // ever touch the filesystem. Persistence itself ALSO refuses literal secrets defensively.
+  if (SECRET_FIELD_PATHS.has(field) && !value.startsWith('env:')) {
     io.stderr.write(
       `refusing to persist a literal secret for '${field}'. ` +
         `Use an env reference, e.g.  chatgml config set ${field} env:MY_KEY_VAR\n`,
     );
     return EXIT_USAGE;
   }
-  // M3: config set is advisory only (no file is rewritten by the stub path). We acknowledge and
-  // instruct the user; durable persistence to the user-global file lands with M7 polish.
-  io.stdout.write(
-    `Set ${field} = ${SECRET_FIELDS.has(field) ? value : value} (not yet persisted; ` +
-      `edit your config file or export the env var). \n`,
-  );
+  // Durable persistence to the user-global config file (~/.config/chatgml/config.json). This file
+  // is the trusted layer and lives OUTSIDE any repo, so no raw key is ever written into a
+  // repo-tracked file. ConfigError (unknown field / bad value) maps to exit 3 via main().
+  const { filePath } = setUserGlobalConfigField(field, value, io.env);
+  io.stdout.write(`set ${field} in ${filePath}\n`);
   return EXIT_OK;
 }
 
@@ -251,7 +257,6 @@ export function buildProgram(deps: CliDeps): {
   run: () => Promise<number>;
 } {
   const program = new Command();
-  let exitCode = EXIT_OK;
   let action: (() => Promise<number>) | null = null;
 
   program
@@ -317,7 +322,6 @@ export function buildProgram(deps: CliDeps): {
       action = () => Promise.resolve(cmdConfigSet(field, value, deps));
     });
 
-  void exitCode;
   return {
     program,
     run: async (): Promise<number> => {
