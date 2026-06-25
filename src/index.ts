@@ -23,3 +23,72 @@ export * from './memory/bm25.js';
 export * from './memory/fusion.js';
 export { LocalMemoryProvider } from './memory/local.js';
 export { HippoMemoryProvider } from './memory/hippo.js';
+
+// ---------------------------------------------------------------------------
+// M3 — agent, protocol, tools, serve, CLI (named exports to avoid barrel collisions).
+// ---------------------------------------------------------------------------
+export {
+  PROTOCOL_VERSION,
+  InEventSchema,
+  ClientCommandSchema,
+  encodeEvent,
+  parseInEvent,
+  NdjsonDecoder,
+  ProtocolError,
+  writeEvent,
+  isAgentEvent,
+} from './protocol.js';
+export type { InEvent, ClientCommand } from './protocol.js';
+
+export {
+  runAgent,
+  createApprovalGate,
+  buildSystemPrompt,
+  createAgentLike,
+  DEFAULT_MAX_STEPS,
+} from './agent.js';
+export type {
+  AgentDeps,
+  AgentOptions,
+  AgentRunResult,
+  AgentLike,
+  AgentLikeDeps,
+  ApprovalGate,
+  LlmLike,
+} from './agent.js';
+
+// Tools.
+export {
+  buildToolRegistry,
+  toOpenAiToolSpecs,
+  dispatchTool,
+  globTool,
+  grepTool,
+  readTool,
+  searchTool,
+  graphTool,
+  temporalTool,
+  editTool,
+} from './tools/index.js';
+export type { BuildRegistryOptions, DispatchResult } from './tools/index.js';
+export {
+  assertInsideRoot,
+  resolveInsideRoot,
+  isInsideRoot,
+  toPosix,
+  SandboxError,
+} from './tools/sandbox.js';
+export { editProposalId } from './tools/edit.js';
+
+// Serve transport.
+export { runServe, createStdioTransport } from './serve.js';
+export type { Transport, ServeOptions } from './serve.js';
+
+// CLI surface.
+export { main as runCli, buildProgram } from './cli.js';
+export type { CliDeps, CliIo } from './cli.js';
+
+// CLI rendering (for embedders building their own front-end).
+export { EventRenderer, runChatRepl } from './cli/repl.js';
+export type { LineSource, ReplDeps, RendererOptions } from './cli/repl.js';
+export { supportsColor, styles, diffLine, colorizeDiff, Spinner } from './cli/theme.js';

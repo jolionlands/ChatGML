@@ -26,8 +26,10 @@
   },
   "dependencies": {
     "commander": "^14.0.1",
+    "fast-glob": "^3.3.3",
     "ignore": "^7.0.5",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/node": "^24.7.0",
