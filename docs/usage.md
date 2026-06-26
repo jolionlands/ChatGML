@@ -63,9 +63,15 @@ Builds or incrementally updates the local index for `dir`. Prints a one-line sum
 indexed: 56 scanned, 12 added, 3 modified, 40 unchanged, 1 deleted
 ```
 
-(`(full rebuild)` is appended when the whole index was rebuilt; a GameMaker `.yyp` is also noted on its
-own line.) Indexing embeds chunks through the **embed lane**, so `embed.model` (and a reachable embed
-endpoint) must be configured.
+(`(full rebuild: <reason>)` is appended when the whole index was rebuilt, stating WHY — e.g.
+`embedding model changed (a -> b)` or `vector dimension changed (64 -> 32)`; a GameMaker `.yyp` is also
+noted on its own line.) Indexing embeds chunks through the **embed lane**, so `embed.model` (and a
+reachable embed endpoint) must be configured.
+
+The store identity is keyed on the embedding **model** and the **vector dimension** — NOT on the embed
+endpoint's host:port. Re-indexing the same model after a llama.cpp/ollama restart that lands on a new
+ephemeral port therefore reuses the existing store and re-indexes incrementally (no needless full
+re-embed). Only a genuinely different model name or a different vector dimension forces a full rebuild.
 
 `dir` must be an **existing directory** — a missing path or a file is a usage error (exit 2) and no
 store is created. When `0` files are scanned (a fresh project, an empty dir, or only non-indexed
@@ -386,6 +392,23 @@ chatgml config set memory.hippo.key env:HIPPO_KEY     # optional
 
 `memory.hippo.url` is required when the provider is `hippo`. Hippo hits may carry a snippet + score
 without a file path.
+
+---
+
+## Safety notes
+
+### grep ReDoS guard
+
+The `grep` tool runs the model-supplied regex on a single thread with no in-flight timeout (a single
+thread cannot interrupt a running match). To prevent catastrophic backtracking it (1) caps the pattern
+length, (2) **pre-rejects** patterns whose SHAPE is prone to exponential/polynomial blowup —
+nested unbounded quantifiers (`(a+)+`, `(.*X){n,}`), large bounded repetition of such a group
+(`(.*a){25}`), and adjacent unbounded quantifiers over overlapping classes (`a*a*`, `.*.*`, `\w+\w+`) —
+returning `bad_args`, and (3) enforces a hard **per-file scan-work cap** so even a pattern the
+heuristic missed cannot run unbounded on a large file. The shape check is a deliberately conservative
+**HEURISTIC, not a guarantee** — legitimate regexes like `function\s+\w+` or `foo.*bar` are still
+allowed. The future-proof fix is to run matching on a **worker thread with a wall-clock kill** so any
+runaway match is interrupted regardless of shape; the scan-work cap is the interim backstop.
 
 ---
 

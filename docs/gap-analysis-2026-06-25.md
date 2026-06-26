@@ -18,9 +18,9 @@ All claims below were re-verified against the shipped `dist/` and the source on
 - **Fixable now:** 16 bounded defects — all fixed (commits `e738945`, `068d7ee`, `0b5c63d`).
 - **Agent-loop fixes:** uniform turn terminator, deduped `cancelled`, stuck-tool guard (`068d7ee`).
 - **Resolved since (design items shipped):** D1 search relevance floor, D2 multi-collision GML
-  (`19d2a80`); GAP4 auto-mode destructive-edit backstop, GAP5 slow-stream idle heartbeat (`5cc5617`).
-- **Deferred / needs-decision:** 4 — embeddings-store identity (D3), graph name-only ranking (D4),
-  ReDoS heuristic completeness (D5), config-set targeting (D6).
+  (`19d2a80`); GAP4 auto-mode destructive-edit backstop, GAP5 slow-stream idle heartbeat (`5cc5617`);
+  D3 embeddings-store identity (model+dim), D5 grep ReDoS heuristic completeness + scan-work cap.
+- **Deferred / needs-decision:** 2 — graph name-only ranking (D4), config-set targeting (D6).
 - **The single most consequential cluster** is *index-target validation + empty-index
   silence*: the most common real first run (typo a path, or point at a fresh
   GameMaker project that has no `.gml` yet) produces a green "success" that silently
@@ -372,15 +372,23 @@ fixtures + tests (`test/index/gm-resolver.test.ts`). Mapping GUID-named multi-co
 by their deterministic on-disk order remains a possible future enhancement, intentionally not
 guessed today.
 
-### D3 — Embeddings-store identity is `host:port:model`, so a changed/ephemeral port forces a full re-embed — LOW (design)
-**File:** `src/index/embeddings.ts` (`embeddings.id = '${host}:${model}'`),
-`src/index/indexer.ts:78` (an `embeddingsId` mismatch forces a full rebuild).
-Re-running index against the same model on a different port (common when llama.cpp/
-ollama restarts) re-embeds the whole codebase, and the "(full rebuild)" banner gives
-no reason. **Why deferred:** keying on model (and dim) vs host:port is a correctness/
-stability trade-off. **Direction:** key the manifest on the embedding MODEL (and maybe
-dim), or add a stable per-store fingerprint; at minimum print WHY a full rebuild was
-triggered (`embeddings id changed A -> B`).
+### D3 — Embeddings-store identity is `host:port:model`, so a changed/ephemeral port forces a full re-embed — LOW (design) — ✅ RESOLVED
+**File:** `src/index/embeddings.ts`, `src/index/indexer.ts`, `src/cli.ts`.
+**Was:** `embeddings.id = '${host}:${model}'`, and an `embeddingsId` mismatch forced a full rebuild —
+so re-indexing the SAME model after a llama.cpp/ollama restart on a new ephemeral port re-embedded the
+whole codebase, and the "(full rebuild)" banner gave no reason. **Resolved:** the store identity is
+now keyed on the embedding **MODEL** (`OpenAIEmbeddings.id = cfg.model`, host:port dropped) plus the
+vector **DIMENSION**. The manifest records `embeddingsId` (model) + `dim`; a full rebuild is forced
+ONLY when (a) the MODEL id changes, (b) the DIMENSION changes (checked only when BOTH the stored and
+current dim are known >0, mirroring the local store's stale guard so a lazily-learned dim never trips
+it), or (c) an explicit `IndexOptions.forceRebuild`. A host:port change reuses the store and indexes
+incrementally. The CLI banner now states WHY — `(full rebuild: embedding model changed (a -> b))` /
+`(full rebuild: vector dimension changed (64 -> 32))` / `(full rebuild: forced)` — via the new
+`IndexResult.rebuildReason`. The local-store envelope keys on the same model-only `id` + `dim`, so
+both layers agree. Tests (`test/index/embeddings.test.ts`, `test/index/indexer.test.ts`): same model +
+different host/port => no rebuild (store reused, 0 embed calls); different model => rebuild with reason;
+different dim => rebuild with reason; `forceRebuild` => every file re-processed. Documented in
+`docs/usage.md` ("chatgml index").
 
 ### D4 — `graph_neighbors` name-only mode returns weak, uniform-score neighbors for common tokens — LOW (heuristic)
 **File:** `src/tools/graph.ts` / local backend. `graph_neighbors({name:'hp'})` returns
@@ -391,16 +399,22 @@ correct hit, score 1.0). **Why deferred:** needs a ranking heuristic/design deci
 proximity to a definition, and/or nudge the tool description to recommend passing a
 path.
 
-### D5 — ReDoS guard misses common pathological shapes like `(.*a){N}` and `a*a*a*X$` — LOW (heuristic)
-**File:** `src/tools/grep.ts:35-39` (confirmed: `isReDoSShape` only flags a quantified
-group immediately followed by an outer quantifier; `(.*a){15}` and
-`a*a*a*a*a*a*a*a*X$` are accepted). Realistic blast radius is limited (model supplies
-the pattern, 512-char cap, per-line matching), and there is no in-flight regex timeout
-("single thread can't interrupt a match"). **Why deferred:** completing the heuristic
-is open-ended; the proper fix (worker with wall-clock kill) is an architectural change.
-**Direction:** extend `isReDoSShape` to flag counted repetition of a group containing
-an unbounded quantifier and adjacent unbounded quantifiers over overlapping classes,
-or run matching on a worker with a wall-clock kill.
+### D5 — ReDoS guard misses common pathological shapes like `(.*a){N}` and `a*a*a*X$` — LOW (heuristic) — ✅ RESOLVED
+**File:** `src/tools/grep.ts`.
+**Was:** `isReDoSShape` only flagged a quantified group immediately followed by an outer quantifier, so
+`(.*a){15}`, `a*a*a*…X$`, and adjacent unbounded quantifiers slipped through. **Resolved:** the
+heuristic now also rejects (1) a group whose body CONTAINS an unbounded quantifier (anywhere, so
+`(.*X)` counts) that is itself repeated by an unbounded quantifier OR a large bounded count
+(> `MAX_SAFE_GROUP_REPEAT` = 20) — `(a+)+`, `(a*)+`, `(.*X){n,}`, `(.*a){25}`; and (2) 2+ ADJACENT
+unbounded quantifiers over OVERLAPPING atoms — `a*a*`, `.*.*`, `\w+\w+`, `a*a*a*X$` — while still
+ALLOWING disjoint-class adjacency (`\s+\w+`, i.e. `function\s+\w+`) and single quantifiers (`foo.*bar`)
+via an `atomsOverlap` check. The existing length + input caps stay. Additionally a hard **per-file
+scan-work cap** (`SCAN_WORK_CAP` = 8M chars/file) bounds total work so even a pattern the heuristic
+missed cannot run unbounded on a large (≤2MB) file. A code comment + `docs/usage.md` ("Safety notes →
+grep ReDoS guard") DOCUMENT that this is a **HEURISTIC, not a guarantee**, and that the future-proof
+fix is a worker thread with a wall-clock kill (the scan-work cap is the interim backstop). Tests
+(`test/tools/grep.test.ts`, "ReDoS heuristic completeness (D5)"): each newly-listed catastrophic shape
+=> `bad_args`; legitimate regexes still allowed; a normal search still works.
 
 ### D6 — `config set` ignores the project dir and always writes the global user config — LOW (design/ergonomics)
 **File:** `src/cli.ts:317-324` / `setUserGlobalConfigField`. `config set

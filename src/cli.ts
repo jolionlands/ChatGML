@@ -156,10 +156,16 @@ async function cmdIndex(root: string, flags: GlobalFlags, deps: CliDeps): Promis
   const indexDeps = deps.makeEmbeddings ? { embeddings: deps.makeEmbeddings(config) } : {};
   const result = await runIndexCommand(config, indexDeps);
   const gmSuffix = result.gmEnriched > 0 ? `; ${result.gmEnriched} GameMaker-enriched` : '';
+  // (D3) State WHY a full rebuild was triggered (model/dim change, or forced) when known.
+  const rebuildBanner = result.fullRebuild
+    ? result.rebuildReason
+      ? ` (full rebuild: ${result.rebuildReason})`
+      : ' (full rebuild)'
+    : '';
   io.stdout.write(
     `indexed: ${result.scanned} scanned, ${result.added} added, ${result.modified} modified, ` +
       `${result.unchanged} unchanged, ${result.deleted} deleted` +
-      `${result.fullRebuild ? ' (full rebuild)' : ''}${gmSuffix}\n`,
+      `${rebuildBanner}${gmSuffix}\n`,
   );
 
   // GameMaker confirmation: always note a detected `.yyp`, even when nothing enriched (F22).

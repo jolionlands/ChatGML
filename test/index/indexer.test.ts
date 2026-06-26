@@ -86,7 +86,7 @@ describe('runIndex (incremental)', () => {
     }
   });
 
-  it('switching the embeddings model forces a full rebuild', async () => {
+  it('switching the embeddings model forces a full rebuild (with a stated reason) — D3', async () => {
     const repo = makeTmpRepo({ 'a.gml': 'content' });
     try {
       const d1 = deps(repo.root, new FakeEmbeddings({ id: 'model-a' }));
@@ -97,8 +97,74 @@ describe('runIndex (incremental)', () => {
       const d2 = deps(repo.root, emb2);
       const res = await runIndex(repo.root, SCOPE, d2);
       expect(res.fullRebuild).toBe(true);
+      expect(res.rebuildReason).toMatch(/model changed.*model-a.*model-b/);
       expect(res.added).toBe(1); // treated as new because the manifest was invalidated
       expect(spy.mock.calls.length).toBeGreaterThan(0);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('same model on a DIFFERENT host/port reuses the store — no rebuild (D3)', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'content', 'b.gml': 'more' });
+    try {
+      // Identity is keyed on the MODEL only (id), so an ollama/llama.cpp restart that moves to a new
+      // port presents the SAME id and must NOT re-embed. Two distinct provider instances, same id.
+      const first = deps(repo.root, new FakeEmbeddings({ id: 'embed-3' }));
+      const r1 = await runIndex(repo.root, SCOPE, first);
+      expect(r1.added).toBe(2);
+
+      const emb2 = new FakeEmbeddings({ id: 'embed-3' }); // same model, "different port"
+      const spy = vi.spyOn(emb2, 'embed');
+      const second = deps(repo.root, emb2);
+      const r2 = await runIndex(repo.root, SCOPE, second);
+      expect(r2.fullRebuild).toBe(false);
+      expect(r2.rebuildReason).toBeUndefined();
+      expect(r2.unchanged).toBe(2);
+      expect(r2.added).toBe(0);
+      expect(spy.mock.calls.length).toBe(0); // store reused: zero embed calls
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('a changed vector DIMENSION forces a full rebuild — D3', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'content' });
+    try {
+      // Same model id, but the vector dim changed (e.g. a model re-quantized to a different head dim).
+      const first = deps(repo.root, new FakeEmbeddings({ id: 'embed-3', dim: 64 }));
+      await runIndex(repo.root, SCOPE, first);
+
+      const emb2 = new FakeEmbeddings({ id: 'embed-3', dim: 32 });
+      const spy = vi.spyOn(emb2, 'embed');
+      const second = deps(repo.root, emb2);
+      const res = await runIndex(repo.root, SCOPE, second);
+      expect(res.fullRebuild).toBe(true);
+      expect(res.rebuildReason).toMatch(/dimension changed.*64.*32/);
+      expect(res.added).toBe(1);
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('forceRebuild discards the manifest and re-processes every file even when identity is unchanged — D3', async () => {
+    const repo = makeTmpRepo({ 'a.gml': 'content', 'b.gml': 'more' });
+    try {
+      const first = deps(repo.root, new FakeEmbeddings({ id: 'embed-3' }));
+      const r1 = await runIndex(repo.root, SCOPE, first);
+      expect(r1.added).toBe(2);
+
+      // Same id+dim, so WITHOUT forceRebuild the second pass would be all-unchanged (0 added). With
+      // forceRebuild the manifest is discarded and every file is re-chunked + re-upserted as "added".
+      // (The vector store still dedupes by content hash, so unchanged content isn't re-embedded — the
+      // observable contract of forceRebuild is "manifest discarded, every file re-processed".)
+      const second = deps(repo.root, new FakeEmbeddings({ id: 'embed-3' }));
+      const res = await runIndex(repo.root, SCOPE, second, { forceRebuild: true });
+      expect(res.fullRebuild).toBe(true);
+      expect(res.rebuildReason).toBe('forced');
+      expect(res.added).toBe(2); // manifest discarded -> both treated as new
+      expect(res.unchanged).toBe(0);
     } finally {
       repo.cleanup();
     }

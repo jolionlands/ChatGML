@@ -9,7 +9,15 @@ import type { FetchLike } from '../llm.js';
 
 export interface Embeddings {
   readonly dim: number;
-  readonly id: string; // e.g. `${baseURLHost}:${model}` — persisted to detect stale stores
+  /**
+   * Store-identity key, persisted to detect a stale store. (D3) Keyed on the embedding MODEL — NOT on
+   * host:port — so re-indexing the SAME model on a different baseURL (a llama.cpp/ollama restart that
+   * lands on a new ephemeral port) reuses the existing store instead of forcing a needless full
+   * re-embed. A genuinely different MODEL changes `id`; a different vector DIMENSION is caught via the
+   * separate `dim` field (see indexer/local store staleness checks). Together `id` + `dim` are the
+   * store identity.
+   */
+  readonly id: string;
   embed(texts: string[]): Promise<Float32Array[]>;
 }
 
@@ -53,14 +61,6 @@ function scrubBody(text: string): string {
   return scrubbed.length > BODY_MAX ? `${scrubbed.slice(0, BODY_MAX)}…` : scrubbed;
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-}
-
 /** L2-normalize a vector in place and return it. A zero vector is left as-is. */
 function l2normalize(v: Float32Array): Float32Array {
   let norm = 0;
@@ -89,7 +89,9 @@ export class OpenAIEmbeddings implements Embeddings {
 
   constructor(cfg: EmbeddingsConfig, deps?: EmbeddingsDeps) {
     this.cfg = cfg;
-    this.id = `${hostOf(cfg.baseURL)}:${cfg.model}`;
+    // (D3) Identity = MODEL (not host:port). A restart on a new port reuses the store; the vector
+    // DIMENSION is tracked separately (this.dim, learned from the first response if not configured).
+    this.id = cfg.model;
     this._dim = cfg.dim ?? 0;
     const f = deps?.fetch ?? (globalThis.fetch as FetchLike | undefined);
     if (!f) throw new EmbeddingError('no fetch implementation available');

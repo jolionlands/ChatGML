@@ -3,9 +3,16 @@
 // Pure JS scan (no child_process / ripgrep dependency). Walks the project via walkFiles (so the
 // IgnoreFilter + EXCLUDE_DIRS apply), reads each file, and reports 1-based line matches with optional
 // context. Binary files are skipped (NUL sniff). The model-supplied pattern is PRE-VALIDATED and
-// REJECTED as `bad_args` before any matching if it is over-length or has a nested-quantifier ReDoS
-// shape — there is no in-flight regex timeout (single thread can't interrupt a match), so prevention
-// is by rejection. A per-call match budget + ctx.signal bound the file fan-out.
+// REJECTED as `bad_args` before any matching if it is over-length or has a catastrophic-backtracking
+// (ReDoS) shape — there is no in-flight regex timeout (a single thread cannot interrupt a match), so
+// prevention is by rejection. A per-call match budget + ctx.signal bound the file fan-out, and a hard
+// per-file scan-work cap (SCAN_WORK_CAP) bounds the total work even for a pattern the heuristic missed.
+//
+// IMPORTANT: `isReDoSShape` is a HEURISTIC (a deliberately conservative over-approximation), NOT a
+// guarantee — an exotic catastrophic pattern can still slip past it. The two backstops are (1) the
+// SCAN_WORK_CAP below, which aborts a file once total scanned characters exceed a fixed budget, and
+// (2) the future-proof fix, which is to run matching on a WORKER THREAD with a wall-clock kill so any
+// runaway match is interrupted regardless of shape (deferred — see docs/usage.md, "grep ReDoS guard").
 import fsp from 'node:fs/promises';
 import { defineTool, ToolError } from '../tool-error.js';
 import type { ToolDef, ToolResult, ToolContext } from '../types.js';
@@ -16,6 +23,14 @@ import { MAX_FILE_BYTES } from './limits.js';
 const MAX_PATTERN_LEN = 512;
 const DEFAULT_MAX_MATCHES = 100;
 const MAX_MAX_MATCHES = 1000;
+// A group with an inner unbounded quantifier repeated more than this many times (bounded) is treated
+// as catastrophic — e.g. `(.*a){25}` — even though the outer count is finite.
+const MAX_SAFE_GROUP_REPEAT = 20;
+// Hard per-file scan-work backstop: stop scanning a file once this many characters have been fed to
+// the matcher. At ~2MB/file this is generous for legitimate searches but caps a missed catastrophic
+// pattern's blast radius to a bounded amount of work per file (the matcher itself is still O(line),
+// but a huge file of many long lines cannot run unbounded).
+const SCAN_WORK_CAP = 8 * 1024 * 1024; // 8M chars/file
 
 const GrepArgs = z.object({
   pattern: z.string().min(1).max(MAX_PATTERN_LEN).describe('literal text or regex to search for'),
@@ -28,14 +43,122 @@ const GrepArgs = z.object({
 type GrepArgs = z.infer<typeof GrepArgs>;
 
 /**
- * Reject patterns whose shape can cause catastrophic backtracking. Heuristic: a quantified group
- * immediately followed by another quantifier — `(x+)+`, `(x*)*`, `(x+)*`, `(x*)+`, and the `{n,}`
- * variants. Not exhaustive, but it catches the classic exponential blowups.
+ * Reject patterns whose shape can cause catastrophic backtracking. This is a deliberately conservative
+ * HEURISTIC — an over-approximation that errs toward rejecting (it is NOT a proof of safety; see the
+ * SCAN_WORK_CAP backstop + the worker-thread future fix noted in the file header). It flags:
+ *
+ *   1. A GROUP CONTAINING AN UNBOUNDED QUANTIFIER that is itself repeated by an unbounded quantifier:
+ *      `(a+)+`, `(a*)+`, `(a*)*`, `(.*X)+`, `(.*X){n,}` — the classic exponential blowup.
+ *   2. The SAME shape repeated a LARGE BOUNDED number of times (> MAX_SAFE_GROUP_REPEAT): `(.*a){25}`,
+ *      `(a+){30}` — finite but polynomial-to-exponential and effectively unbounded for our inputs.
+ *   3. 2+ ADJACENT UNBOUNDED QUANTIFIERS over OVERLAPPING atoms: `a*a*`, `.*.*`, `\w+\w+`, `a*\w*` —
+ *      but NOT disjoint-class adjacency like `\s+\w+` (legitimate, e.g. `function\s+\w+`), and NOT a
+ *      single quantifier like `foo.*bar`.
+ *
+ * Returns true if the pattern should be REJECTED (`bad_args`).
  */
 function isReDoSShape(pattern: string): boolean {
-  // group ending in a quantifier, then an outer quantifier
-  const nested = /\([^)]*[+*]\)[+*]|\([^)]*\{\d+,\}\)[+*{]|\([^)]*[+*]\)\{\d+,\}/;
-  return nested.test(pattern);
+  return hasNestedQuantifiedGroup(pattern) || hasAdjacentOverlappingQuantifiers(pattern);
+}
+
+/**
+ * Rule 1 + 2: a group whose body contains an unbounded quantifier (`+`, `*`, or `{n,}`), where the
+ * group is then repeated by an unbounded quantifier OR a large bounded count. `(a+)+`, `(.*X){n,}`,
+ * `(.*a){25}` -> true; `(abc){3}` (no inner unbounded quantifier) and `(a+)` (no outer repeat) -> false.
+ */
+function hasNestedQuantifiedGroup(pattern: string): boolean {
+  // A group whose body CONTAINS an unbounded quantifier (`+`/`*`/`{n,}`) ANYWHERE (so `(.*X)` counts,
+  // not only `(a+)`), immediately followed by an outer quantifier. `[^)]*` keeps it single-level (good
+  // enough; a nested-group blowup still trips on its innermost group).
+  const innerUnbounded = /\([^)]*(?:[+*]|\{\d+,\})[^)]*\)([+*]|\{\d+(?:,\d*)?\})/g;
+  let m: RegExpExecArray | null;
+  while ((m = innerUnbounded.exec(pattern)) !== null) {
+    const outer = m[1]!;
+    if (outer === '+' || outer === '*') return true; // (a+)+, (a*)*, (.*X)*
+    if (outer.startsWith('{')) {
+      // {n,}/{n,m}/{n}: unbounded -> always; bounded -> only when the count is large.
+      if (/\{\d+,\}/.test(outer)) return true; // (.*X){n,}
+      const n = Number.parseInt(outer.slice(1), 10);
+      if (Number.isFinite(n) && n > MAX_SAFE_GROUP_REPEAT) return true; // (.*a){25}
+    }
+  }
+  return false;
+}
+
+/**
+ * Rule 3: two adjacent `atom + unbounded-quantifier` pieces whose atoms can match a COMMON character,
+ * e.g. `a*a*`, `.*.*`, `\w+\w*`, `a*\w*`. Disjoint adjacency (`\s+\w+`) and single quantifiers
+ * (`foo.*bar`) are allowed. Only `*`/`+` (unbounded) count; `?` and bounded `{n,m}` do not.
+ */
+function hasAdjacentOverlappingQuantifiers(pattern: string): boolean {
+  const atoms = unboundedQuantifiedAtoms(pattern);
+  for (let i = 1; i < atoms.length; i++) {
+    if (atoms[i]!.start === atoms[i - 1]!.end && atomsOverlap(atoms[i - 1]!.atom, atoms[i]!.atom)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+interface QuantAtom {
+  atom: string; // the atom source, e.g. 'a', '.', '\\w', '[a-z]'
+  start: number; // index of the atom in `pattern`
+  end: number; // index just past the quantifier
+}
+
+/** Scan `pattern` for `atom*` / `atom+` pieces (atom = single char, escape, or `[...]` class). */
+function unboundedQuantifiedAtoms(pattern: string): QuantAtom[] {
+  const out: QuantAtom[] = [];
+  let i = 0;
+  while (i < pattern.length) {
+    const start = i;
+    let atom: string | null = null;
+    const c = pattern[i]!;
+    if (c === '\\' && i + 1 < pattern.length) {
+      atom = pattern.slice(i, i + 2);
+      i += 2;
+    } else if (c === '[') {
+      // consume to the matching ] (respecting an escaped ]).
+      let j = i + 1;
+      while (j < pattern.length && pattern[j] !== ']') {
+        if (pattern[j] === '\\') j++;
+        j++;
+      }
+      atom = pattern.slice(i, Math.min(j + 1, pattern.length));
+      i = j + 1;
+    } else if (c === '(' || c === ')' || c === '|') {
+      i++;
+      continue; // group/alternation boundaries are not atoms here (rule 1 handles groups).
+    } else {
+      atom = c;
+      i++;
+    }
+    // A `*`/`+` quantifier (optionally lazy `*?`) immediately after the atom makes it unbounded.
+    if (atom !== null && i < pattern.length && (pattern[i] === '*' || pattern[i] === '+')) {
+      i++;
+      if (pattern[i] === '?') i++; // lazy variant still backtracks
+      out.push({ atom, start, end: i });
+    }
+  }
+  return out;
+}
+
+/** Whether two regex atoms can match at least one common character (conservative over-approximation). */
+function atomsOverlap(a: string, b: string): boolean {
+  // `.` matches (almost) anything -> overlaps with everything.
+  if (a === '.' || b === '.') return true;
+  // Identical atoms (same literal, same class, same escape) obviously overlap.
+  if (a === b) return true;
+  // A word-class atom overlaps any plain word-character literal, and vice-versa, plus \w/\d/\s pairs.
+  const wordEsc = (s: string): boolean => s === '\\w' || s === '\\d';
+  const spaceEsc = (s: string): boolean => s === '\\s';
+  const isWordChar = (s: string): boolean => /^[A-Za-z0-9_]$/.test(s);
+  if (wordEsc(a) && (wordEsc(b) || isWordChar(b))) return true;
+  if (wordEsc(b) && (wordEsc(a) || isWordChar(a))) return true;
+  if (spaceEsc(a) && spaceEsc(b)) return true;
+  // Conservatively treat any two single-character literal atoms that are equal as overlapping (handled
+  // by a===b above); distinct literals / disjoint escape classes (\s vs \w) are treated as NON-overlap.
+  return false;
 }
 
 function escapeLiteral(s: string): string {
@@ -56,7 +179,10 @@ export const grepTool: ToolDef<GrepArgs> = defineTool<GrepArgs>({
   schema: GrepArgs,
   async execute(args: GrepArgs, ctx: ToolContext): Promise<ToolResult> {
     if (args.regex && isReDoSShape(args.pattern)) {
-      throw new ToolError('bad_args', 'rejected pattern with nested-quantifier (ReDoS) shape');
+      throw new ToolError(
+        'bad_args',
+        'rejected pattern with catastrophic-backtracking (ReDoS) shape',
+      );
     }
     let re: RegExp;
     try {
@@ -93,7 +219,14 @@ export const grepTool: ToolDef<GrepArgs> = defineTool<GrepArgs>({
       if (looksBinary(buf)) continue;
       const lines = buf.toString('utf8').split('\n');
 
+      // Hard per-file scan-work backstop (D5): bound the total characters fed to the matcher for this
+      // file. Even a catastrophic pattern the heuristic missed cannot run unbounded on a large file —
+      // once the budget is spent we stop scanning THIS file (results already found are kept) and move
+      // on. The budget is generous (SCAN_WORK_CAP) so a legitimate search never trips it.
+      let scanWork = 0;
       for (let i = 0; i < lines.length; i++) {
+        scanWork += lines[i]!.length + 1; // +1 for the stripped newline
+        if (scanWork > SCAN_WORK_CAP) break;
         if (re.test(lines[i]!)) {
           const lo = Math.max(0, i - context);
           const hi = Math.min(lines.length - 1, i + context);

@@ -174,6 +174,18 @@ describe('OpenAIEmbeddings', () => {
     expect(recorder.calls).toHaveLength(1); // one batch (default 64 covers both)
   });
 
+  it('store identity (id) is the MODEL only, independent of host/port (D3)', () => {
+    // Same model on two different baseURLs (e.g. an ollama/llama.cpp restart on a new port) -> same id,
+    // so re-indexing reuses the store instead of a needless full re-embed.
+    const a = new OpenAIEmbeddings({ baseURL: 'http://127.0.0.1:11434/v1', model: 'embed-3' });
+    const b = new OpenAIEmbeddings({ baseURL: 'http://127.0.0.1:54321/v1', model: 'embed-3' });
+    expect(a.id).toBe('embed-3');
+    expect(a.id).toBe(b.id);
+    // A genuinely different model name still changes the identity.
+    const c = new OpenAIEmbeddings({ baseURL: 'http://127.0.0.1:11434/v1', model: 'embed-4' });
+    expect(c.id).not.toBe(a.id);
+  });
+
   it('learns dim from the first response', async () => {
     const { fetch } = installFetchMock([
       {

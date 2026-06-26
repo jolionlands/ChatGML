@@ -4,7 +4,11 @@
 // `<root>/.chatgml/manifest.json` records per-file `{ contentHash, mtimeMs, size }`. Change detection
 // is HASH-FIRST: `mtimeMs`+`size` is only a fast-path hint to SKIP re-reading a file; whenever a file
 // is read its sha256 is the source of truth (so a content change with an identical mtime is still
-// re-embedded). The manifest also records the embeddings id; a mismatch forces a full rebuild.
+// re-embedded). The manifest also records the embeddings store identity — the embedding MODEL id and
+// the vector DIMENSION (D3). A full rebuild is forced ONLY when the MODEL changes or the DIMENSION
+// changes (both known) — NOT when the host:port changes — so a llama.cpp/ollama restart on a new
+// ephemeral port reuses the store and re-indexes incrementally. `opts.forceRebuild` is an explicit
+// escape hatch. When a rebuild IS triggered, `IndexResult.rebuildReason` states why.
 //
 // Unchanged repo on a second pass => 0 embed calls (the provider only embeds changed chunk hashes,
 // and unchanged files are not even re-chunked). Deleted files are purged from the provider + changelog.
@@ -37,7 +41,10 @@ interface ManifestEntry {
 
 interface Manifest {
   version: number;
+  /** Embedding store identity = the MODEL id (D3); a change forces a full rebuild. */
   embeddingsId: string;
+  /** Vector dimension (D3); a change (when both old + new are known, >0) forces a full rebuild. */
+  dim: number;
   files: Record<string, ManifestEntry>;
 }
 
@@ -47,6 +54,8 @@ export interface IndexOptions {
   chunkSize?: number;
   chunkOverlap?: number;
   walk?: WalkOptions;
+  /** Explicit escape hatch: discard the manifest and re-embed everything regardless of identity. */
+  forceRebuild?: boolean;
 }
 
 export interface IndexResult {
@@ -56,6 +65,11 @@ export interface IndexResult {
   unchanged: number;
   deleted: number;
   fullRebuild: boolean;
+  /**
+   * Why a full rebuild was triggered (model/dim change, or an explicit force), or `undefined` when
+   * the run was incremental. Surfaced in the CLI's `(full rebuild: <reason>)` banner. (D3)
+   */
+  rebuildReason?: string;
   /**
    * Number of `.gml` object-event files whose citation meta was enriched with fs-aware `.yy`/`.yyp`
    * data (resolved collision targets and/or parent inheritance). 0 when the root is not a GameMaker
@@ -80,13 +94,46 @@ function looksBinary(buf: Buffer): boolean {
   return false;
 }
 
-function loadManifest(root: string, embeddingsId: string): { manifest: Manifest; fullRebuild: boolean } {
+/**
+ * Decide whether to reuse or discard the on-disk manifest. A rebuild is forced when (a) the caller
+ * passes `forceRebuild`, (b) the manifest is absent/version-stale, (c) the embedding MODEL id changed,
+ * or (d) the vector DIMENSION changed — but only when BOTH the stored and the current dim are KNOWN
+ * (> 0), mirroring the local store's stale guard (a fresh OpenAIEmbeddings learns its dim lazily, so
+ * dim is 0 at load time and must not spuriously trip a rebuild). NOTE: a host:port change does NOT
+ * trip a rebuild — `embeddingsId` is keyed on the model only (D3). `fresh` distinguishes "no prior
+ * manifest" (a first-ever index, NOT reported as a full rebuild) from a genuine identity change.
+ */
+function loadManifest(
+  root: string,
+  embeddingsId: string,
+  dim: number,
+  forceRebuild: boolean,
+): { manifest: Manifest; fullRebuild: boolean; reason?: string } {
   const loaded = readJson<Manifest>(manifestPath(root));
-  if (!loaded || loaded.version !== MANIFEST_VERSION || loaded.embeddingsId !== embeddingsId) {
-    // Embeddings model switched (or no/stale manifest) -> full rebuild.
+  const empty: Manifest = { version: MANIFEST_VERSION, embeddingsId, dim, files: {} };
+
+  if (forceRebuild) {
+    return { manifest: empty, fullRebuild: loaded !== null, reason: 'forced' };
+  }
+  if (!loaded || loaded.version !== MANIFEST_VERSION) {
+    // No prior manifest (first index) or an incompatible version: build from scratch. A first-ever
+    // index is not surfaced as a "(full rebuild)" — there was nothing to rebuild.
+    return { manifest: empty, fullRebuild: false };
+  }
+  if (loaded.embeddingsId !== embeddingsId) {
     return {
-      manifest: { version: MANIFEST_VERSION, embeddingsId, files: {} },
-      fullRebuild: loaded !== null,
+      manifest: empty,
+      fullRebuild: true,
+      reason: `embedding model changed (${loaded.embeddingsId} -> ${embeddingsId})`,
+    };
+  }
+  // Dimension change, but only when BOTH dims are known (>0). A lazily-learned 0 never trips this.
+  const storedDim = loaded.dim ?? 0;
+  if (storedDim > 0 && dim > 0 && storedDim !== dim) {
+    return {
+      manifest: empty,
+      fullRebuild: true,
+      reason: `vector dimension changed (${storedDim} -> ${dim})`,
     };
   }
   return { manifest: loaded, fullRebuild: false };
@@ -102,7 +149,12 @@ export async function runIndex(
   deps: IndexerDeps,
   opts: IndexOptions = {},
 ): Promise<IndexResult> {
-  const { manifest, fullRebuild } = loadManifest(root, deps.embeddings.id);
+  const { manifest, fullRebuild, reason } = loadManifest(
+    root,
+    deps.embeddings.id,
+    deps.embeddings.dim,
+    opts.forceRebuild ?? false,
+  );
   const prevFiles = fullRebuild ? {} : manifest.files;
   const nextFiles: Record<string, ManifestEntry> = {};
 
@@ -116,6 +168,7 @@ export async function runIndex(
     fullRebuild,
     gmEnriched: 0,
   };
+  if (reason !== undefined) result.rebuildReason = reason;
 
   const chunkOpts: { chunkSize?: number; chunkOverlap?: number } = {};
   if (opts.chunkSize !== undefined) chunkOpts.chunkSize = opts.chunkSize;
@@ -186,6 +239,10 @@ export async function runIndex(
   result.deleted = deleted.length;
 
   manifest.files = nextFiles;
+  // Record the dim as known NOW (after embedding) — an OpenAIEmbeddings learns its dim lazily from the
+  // first response, so capturing it post-walk persists the real vector dimension for the next run's
+  // dim-change check. Preserve an already-known dim if nothing was embedded this pass. (D3)
+  if (deps.embeddings.dim > 0) manifest.dim = deps.embeddings.dim;
   await writeJsonAtomic(manifestPath(root), manifest);
 
   // fs-aware GameMaker enrichment (best-effort): when the root is a GM project, resolve each `.gml`

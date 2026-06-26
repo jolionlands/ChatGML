@@ -97,6 +97,56 @@ describe('grep tool', () => {
     });
   });
 
+  describe('ReDoS heuristic completeness (D5)', () => {
+    async function ctxFor(): Promise<import('../helpers/tool-context.js').FakeCtx> {
+      const repo = makeTmpRepo({ 'a.gml': 'aaaaaaaaaaaaX\n' });
+      cleanup = repo.cleanup;
+      const ignore = await buildIgnoreFilter(repo.root);
+      return makeToolContext({ root: repo.root, ignore });
+    }
+
+    // Each of these previously slipped past the old heuristic; all must now be bad_args.
+    const catastrophic = [
+      '(.*a){25}', // large bounded repetition of a group with an inner unbounded quantifier
+      '(.*X){5,}', // group with inner unbounded quantifier, unbounded outer repeat
+      '(a+)*', // group inner + outer unbounded
+      '(a*)+', // group inner + outer unbounded
+      'a*a*', // adjacent unbounded quantifiers, same atom
+      '.*.*', // adjacent unbounded quantifiers, '.' overlaps everything
+      'a*a*a*X$', // chained adjacent unbounded quantifiers
+      '\\w+\\w+', // adjacent unbounded quantifiers over overlapping classes
+    ];
+    for (const pattern of catastrophic) {
+      it(`rejects catastrophic shape ${pattern}`, async () => {
+        const { ctx } = await ctxFor();
+        await expect(grepTool.execute({ pattern, regex: true }, ctx)).rejects.toMatchObject({
+          name: 'ToolError',
+          code: 'bad_args',
+        });
+      });
+    }
+
+    // Legitimate regexes (single quantifier, or disjoint adjacent classes) must STILL be allowed.
+    const legitimate = ['function\\s+\\w+', 'foo.*bar', 'hp\\s*-=\\s*\\w+', '\\s+\\w+', 'a+b+'];
+    for (const pattern of legitimate) {
+      it(`allows legitimate regex ${pattern}`, async () => {
+        const { ctx } = await ctxFor();
+        // Must not throw bad_args for the shape (a "no matches" result is fine).
+        const res = await grepTool.execute({ pattern, regex: true }, ctx);
+        expect(typeof res.content).toBe('string');
+      });
+    }
+
+    it('a normal search still works after the strengthened guard', async () => {
+      const repo = makeTmpRepo({ 'scr.gml': 'function apply_dmg(amount) {\n  hp -= amount;\n}\n' });
+      cleanup = repo.cleanup;
+      const ignore = await buildIgnoreFilter(repo.root);
+      const { ctx } = makeToolContext({ root: repo.root, ignore });
+      const res = await grepTool.execute({ pattern: 'function\\s+\\w+', regex: true }, ctx);
+      expect(res.content).toContain('scr.gml:1:');
+    });
+  });
+
   it('rejects an over-length pattern via schema (bad_args at registry layer)', () => {
     const tooLong = 'a'.repeat(513);
     expect(grepTool.schema.safeParse({ pattern: tooLong }).success).toBe(false);
