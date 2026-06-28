@@ -7,6 +7,13 @@ on:
     branches: ['**']
   workflow_dispatch:
 
+# Cancel in-progress runs of the same workflow on the same branch+PR (saves
+# runner minutes on stale branch pushes). New pushes to a PR cancel the previous
+# PR run; new pushes to a branch cancel the previous branch run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -31,8 +38,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # `npm run ci` = typecheck && lint && build && coverage.
+      # `npm run ci` = format:check && typecheck && lint && build && coverage.
       # The lint leg (oxlint) runs on the x64 GitHub runners regardless of any
       # local-host limitation noted in DEVELOPMENT.md.
-      - name: CI (typecheck, lint, build, coverage)
+      - name: CI (format, typecheck, lint, build, coverage)
         run: npm run ci

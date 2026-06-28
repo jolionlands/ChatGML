@@ -30,7 +30,7 @@
     "node": ">=24"
   },
   "bin": {
-    "chatgml": "dist/cli.js"
+    "chatgml": "bin/chatgml.mjs"
   },
   "exports": {
     ".": "./dist/index.js"
@@ -48,7 +48,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "dev": "tsx src/cli.ts",
-    "ci": "npm run typecheck && npm run lint && npm run build && npm run coverage"
+    "ci": "npm run format:check && npm run typecheck && npm run lint && npm run build && npm run coverage"
   },
   "dependencies": {
     "commander": "^14.0.1",
