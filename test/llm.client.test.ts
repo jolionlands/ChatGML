@@ -37,7 +37,10 @@ async function collectStream(
 describe('LlmClient.chatStream', () => {
   it('streams text deltas and a finish, assembling the final message (split mid-JSON)', async () => {
     const { recorder, fetch } = installFetchMock([
-      { match: '/chat/completions', responder: () => openAiTextStream(['Hello ', 'world'], { splitAt: 7 }) },
+      {
+        match: '/chat/completions',
+        responder: () => openAiTextStream(['Hello ', 'world'], { splitAt: 7 }),
+      },
     ]);
     const client = new LlmClient(lane(), { fetch });
     const gen = client.chatStream({ messages: [{ role: 'user', content: 'hi' }] });
@@ -66,7 +69,9 @@ describe('LlmClient.chatStream', () => {
         choices: [
           {
             delta: {
-              tool_calls: [{ index: 0, id: 'call_1', function: { name: 'glob', arguments: '{"pat' } }],
+              tool_calls: [
+                { index: 0, id: 'call_1', function: { name: 'glob', arguments: '{"pat' } },
+              ],
             },
             finish_reason: null,
           },
@@ -74,7 +79,10 @@ describe('LlmClient.chatStream', () => {
       },
       {
         choices: [
-          { delta: { tool_calls: [{ index: 0, function: { arguments: 'tern":"*.gml"}' } }] }, finish_reason: null },
+          {
+            delta: { tool_calls: [{ index: 0, function: { arguments: 'tern":"*.gml"}' } }] },
+            finish_reason: null,
+          },
         ],
       },
       { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
@@ -94,12 +102,18 @@ describe('LlmClient.chatStream', () => {
     });
     const { result } = await collectStream(gen);
     const res = result as {
-      message: { tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> };
+      message: {
+        tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+      };
       finishReason: string;
     };
     expect(res.finishReason).toBe('tool_calls');
     expect(res.message.tool_calls).toEqual([
-      { id: 'call_1', type: 'function', function: { name: 'glob', arguments: '{"pattern":"*.gml"}' } },
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'glob', arguments: '{"pattern":"*.gml"}' },
+      },
     ]);
   });
 
@@ -174,7 +188,8 @@ describe('LlmClient errors', () => {
     const { fetch } = installFetchMock([
       {
         match: '/chat/completions',
-        responder: () => errorResponse(503, `upstream said Bearer ${SENTINEL} and sk-${'x'.repeat(20)}`),
+        responder: () =>
+          errorResponse(503, `upstream said Bearer ${SENTINEL} and sk-${'x'.repeat(20)}`),
       },
     ]);
     const client = new LlmClient(lane(), { fetch });
@@ -191,7 +206,12 @@ describe('LlmClient errors', () => {
     expect(err.body).not.toContain(SENTINEL);
     expect(err.body).toContain('Bearer ***');
     // sentinel must not leak through the thrown error at all.
-    FetchRecorder.assertNoAuthLeak(SENTINEL, String(err.message), String(err.body), String(err.stack));
+    FetchRecorder.assertNoAuthLeak(
+      SENTINEL,
+      String(err.message),
+      String(err.body),
+      String(err.stack),
+    );
   });
 
   it('maps an aborted request to LlmError(aborted)', async () => {
@@ -211,7 +231,10 @@ describe('LlmClient errors', () => {
     let thrown: unknown;
     try {
       await collectStream(
-        client.chatStream({ messages: [{ role: 'user', content: 'x' }], signal: controller.signal }),
+        client.chatStream({
+          messages: [{ role: 'user', content: 'x' }],
+          signal: controller.signal,
+        }),
       );
     } catch (e) {
       thrown = e;

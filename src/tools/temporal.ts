@@ -58,7 +58,8 @@ export function formatTemporalHits(hits: Hit[]): string {
     const extra = h.extra ?? {};
     const ts = typeof extra['timestamp'] === 'number' ? (extra['timestamp'] as number) : h.score;
     const when = Number.isFinite(ts) ? new Date(ts).toISOString() : 'unknown time';
-    const kind = typeof extra['changeKind'] === 'string' ? (extra['changeKind'] as string) : 'changed';
+    const kind =
+      typeof extra['changeKind'] === 'string' ? (extra['changeKind'] as string) : 'changed';
     const loc = h.path ?? '(unknown)';
     return `${i + 1}. ${when}  ${kind}  ${loc}`;
   });

@@ -19,6 +19,7 @@
 import type { MemoryProvider, MemoryProviderInput, MemoryDeps } from './provider.js';
 import type { Embeddings } from '../index/embeddings.js';
 import type { FetchLike } from '../llm.js';
+import { resolveFetch } from '../http.js';
 import type { Scope, Chunk, Hit, TemporalQuery, SessionNote, SymbolRef } from './types.js';
 import { LocalMemoryProvider } from './local.js';
 
@@ -32,6 +33,8 @@ export interface HippoNode {
   content?: string;
   text?: string;
   score?: number;
+  /** Walk-only: hop distance from the seed node (GET /api/walk emits a per-neighbor `depth`). */
+  depth?: number;
   kind?: string; // e.g. 'code_file' | 'code_symbol' | 'note' | 'concept' | ...
 }
 
@@ -70,7 +73,12 @@ export function queryFlags(query: string): RecallFlags {
 }
 
 /** Build a `GET /api/recall` URL with URL-encoded query + flags. Pure. */
-export function toRecallQuery(baseURL: string, query: string, k: number, flags: RecallFlags): string {
+export function toRecallQuery(
+  baseURL: string,
+  query: string,
+  k: number,
+  flags: RecallFlags,
+): string {
   const trimmed = baseURL.replace(/\/+$/, '');
   const params = new URLSearchParams();
   params.set('query', query); // hippo GET /api/recall reads param `query` (serve.zig parseQueryParam "query")
@@ -138,15 +146,19 @@ export function fromRecallResults(nodes: HippoNode[]): Hit[] {
 export function resolveNodeId(nodes: HippoNode[], ref: SymbolRef): number | undefined {
   const matches = nodes.filter(
     (n) =>
-      typeof n.id === 'number' &&
-      isCodeNode(n) &&
-      (n.topic === ref.path || n.topic === ref.name),
+      typeof n.id === 'number' && isCodeNode(n) && (n.topic === ref.path || n.topic === ref.name),
   );
   const ids = [...new Set(matches.map((n) => n.id))];
   return ids.length === 1 ? ids[0] : undefined;
 }
 
-/** Map hippo `/api/walk` neighbor nodes to graph Hit[] (source:'graph', text = topic). Pure. */
+/**
+ * Map hippo `/api/walk` neighbor nodes to graph Hit[] (source:'graph', text = topic) and RANK them by
+ * the real walk signal: `score` DESC (hippo's PPR/activation weight per neighbor), tie-broken by a
+ * SHALLOWER `depth` first when present (a 1-hop neighbor is more relevant than a 2-hop one at the same
+ * score), then by chunkId for a stable, deterministic order. `depth` (when known) is surfaced on
+ * `hit.extra.depth`. Pure. (D4)
+ */
 export function fromWalk(nodes: HippoNode[]): Hit[] {
   const out: Hit[] = [];
   for (const node of nodes) {
@@ -158,14 +170,31 @@ export function fromWalk(nodes: HippoNode[]): Hit[] {
       score: typeof node.score === 'number' ? node.score : 0,
       source: 'graph',
     };
-    if (node.kind !== undefined) hit.extra = { kind: node.kind, nodeId: node.id };
-    else hit.extra = { nodeId: node.id };
+    const extra: Record<string, unknown> = { nodeId: node.id };
+    if (node.kind !== undefined) extra['kind'] = node.kind;
+    if (typeof node.depth === 'number') extra['depth'] = node.depth;
+    hit.extra = extra;
     if (isCodeNode(node) && node.topic !== undefined && topicLooksLikePath(node.topic)) {
       hit.path = node.topic;
     }
     out.push(hit);
   }
+  // Rank by score DESC; tie-break shallower depth first (Infinity when absent so a known depth wins),
+  // then chunkId for determinism. A pure sort over the mapped hits keeps every fallback above intact.
+  out.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const da = depthOf(a);
+    const db = depthOf(b);
+    if (da !== db) return da - db;
+    return a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0;
+  });
   return out;
+}
+
+/** A hit's walk depth (from `extra.depth`) or +Infinity when unknown (so known depths sort first). */
+function depthOf(hit: Hit): number {
+  const d = hit.extra?.['depth'];
+  return typeof d === 'number' ? d : Infinity;
 }
 
 /** Thrown when hippo's HTTP read API fails. The key is NEVER included in the message. */
@@ -206,9 +235,11 @@ export class HippoMemoryProvider implements MemoryProvider {
     this.url = hippoInput.url ?? process.env['HIPPO_URL'] ?? DEFAULT_URL;
     this.#key = hippoInput.key ?? process.env['HIPPO_KEY']; // optional; never logged
     this.embeddings = deps.embeddings;
-    const f = deps.fetch ?? (globalThis.fetch as FetchLike | undefined);
-    if (!f) throw new HippoError('no fetch implementation available');
-    this.fetchImpl = f;
+    try {
+      this.fetchImpl = resolveFetch(deps);
+    } catch {
+      throw new HippoError('no fetch implementation available');
+    }
     // The local shadow lives under the same root so a hippo-backed scope still has a writable side.
     this.shadow = new LocalMemoryProvider(input, deps);
     void this.embeddings; // reserved: future HyDE query embedding on the client side

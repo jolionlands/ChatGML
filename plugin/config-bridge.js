@@ -16,7 +16,8 @@
   function ConfigBridge(pluginDir) {
     this.pluginDir = pluginDir;
     this.prefsPath = path.join(pluginDir, 'chatgml-prefs.json');
-    this.prefs = { binaryPath: '', scope: '' };
+    this.prefs = { binaryPath: '', scope: '', approvalPolicy: {}, mcpServers: '{}' };
+    this._coreAvailable = false;
     this._load();
   }
 
@@ -27,6 +28,12 @@
         if (raw && typeof raw === 'object') {
           if (typeof raw.binaryPath === 'string') this.prefs.binaryPath = raw.binaryPath;
           if (typeof raw.scope === 'string') this.prefs.scope = raw.scope;
+          if (raw.approvalPolicy && typeof raw.approvalPolicy === 'object') {
+            this.prefs.approvalPolicy = raw.approvalPolicy;
+          }
+          if (typeof raw.mcpServers === 'string') {
+            this.prefs.mcpServers = raw.mcpServers;
+          }
         }
       }
     } catch (e) {
@@ -57,6 +64,53 @@
     this._save();
   };
 
+  ConfigBridge.prototype.getMcpServers = function () {
+    return this.prefs.mcpServers || '{}';
+  };
+
+  ConfigBridge.prototype.setMcpServers = function (jsonString) {
+    if (typeof jsonString !== 'string') {
+      throw new Error('MCP server config must be a JSON string');
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonString);
+    } catch (e) {
+      throw new Error('invalid JSON: ' + (e.message || e));
+    }
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('MCP server config must be an object mapping server names to configs');
+    }
+    const normalized = JSON.stringify(parsed, null, 2);
+    this.prefs.mcpServers = normalized;
+    this._save();
+    const self = this;
+    this.setConfigField('mcpServers', normalized, function (err) {
+      if (err) console.warn('chatgml: could not set mcpServers', err);
+    });
+  };
+
+  ConfigBridge.prototype.getApprovalPolicy = function () {
+    return this.prefs.approvalPolicy || {};
+  };
+
+  ConfigBridge.prototype.setApprovalPolicy = function (tool, mode) {
+    if (!tool || (mode !== 'gated' && mode !== 'auto')) return;
+    const policy = this.getApprovalPolicy();
+    policy[tool] = mode;
+    this.prefs.approvalPolicy = policy;
+    this._save();
+    if (this._coreAvailable) {
+      this.setConfigField('toolApproval.' + tool, mode, function (err) {
+        if (err) console.warn('chatgml: could not mirror toolApproval.' + tool, err);
+      });
+    }
+  };
+
+  ConfigBridge.prototype.setCoreAvailable = function (available) {
+    this._coreAvailable = !!available;
+  };
+
   /** Resolve the executable the same way the client does (for `config show` and UI display). */
   ConfigBridge.prototype._resolveBinary = function () {
     const distCli = path.join(this.pluginDir, 'dist', 'cli.js');
@@ -66,7 +120,7 @@
       env: process.env,
       platform: process.platform,
       distCliPath: fs.existsSync(distCli) ? distCli : distCliUp,
-      nodePath: process.execPath,
+      nodePath: 'node',
       exists: function (p) {
         return fs.existsSync(p);
       },
@@ -96,6 +150,29 @@
       } catch (parseErr) {
         cb(parseErr, null);
       }
+    });
+  };
+
+  /**
+   * Persist one config field via `chatgml config set <field> <value>` (writes the user-global config
+   * file). The core itself refuses literal secrets (exit 2); for the non-secret UI fields we expose
+   * here (scope is NOT a config field — scope is a plugin pref; chat.model/approval ARE config
+   * fields). Returns the core's stdout text on success. Used by the /model and /approval slash
+   * commands from the panel.
+   */
+  ConfigBridge.prototype.setConfigField = function (field, value, cb) {
+    let resolved;
+    try {
+      resolved = this._resolveBinary();
+    } catch (err) {
+      return cb(err, null);
+    }
+    // `scope` is handled as a plugin pref (configBridge.setScope) because the core takes it as a
+    // flag at serve argv build time, not a config field. Guard defensively anyway.
+    const args = resolved.argvPrefix.concat(['config', 'set', field, value]);
+    execFile(resolved.cmd, args, { encoding: 'utf8' }, function (err, stdout, stderr) {
+      if (err) return cb(err, null);
+      cb(null, stdout || stderr || '');
     });
   };
 

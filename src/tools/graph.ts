@@ -11,10 +11,11 @@ import { formatHits } from './search.js';
 
 const GraphArgs = z.object({
   name: z.string().min(1).describe('symbol name, e.g. "apply_dmg" or "obj_player"'),
-  path: z.string().optional().describe('repo-relative path the symbol lives in (improves precision)'),
-  kind: z
-    .enum(['function', 'class', 'method', 'struct', 'enum', 'object', 'event'])
-    .optional(),
+  path: z
+    .string()
+    .optional()
+    .describe('repo-relative path the symbol lives in (improves precision)'),
+  kind: z.enum(['function', 'class', 'method', 'struct', 'enum', 'object', 'event']).optional(),
 });
 type GraphArgs = z.infer<typeof GraphArgs>;
 

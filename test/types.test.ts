@@ -33,8 +33,22 @@ describe('shared types', () => {
           return e.path;
         case 'answer':
           return e.text;
+        case 'turn_end':
+          return e.userText;
         case 'error':
           return e.message;
+        case 'pong':
+        case 'checkpoint':
+        case 'command_request':
+        case 'command_output':
+        case 'command_exit':
+          return e.id;
+        case 'tool_catalog':
+          return String(e.tools.length);
+        case 'mcp_tool_call':
+        case 'mcp_tool_result':
+        case 'mcp_resource':
+          return e.server;
         default: {
           const _exhaustive: never = e;
           return _exhaustive;

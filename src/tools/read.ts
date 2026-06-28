@@ -36,7 +36,11 @@ export const readTool: ToolDef<ReadArgs> = defineTool<ReadArgs>({
   kind: 'read',
   schema: ReadArgs,
   async execute(args: ReadArgs, ctx: ToolContext): Promise<ToolResult> {
-    if (args.startLine !== undefined && args.endLine !== undefined && args.endLine < args.startLine) {
+    if (
+      args.startLine !== undefined &&
+      args.endLine !== undefined &&
+      args.endLine < args.startLine
+    ) {
       throw new ToolError('bad_args', 'endLine must be >= startLine');
     }
 

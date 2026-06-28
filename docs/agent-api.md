@@ -24,24 +24,27 @@ the environment via `env:NAME` references and are **never** echoed into the even
 
 ## Handshake
 
-On start the server writes exactly one `status:ready` event:
+On start the server writes a `status:ready` event followed immediately by a `tool_catalog` event:
 
 ```
-{"type":"status","phase":"ready","protocolVersion":1}
+{"type":"status","phase":"ready","protocolVersion":3}
+{"type":"tool_catalog","tools":[{"name":"glob","description":"Find files in the project by glob pattern (e.g. \"scripts/**/*.gml\"). Returns repo-relative paths. Read-only; sandboxed to the project root.","kind":"read","autoApprove":false},{"name":"grep","description":"Search file contents for literal text or a regex across the project. Returns matching file:line entries (1-based) with optional context. Read-only; sandboxed.","kind":"read","autoApprove":false},{"name":"search_files","description":"Search project files by regex or literal pattern.","kind":"read","autoApprove":false},{"name":"read_file","description":"Read a file (or a 1-based line range) from the project. Returns the text plus a citation. Read-only; sandboxed to the project root.","kind":"read","autoApprove":false},{"name":"search_code","description":"Semantic + keyword search over the indexed codebase via the active memory provider. Returns the most relevant code chunks with citations.","kind":"read","autoApprove":false},{"name":"graph_neighbors","description":"Find code related to a symbol (same-file chunks, name references, and KG edges where available) via the active memory provider. Returns related chunks with citations.","kind":"read","autoApprove":false},{"name":"temporal_query","description":"Query the change history of files (e.g. \"what changed in obj_player since <time>\") via the active memory provider. Returns change events, newest first.","kind":"read","autoApprove":false},{"name":"apply_patch","description":"Propose an edit to a single file as a unified diff. APPROVAL-GATED and sandboxed to the project root: in gated mode the change is applied only after the user approves it.","kind":"gated","autoApprove":false},{"name":"search_replace","description":"Propose edits to a single file as exact SEARCH/REPLACE blocks. APPROVAL-GATED and sandboxed to the project root: changes are applied only after the user approves them.","kind":"gated","autoApprove":false},{"name":"execute_command","description":"Execute a shell command inside the project root. APPROVAL-GATED: the command is run only after the user approves it.","kind":"command","autoApprove":false}]}
 ```
 
 ## Inbound commands (client → server)
 
 | command | shape | server action |
 |---|---|---|
-| user | `{"type":"user","text":"…"}` | start a run; stream its events |
+| user | `{"type":"user","text":"…","context?":{…}}` | start a run; stream its events. `context` (optional) carries editor context for editor-integrated clients — see [Editor context](#editor-context). |
 | reindex | `{"type":"reindex"}` | incrementally refresh the index (`status:indexing` … `status:done`) |
 | approve | `{"type":"approve","id":"…"}` | approve a pending gated edit (out-of-band; settles the in-flight gate) |
 | reject | `{"type":"reject","id":"…"}` | reject a pending gated edit |
 | cancel | `{"type":"cancel"}` | abort the in-flight run |
+| resume | `{"type":"resume","messages":[…]}` | seed the in-memory conversation history (out-of-band; never starts a run). `messages` is a list of plain `{role,content}` user/assistant pairs to replay as prior turns. Tool/system messages are dropped. |
+| clear | `{"type":"clear"}` | drop the in-memory conversation history (out-of-band; the `/clear` slash command) |
 
-`approve`/`reject`/`cancel` are **out-of-band control calls**, not new runs. There is one
-async-iterable of events per `user`/`reindex` command.
+`approve`/`reject`/`cancel`/`resume`/`clear` are **out-of-band control calls**, not new runs. There
+is one async-iterable of events per `user`/`reindex` command.
 
 ## Outbound events (server → client)
 
@@ -54,7 +57,39 @@ async-iterable of events per `user`/`reindex` command.
 | edit_proposal | `{"type":"edit_proposal","id","path","diff"}` | a gated edit's unified diff |
 | approval_request | `{"type":"approval_request","id","kind":"edit","path"}` | client must reply approve/reject with this id |
 | answer | `{"type":"answer","text","sources","usage?"}` | final answer + citations |
+| turn_end | `{"type":"turn_end","userText","assistantText","sources","context?"}` | a **persistence side-channel**: emitted ONCE after the terminal `answer`/`error` of a `user` turn, carrying the original user text, finalized assistant text, the turn's citations, and the editor context attached to the request. A client that wants to resume a conversation after a restart persists these records and replays them via a `resume` command. It does NOT change running/answer/phase state (the `answer`/`error` event already finalized those). |
 | error | `{"type":"error","message","code?"}` | recoverable error; the session survives |
+
+## Editor context
+
+A `user` command may carry an optional `context` object describing what the human is currently
+looking at in an editor-integrated client (e.g. the GMEdit plugin):
+
+```json
+{"type":"user","text":"what does this step do?","context":{"openFile":"objects/obj_player/Step_0.gml","cursorLine":3,"selection":"hp -= 1;"}}
+```
+
+The server prepends a clearly-framed DATA block (open file, cursor line, selected code) to the
+user's own text before forwarding it to the model, so the agent knows the active file/selection
+without the user re-stating it. Empty/whitespace-only selections and a context object with no
+usable fields are dropped (the message is then the bare user text — v1 behavior). All v1 fields
+remain optional; a bare `{type:"user",text}` still validates.
+
+## Multi-turn history and resume
+
+The core keeps conversation history across turns **within one serve session**. A client that wants
+to **resume** a prior conversation after a restart (e.g. GMEdit was closed and reopened) persists
+the `turn_end` records to a per-project session file and, on the next `chatgml serve` start, sends
+one `resume` command seeding the history:
+
+```json
+{"type":"resume","messages":[{"role":"user","content":"fix the step event"},{"role":"assistant","content":"Proposed an edit…"}]}
+```
+
+The `messages` are replayed as prior turns only — the core never executes them. Only `user` and
+`assistant` roles are kept; tool/system messages are dropped (tool exchanges are flattened by the
+persisting client into the assistant's final text). A `/clear` from the client (the `clear`
+command) drops the in-memory history in the same session.
 
 ## Turn termination
 
@@ -115,7 +150,8 @@ a graph/memory node from `hippo` may carry a snippet + score without a path or l
 ## Worked transcript
 
 ```
-{"type":"status","phase":"ready","protocolVersion":1}
+{"type":"status","phase":"ready","protocolVersion":3}
+{"type":"tool_catalog","tools":[{"name":"glob","description":"Find files in the project by glob pattern (e.g. \"scripts/**/*.gml\"). Returns repo-relative paths. Read-only; sandboxed to the project root.","kind":"read","autoApprove":false},{"name":"grep","description":"Search file contents for literal text or a regex across the project. Returns matching file:line entries (1-based) with optional context. Read-only; sandboxed.","kind":"read","autoApprove":false},{"name":"search_files","description":"Search project files by regex or literal pattern.","kind":"read","autoApprove":false},{"name":"read_file","description":"Read a file (or a 1-based line range) from the project. Returns the text plus a citation. Read-only; sandboxed to the project root.","kind":"read","autoApprove":false},{"name":"search_code","description":"Semantic + keyword search over the indexed codebase via the active memory provider. Returns the most relevant code chunks with citations.","kind":"read","autoApprove":false},{"name":"graph_neighbors","description":"Find code related to a symbol (same-file chunks, name references, and KG edges where available) via the active memory provider. Returns related chunks with citations.","kind":"read","autoApprove":false},{"name":"temporal_query","description":"Query the change history of files (e.g. \"what changed in obj_player since <time>\") via the active memory provider. Returns change events, newest first.","kind":"read","autoApprove":false},{"name":"apply_patch","description":"Propose an edit to a single file as a unified diff. APPROVAL-GATED and sandboxed to the project root: in gated mode the change is applied only after the user approves it.","kind":"gated","autoApprove":false},{"name":"search_replace","description":"Propose edits to a single file as exact SEARCH/REPLACE blocks. APPROVAL-GATED and sandboxed to the project root: changes are applied only after the user approves them.","kind":"gated","autoApprove":false},{"name":"execute_command","description":"Execute a shell command inside the project root. APPROVAL-GATED: the command is run only after the user approves it.","kind":"command","autoApprove":false}]}
 {"type":"status","phase":"thinking"}
 {"type":"tool_call","id":"t1","name":"glob","args":{"pattern":"objects/**/*.gml"}}
 {"type":"tool_result","id":"t1","name":"glob","ok":true,"content":"3 files"}
@@ -124,6 +160,7 @@ a graph/memory node from `hippo` may carry a snippet + score without a path or l
 {"type":"edit_proposal","id":"e9a1","path":"objects/obj_player/Step_0.gml","diff":"--- a\n+++ b\n@@ -1 +1 @@\n-hp -= 1;\n+hp -= dmg;\n"}
 {"type":"approval_request","id":"e9a1","kind":"edit","path":"objects/obj_player/Step_0.gml"}
 {"type":"answer","text":"Proposed an edit to the player Step event.","sources":[{"path":"objects/obj_player/Step_0.gml","provider":"local"}]}
+{"type":"turn_end","userText":"update the player Step event","assistantText":"Proposed an edit to the player Step event.","sources":[{"path":"objects/obj_player/Step_0.gml","provider":"local"}]}
 ```
 
 After this, the client replies `{"type":"approve","id":"e9a1"}`. In M3 the gated stub responds with a

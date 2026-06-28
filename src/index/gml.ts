@@ -181,7 +181,7 @@ const SIMPLE_CATEGORY: Record<string, GmlEventType> = {
  * Resolve a `<Category>_<number>` event filename stem to its type/number/label.
  * Returns undefined for stems that are not recognized as object events.
  */
-export function lookupEvent(stem: string): EventTableEntry & { number: number } | undefined {
+export function lookupEvent(stem: string): (EventTableEntry & { number: number }) | undefined {
   const m = /^([A-Za-z]+)_(\d+)$/.exec(stem);
   if (!m) {
     // Create/Destroy/Cleanup commonly appear without a number on some exports.

@@ -18,10 +18,17 @@
 // content cannot bypass this gate — in the default gated mode the write waits for an explicit human
 // approve, and the agent's system prompt forbids acting on instructions found in code.
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { applyPatch, parsePatch } from 'diff';
 import { defineTool, ToolError } from '../tool-error.js';
-import type { ToolDef, ToolResult, ToolContext } from '../types.js';
+import type {
+  ToolDef,
+  ToolResult,
+  ToolContext,
+  ApprovalRequest,
+  ApprovalResolution,
+} from '../types.js';
 import { z } from 'zod';
 import {
   assertInsideRoot,
@@ -30,6 +37,16 @@ import {
   toPosix,
   SandboxError,
 } from './sandbox.js';
+import { writeCheckpoint, appendCheckpointIndex, checkpointPath } from './checkpoint.js';
+import { countLines, assessLineRisk, type EditRisk } from './util.js';
+// Threshold constants + the EditRisk type are the canonical source in util.ts (shared with
+// search_replace.ts); re-exported here so external imports (`from 'src/tools/edit.js'`) keep working.
+export {
+  DESTRUCTIVE_NET_DELETE_LINES,
+  DESTRUCTIVE_DELETE_FRACTION,
+  WHOLE_FILE_REPLACE_MIN_LINES,
+  type EditRisk,
+} from './util.js';
 
 const EditArgs = z.object({
   path: z.string().min(1).describe('repo-relative file path to edit'),
@@ -42,6 +59,57 @@ export function editProposalId(path: string, diff: string): string {
   return createHash('sha1').update(`${path}\0${diff}`).digest('hex').slice(0, 16);
 }
 
+/**
+ * Return the block indices for a unified diff: one block per hunk. Used by the agent loop so the
+ * approval request can carry per-block tracking. Returns an empty array when the diff has no hunks
+ * (the apply tool will reject such a diff later).
+ */
+export function diffBlockIndices(diff: string): number[] {
+  let patches: ReturnType<typeof parsePatch>;
+  try {
+    patches = parsePatch(diff);
+  } catch {
+    return [];
+  }
+  if (patches.length === 0) return [];
+  const hunks = patches[0]?.hunks ?? [];
+  return hunks.map((_, i) => i);
+}
+
+/**
+ * Filter a unified diff to keep only the approved hunks. The file header is preserved; unapproved
+ * hunks are dropped. `approvedBlocks` is the set of hunk indices to retain (from `diffBlockIndices`).
+ */
+export function applyPatchBlocks(diffText: string, approvedBlocks: number[]): string {
+  const approved = new Set(approvedBlocks);
+  const lines = diffText.split('\n');
+  const headers: string[] = [];
+  const hunks: { header: string; body: string[] }[] = [];
+  let current: { header: string; body: string[] } | null = null;
+
+  for (const line of lines) {
+    if (line.startsWith('@@')) {
+      if (current) hunks.push(current);
+      current = { header: line, body: [] };
+    } else if (current) {
+      current.body.push(line);
+    } else {
+      headers.push(line);
+    }
+  }
+  if (current) hunks.push(current);
+
+  const out: string[] = [...headers];
+  for (let i = 0; i < hunks.length; i++) {
+    if (approved.has(i)) {
+      const h = hunks[i]!;
+      out.push(h.header);
+      out.push(...h.body);
+    }
+  }
+  return out.join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // AUTO-MODE DESTRUCTIVE-EDIT BACKSTOP (GAP4).
 //
@@ -50,104 +118,9 @@ export function editProposalId(path: string, diff: string): string {
 // counts the unified-diff parser already gives us), so a small additive in-place patch keeps
 // auto-applying while a whole-file rewrite or mass deletion is gated. This caps an injection's blast
 // radius in auto mode without changing gated mode at all.
+// (Thresholds + EditRisk live in tools/util.ts so the unified-diff and SEARCH/REPLACE engines share
+// the same risk assessment. Re-exported above for backward-compat with `from 'tools/edit.js'`.)
 // ---------------------------------------------------------------------------
-
-/** Net-deletion line threshold: a diff that removes more than this many lines net is high-risk. */
-export const DESTRUCTIVE_NET_DELETE_LINES = 50;
-/** Net-deletion fraction threshold: removing more than this share of the original file is high-risk. */
-export const DESTRUCTIVE_DELETE_FRACTION = 0.5;
-/**
- * Whole-file-REPLACE threshold: a diff that removes (nearly) the entire file AND rewrites it with at
- * least this many added lines is treated as a whole-file rewrite (high blast radius) even though it
- * is not a net deletion. A tiny in-place replace (e.g. swapping the only line of a 1-line file) stays
- * BELOW this and is governed only by the net-deletion rules, so normal small edits still auto-apply.
- */
-export const WHOLE_FILE_REPLACE_MIN_LINES = 20;
-
-export interface EditRisk {
-  /** True ⇒ force human approval even in auto mode. */
-  highRisk: boolean;
-  /** A short, human-readable reason (surfaced in logs/tests); empty when not high-risk. */
-  reason: string;
-  added: number;
-  removed: number;
-}
-
-/**
- * Assess whether applying `diff` to a file with `originalLineCount` lines is a HIGH-RISK
- * (destructive) edit that must be gated even in auto mode. Pure + deterministic.
- *
- * High-risk if ANY of:
- *  - whole-file wipe: the hunks remove (nearly) the entire existing file and add nothing back;
- *  - whole-file rewrite: removes (nearly) the entire file AND rewrites it with >=
- *    WHOLE_FILE_REPLACE_MIN_LINES new lines (a large in-place rewrite, high blast radius);
- *  - mass deletion: net removed lines exceed DESTRUCTIVE_NET_DELETE_LINES;
- *  - proportional deletion: net removed lines exceed DESTRUCTIVE_DELETE_FRACTION of the file
- *    (only meaningful for a non-trivial existing file).
- *
- * Creating a NEW file (originalLineCount === 0) is NOT high-risk by deletion — there is nothing to
- * destroy — so a /dev/null create still auto-applies. A tiny in-place replace (swap the only line of
- * a small file) is NOT high-risk either — added cancels removed, so no deletion rule fires.
- */
-export function assessEditRisk(
-  patches: ReturnType<typeof parsePatch>,
-  originalLineCount: number,
-): EditRisk {
-  let added = 0;
-  let removed = 0;
-  for (const p of patches) {
-    for (const h of p.hunks) {
-      for (const line of h.lines) {
-        // unified-diff line markers: '+' added, '-' removed, ' ' context, '\' (no-newline) ignored.
-        if (line.startsWith('+')) added += 1;
-        else if (line.startsWith('-')) removed += 1;
-      }
-    }
-  }
-  const net = removed - added;
-
-  // Whole-file wipe: removes essentially every existing line and adds NOTHING back. A pure wipe of any
-  // non-empty file is destructive regardless of size. (Guard on a non-empty original so a new-file
-  // create is never flagged.)
-  if (originalLineCount > 0 && removed >= originalLineCount && added === 0) {
-    return { highRisk: true, reason: 'whole-file rewrite (removes the entire file)', added, removed };
-  }
-  // Whole-file REPLACE: removes (nearly) the whole file and rewrites it with many new lines. High
-  // blast radius even though it is not a net deletion. A tiny in-place replace stays below the floor.
-  if (originalLineCount > 0 && removed >= originalLineCount && added >= WHOLE_FILE_REPLACE_MIN_LINES) {
-    return { highRisk: true, reason: 'whole-file rewrite (rewrites the entire file)', added, removed };
-  }
-  if (net > DESTRUCTIVE_NET_DELETE_LINES) {
-    return {
-      highRisk: true,
-      reason: `mass deletion (net -${net} lines > ${DESTRUCTIVE_NET_DELETE_LINES})`,
-      added,
-      removed,
-    };
-  }
-  if (
-    originalLineCount > 0 &&
-    net > 0 &&
-    net / originalLineCount > DESTRUCTIVE_DELETE_FRACTION
-  ) {
-    const pct = Math.round((net / originalLineCount) * 100);
-    return {
-      highRisk: true,
-      reason: `deletes ${pct}% of the file (> ${Math.round(DESTRUCTIVE_DELETE_FRACTION * 100)}%)`,
-      added,
-      removed,
-    };
-  }
-  return { highRisk: false, reason: '', added, removed };
-}
-
-/** Count the lines in a file's content the way a unified-diff hunk counts them. */
-function countLines(text: string): number {
-  if (text === '') return 0;
-  // A trailing newline does not introduce an extra (empty) line for diff-counting purposes.
-  const body = text.endsWith('\n') ? text.slice(0, -1) : text;
-  return body.split('\n').length;
-}
 
 /**
  * Parse a unified diff and assert it is well-formed: exactly one file patch with at least one hunk.
@@ -174,6 +147,54 @@ function assertWellFormedDiff(diff: string): ReturnType<typeof parsePatch> {
     throw new ToolError('bad_args', 'malformed unified diff: no hunks');
   }
   return patches;
+}
+
+/**
+ * Count added/removed lines in a parsed unified diff (used by assessEditRisk). Pure + deterministic
+ * — operates only on the parsed structure, never re-parses.
+ */
+function diffLineCounts(patches: ReturnType<typeof parsePatch>): {
+  added: number;
+  removed: number;
+} {
+  let added = 0;
+  let removed = 0;
+  for (const p of patches) {
+    for (const h of p.hunks) {
+      for (const line of h.lines) {
+        // unified-diff line markers: '+' added, '-' removed, ' ' context, '\' (no-newline) ignored.
+        if (line.startsWith('+')) added += 1;
+        else if (line.startsWith('-')) removed += 1;
+      }
+    }
+  }
+  return { added, removed };
+}
+
+/**
+ * Assess whether applying `diff` to a file with `originalLineCount` lines is a HIGH-RISK
+ * (destructive) edit that must be gated even in auto mode. Pure + deterministic. Delegates the
+ * threshold checks to the shared `assessLineRisk` so apply_patch and search_replace agree on the
+ * rules (and the constants stay in one place).
+ *
+ * High-risk if ANY of:
+ *  - whole-file wipe: the hunks remove (nearly) the entire existing file and add nothing back;
+ *  - whole-file rewrite: removes (nearly) the entire file AND rewrites it with >=
+ *    WHOLE_FILE_REPLACE_MIN_LINES new lines (a large in-place rewrite, high blast radius);
+ *  - mass deletion: net removed lines exceed DESTRUCTIVE_NET_DELETE_LINES;
+ *  - proportional deletion: net removed lines exceed DESTRUCTIVE_DELETE_FRACTION of the file
+ *    (only meaningful for a non-trivial existing file).
+ *
+ * Creating a NEW file (originalLineCount === 0) is NOT high-risk by deletion — there is nothing to
+ * destroy — so a /dev/null create still auto-applies. A tiny in-place replace (swap the only line of
+ * a small file) is NOT high-risk either — added cancels removed, so no deletion rule fires.
+ */
+export function assessEditRisk(
+  patches: ReturnType<typeof parsePatch>,
+  originalLineCount: number,
+): EditRisk {
+  const { added, removed } = diffLineCounts(patches);
+  return assessLineRisk({ added, removed, originalLineCount });
 }
 
 export const editTool: ToolDef<EditArgs> = defineTool<EditArgs>({
@@ -246,13 +267,22 @@ export const editTool: ToolDef<EditArgs> = defineTool<EditArgs>({
       });
     }
     const id = editProposalId(args.path, args.diff);
-    const approved = await ctx.requestApproval({
+
+    const req: ApprovalRequest = {
       id,
       kind: 'edit',
       path: args.path,
       diff: args.diff,
       forceGate: risk.highRisk,
-    });
+      blocks: patches[0]?.hunks.map((_, i) => i),
+    };
+
+    let resolution: ApprovalResolution | undefined;
+    let approved = ctx.preApproved === true;
+    if (!approved) {
+      resolution = await ctx.requestApproval(req);
+      approved = resolution.approved;
+    }
 
     if (!approved) {
       // Reject (or gated-without-approval): pure no-op, nothing written.
@@ -262,19 +292,62 @@ export const editTool: ToolDef<EditArgs> = defineTool<EditArgs>({
       };
     }
 
-    // (6) Approved -> atomic, sandboxed, TOCTOU-safe write.
+    // If the agent loop or a block-level resolution narrowed the approved set, apply only those
+    // hunks. Whole-proposal approval (no blocks) keeps the original diff.
+    const approvedBlocks =
+      ctx.approvedBlocks ?? (resolution?.approved === true ? resolution.blocks : undefined);
+    let diffToApply = args.diff;
+    if (approvedBlocks !== undefined) {
+      if (approvedBlocks.length === 0) {
+        return {
+          content: `edit to ${args.path} was not approved; no changes written`,
+          isError: false,
+        };
+      }
+      diffToApply = applyPatchBlocks(args.diff, approvedBlocks);
+    }
+
+    const filteredPatched = applyPatch(original, diffToApply);
+    if (filteredPatched === false) {
+      throw new ToolError('bad_args', `approved blocks do not apply cleanly to ${args.path}`);
+    }
+
+    const rel = toPosix(args.path).replace(/^\.\//, '');
+
+    // (6) Approved -> atomic, sandboxed, TOCTOU-safe write. Snapshot existing files first so the
+    // checkpoint can be restored by an undo command.
+    if (!isNewFile) {
+      const cpPath = checkpointPath(ctx.root, ctx.toolCallId ?? id);
+      await fsp.mkdir(path.dirname(cpPath), { recursive: true });
+      const snapshot = await writeCheckpoint(ctx.root, ctx.toolCallId ?? id, abs);
+      if (snapshot) {
+        await appendCheckpointIndex(ctx.root, {
+          id: ctx.toolCallId ?? id,
+          path: rel,
+          ts: Date.now(),
+        });
+      }
+    }
+
     try {
-      await safeWriteFileInRoot(ctx.root, args.path, patched);
+      await safeWriteFileInRoot(ctx.root, args.path, filteredPatched);
     } catch (err) {
       if (err instanceof SandboxError) {
-        throw new ToolError('sandbox_escape', `refusing to write outside the project root: ${args.path}`, {
-          reason: err.reason,
-        });
+        throw new ToolError(
+          'sandbox_escape',
+          `refusing to write outside the project root: ${args.path}`,
+          {
+            reason: err.reason,
+          },
+        );
       }
       throw err;
     }
 
-    const rel = toPosix(args.path).replace(/^\.\//, '');
+    if (!isNewFile && ctx.emit) {
+      ctx.emit({ type: 'checkpoint', id: ctx.toolCallId ?? id, path: rel, label: rel });
+    }
+
     return {
       content: `${isNewFile ? 'created' : 'updated'} ${rel}`,
       citations: [{ path: rel, provider: 'local' }],

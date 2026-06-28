@@ -111,8 +111,10 @@ describe('drive-letter case handling (win32 semantics)', () => {
   it('lowercases only the drive letter for comparison', () => {
     // On posix this path has no drive letter; assert the relative accept still works on both OSes.
     const r = assertInsideRoot(ROOT, 'a/b.gml');
-    expect(toPosix(r).toLowerCase().includes('/proj/root/a/b.gml'.toLowerCase()) ||
-      toPosix(r).toLowerCase().includes('c:/proj/root/a/b.gml')).toBe(true);
+    expect(
+      toPosix(r).toLowerCase().includes('/proj/root/a/b.gml'.toLowerCase()) ||
+        toPosix(r).toLowerCase().includes('c:/proj/root/a/b.gml'),
+    ).toBe(true);
   });
 });
 

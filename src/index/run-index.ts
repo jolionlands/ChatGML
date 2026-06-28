@@ -20,7 +20,10 @@ export interface RunIndexDeps {
  * Build (or incrementally update) the local index for `config.index.root`. Only files whose content
  * hash changed are re-embedded. Returns the per-file change counts.
  */
-export async function runIndexCommand(config: Config, deps: RunIndexDeps = {}): Promise<IndexResult> {
+export async function runIndexCommand(
+  config: Config,
+  deps: RunIndexDeps = {},
+): Promise<IndexResult> {
   const root = config.index.root;
   const scope = makeScope(config.scope);
 
@@ -38,10 +41,15 @@ export async function runIndexCommand(config: Config, deps: RunIndexDeps = {}): 
 
   const memory = await createMemoryProvider({ ...config.memory, root }, { embeddings });
 
-  const result = await runIndex(root, scope, { memory, embeddings }, {
-    chunkSize: config.index.chunkSize,
-    chunkOverlap: config.index.chunkOverlap,
-  });
+  const result = await runIndex(
+    root,
+    scope,
+    { memory, embeddings },
+    {
+      chunkSize: config.index.chunkSize,
+      chunkOverlap: config.index.chunkOverlap,
+    },
+  );
 
   if (memory.close) await memory.close();
   return result;

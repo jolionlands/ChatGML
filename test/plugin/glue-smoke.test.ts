@@ -28,6 +28,19 @@ describe('plugin glue modules load as CommonJS', () => {
     }
   });
 
+  it('child-process.js exposes the shared spawn helpers', () => {
+    const m = require(path.join(PLUGIN, 'child-process.js'));
+    for (const fn of [
+      'buildMinimalEnv',
+      'wrapCmdForWindows',
+      'resolveDistCliPath',
+      'resolveBinary',
+      'startCore',
+    ]) {
+      expect(typeof m[fn]).toBe('function');
+    }
+  });
+
   it('client.js exposes NdjsonClient', () => {
     const m = require(path.join(PLUGIN, 'client.js'));
     expect(typeof m.NdjsonClient).toBe('function');

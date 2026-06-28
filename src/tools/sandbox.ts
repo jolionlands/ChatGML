@@ -83,9 +83,7 @@ export function assertInsideRoot(root: string, candidate: string): string {
   }
 
   const isAbsolute = path.isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate);
-  const resolved = isAbsolute
-    ? path.resolve(candidate)
-    : path.resolve(root, candidate);
+  const resolved = isAbsolute ? path.resolve(candidate) : path.resolve(root, candidate);
 
   const rootResolved = path.resolve(root);
   const rootCmp = normalizeForCompare(rootResolved);

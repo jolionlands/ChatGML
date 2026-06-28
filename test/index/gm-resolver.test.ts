@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  buildGmResolver,
-  findYypOnDisk,
-  defaultReader,
-} from '../../src/index/gm-resolver.js';
+import { buildGmResolver, findYypOnDisk, defaultReader } from '../../src/index/gm-resolver.js';
 import { deriveGmlMeta } from '../../src/index/gml.js';
 import { applyEnrichment } from '../../src/index/gml-enrich.js';
 import { makeTmpRepo } from '../helpers/fakes.js';
@@ -235,7 +231,8 @@ describe('multi-collision resolution (D2): name-encoded resolve, GUID stays path
 describe('findYypOnDisk + defaultReader (real fs)', () => {
   it('finds the .yyp at a real project root and reads through defaultReader', async () => {
     const repo = makeTmpRepo({
-      'My Game.yyp': '{"resources":[{"id":{"name":"Object1","path":"objects/Object1/Object1.yy",},},],}',
+      'My Game.yyp':
+        '{"resources":[{"id":{"name":"Object1","path":"objects/Object1/Object1.yy",},},],}',
       'objects/Object1/Object1.yy': '{"name":"Object1","eventList":[],}',
     });
     try {
@@ -273,7 +270,10 @@ describe('findYypOnDisk + defaultReader (real fs)', () => {
 describe('applyEnrichment (sidecar layering helper)', () => {
   it('layers collisionWith + parentObject onto an object event', () => {
     const base = deriveGmlMeta('objects/obj_enemy/Collision_x.gml') as GmlEventMeta;
-    const out = applyEnrichment(base, { collisionWith: 'obj_player', parentObject: 'obj_actor' }) as GmlEventMeta;
+    const out = applyEnrichment(base, {
+      collisionWith: 'obj_player',
+      parentObject: 'obj_actor',
+    }) as GmlEventMeta;
     expect(out.collisionWith).toBe('obj_player');
     expect(out.parentObject).toBe('obj_actor');
   });

@@ -21,17 +21,8 @@ import { buildIgnoreFilter, walkFiles, type WalkOptions } from './files.js';
 import { chunkFile, hashContent } from './chunk.js';
 import { readJson, writeJsonAtomic } from '../memory/persist.js';
 import { deriveGmlMeta } from './gml.js';
-import {
-  buildGmResolver,
-  findYypOnDisk,
-  defaultReader,
-  type GmResolver,
-} from './gm-resolver.js';
-import {
-  writeEnrichmentSidecar,
-  clearGmlDeriverCache,
-  type GmEnrichment,
-} from './gml-enrich.js';
+import { buildGmResolver, findYypOnDisk, defaultReader, type GmResolver } from './gm-resolver.js';
+import { writeEnrichmentSidecar, clearGmlDeriverCache, type GmEnrichment } from './gml-enrich.js';
 
 interface ManifestEntry {
   contentHash: string;

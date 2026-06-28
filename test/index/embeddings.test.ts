@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OpenAIEmbeddings, EmbeddingError } from '../../src/index/embeddings.js';
 import { FakeEmbeddings } from '../helpers/fakes.js';
-import { installFetchMock, jsonResponse, errorResponse, FetchRecorder } from '../helpers/mock-fetch.js';
+import {
+  installFetchMock,
+  jsonResponse,
+  errorResponse,
+  FetchRecorder,
+} from '../helpers/mock-fetch.js';
 
 const SENTINEL = 'sk-SENTINEL-DEADBEEF';
 
@@ -69,10 +74,7 @@ describe('OpenAIEmbeddings', () => {
         },
       },
     ]);
-    const e = new OpenAIEmbeddings(
-      { baseURL: 'http://x/v1', model: 'm', batchSize: 2 },
-      { fetch },
-    );
+    const e = new OpenAIEmbeddings({ baseURL: 'http://x/v1', model: 'm', batchSize: 2 }, { fetch });
     const out = await e.embed(['a', 'b', 'c', 'd', 'e']);
     expect(out).toHaveLength(5);
     expect(recorder.calls).toHaveLength(3); // ceil(5/2)
@@ -134,7 +136,10 @@ describe('OpenAIEmbeddings', () => {
 
   it('throws when an embedding entry is missing/empty', async () => {
     const { fetch } = installFetchMock([
-      { match: '/embeddings', responder: () => jsonResponse({ data: [{ index: 0, embedding: [] }] }) },
+      {
+        match: '/embeddings',
+        responder: () => jsonResponse({ data: [{ index: 0, embedding: [] }] }),
+      },
     ]);
     const e = new OpenAIEmbeddings({ baseURL: 'http://x/v1', model: 'm' }, { fetch });
     await expect(e.embed(['a'])).rejects.toThrow(/missing embedding/);

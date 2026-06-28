@@ -81,7 +81,11 @@ describe('assembleToolCalls', () => {
       { index: 1, argsFragment: '{"q":"x"}' },
     ]);
     expect(calls).toEqual([
-      { id: 'call_a', type: 'function', function: { name: 'glob', arguments: '{"pattern":"*.gml"}' } },
+      {
+        id: 'call_a',
+        type: 'function',
+        function: { name: 'glob', arguments: '{"pattern":"*.gml"}' },
+      },
       { id: 'call_b', type: 'function', function: { name: 'grep', arguments: '{"q":"x"}' } },
     ]);
   });

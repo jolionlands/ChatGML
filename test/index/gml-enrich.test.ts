@@ -20,7 +20,10 @@ const SCOPE: Scope = { repo: 'gm-enrich' };
 
 function deps(root: string) {
   const emb = new FakeEmbeddings();
-  return { memory: new LocalMemoryProvider({ provider: 'local', root }, { embeddings: emb }), embeddings: emb };
+  return {
+    memory: new LocalMemoryProvider({ provider: 'local', root }, { embeddings: emb }),
+    embeddings: emb,
+  };
 }
 
 // A synthetic GM project on disk: obj_enemy inherits obj_actor and has a collision-with-obj_player
@@ -85,7 +88,9 @@ describe('runIndex — fs-aware GameMaker enrichment (end-to-end)', () => {
         parentObject: 'obj_actor',
       });
       // A non-collision event of the inheriting object still gets parentObject.
-      expect(sidecar!.byPath['objects/obj_enemy/Step_0.gml']).toEqual({ parentObject: 'obj_actor' });
+      expect(sidecar!.byPath['objects/obj_enemy/Step_0.gml']).toEqual({
+        parentObject: 'obj_actor',
+      });
       // A non-inheriting, non-collision event has no enrichment entry.
       expect(sidecar!.byPath['objects/obj_player/Create_0.gml']).toBeUndefined();
 

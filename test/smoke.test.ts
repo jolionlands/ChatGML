@@ -24,6 +24,7 @@ function cfg(root: string): Config {
     embed: { baseURL: 'http://embed.local/v1', model: 'e', batchSize: 64 },
     memory: { provider: 'local' },
     scope: 'smoke-game',
+    mode: 'code',
     approval: 'gated',
     index: { chunkSize: 1500, chunkOverlap: 200, root },
     search: {},
@@ -34,8 +35,7 @@ describe('SMOKE: index + one agent turn yields an answer with a citation', () =>
   it('runs offline with injected fake embeddings and a mocked llm', async () => {
     // 1. A tiny fixture repo with 2 .gml files.
     const repo = makeTmpRepo({
-      'objects/obj_player/Step_0.gml':
-        'hp -= 1;\nif (hp <= 0) {\n  instance_destroy();\n}\n',
+      'objects/obj_player/Step_0.gml': 'hp -= 1;\nif (hp <= 0) {\n  instance_destroy();\n}\n',
       'scripts/scr_damage/scr_damage.gml':
         'function scr_damage(amount) {\n  hp -= amount;\n  return hp;\n}\n',
     });
@@ -58,7 +58,11 @@ describe('SMOKE: index + one agent turn yields an answer with a citation', () =>
     const llm = new FakeLlm([
       {
         toolCalls: [
-          { id: 's1', name: 'search_code', arguments: JSON.stringify({ query: 'player destroyed hp' }) },
+          {
+            id: 's1',
+            name: 'search_code',
+            arguments: JSON.stringify({ query: 'player destroyed hp' }),
+          },
         ],
       },
       { tokens: ['The player is destroyed when hp reaches 0 in the Step event.'] },

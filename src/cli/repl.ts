@@ -55,6 +55,12 @@ export class EventRenderer {
             : this.st.red(`  ✗ ${firstLine(event.content)}\n`),
         );
         return null;
+      // MCP tool events are surfaced by the plugin/IDE activity panel; the terminal REPL just
+      // acknowledges them with no rendered output.
+      case 'mcp_tool_call':
+      case 'mcp_tool_result':
+      case 'mcp_resource':
+        return null;
       case 'edit_proposal':
         this.endStream();
         this.write(this.st.bold(`✎ proposed edit to ${event.path}:\n`));
@@ -75,9 +81,23 @@ export class EventRenderer {
         this.renderSources(event.sources);
         return null;
       }
+      case 'turn_end': {
+        // A persistence side-channel (the GMEdit plugin appends it to its per-project session log).
+        // The terminal REPL has no session persistence, so it produces no output; the answer event
+        // above already printed the streamed text + sources.
+        return null;
+      }
       case 'error':
         this.endStream();
         this.write(this.st.red(`! ${event.message}\n`));
+        return null;
+      // Protocol v3 events: not rendered by the terminal REPL.
+      case 'pong':
+      case 'tool_catalog':
+      case 'checkpoint':
+      case 'command_request':
+      case 'command_output':
+      case 'command_exit':
         return null;
     }
   }

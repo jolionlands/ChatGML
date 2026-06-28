@@ -19,6 +19,9 @@ const SENTINEL = 'sk-SENTINEL-DEADBEEF';
 interface Harness {
   root: string;
   xdg: string;
+  /** Convenience: an env object with XDG_CONFIG_HOME pre-set so tests don't fall through to the
+   *  developer's actual HOME dir (which could carry a real ~/.config/chatgml/config.json). */
+  env: NodeJS.ProcessEnv;
   writeProject: (cfg: unknown) => void;
   writeGlobal: (cfg: unknown) => void;
   cleanup: () => void;
@@ -27,9 +30,10 @@ interface Harness {
 function makeHarness(): Harness {
   const root = mkdtempSync(path.join(tmpdir(), 'chatgml-cfg-root-'));
   const xdg = mkdtempSync(path.join(tmpdir(), 'chatgml-cfg-xdg-'));
-  return {
+  const h: Harness = {
     root,
     xdg,
+    env: { XDG_CONFIG_HOME: xdg },
     writeProject(cfg: unknown) {
       writeFileSync(path.join(root, '.chatgml.json'), JSON.stringify(cfg), 'utf8');
     },
@@ -43,12 +47,14 @@ function makeHarness(): Harness {
       rmSync(xdg, { recursive: true, force: true });
     },
   };
+  return h;
 }
 
 const harnesses: Harness[] = [];
-function harness(): Harness {
+function harness(overrides?: { env?: NodeJS.ProcessEnv }): Harness {
   const h = makeHarness();
   harnesses.push(h);
+  if (overrides?.env) h.env = { ...h.env, ...overrides.env };
   return h;
 }
 
@@ -81,14 +87,23 @@ describe('resolveSecret', () => {
 describe('resolveConfig precedence', () => {
   it('flag > env > file > default per layer', () => {
     const h = harness();
-    h.writeGlobal({ chat: { model: 'from-file', baseURL: 'http://file/v1' }, embed: { model: 'efile' }, scope: 'sfile' });
+    h.writeGlobal({
+      chat: { model: 'from-file', baseURL: 'http://file/v1' },
+      embed: { model: 'efile' },
+      scope: 'sfile',
+    });
     const cfg = resolveConfig({
       root: h.root,
       env: {
         XDG_CONFIG_HOME: h.xdg,
         CHATGML_CHAT_MODEL: 'from-env',
       },
-      flags: { chatModel: 'from-flag', chatBaseUrl: 'http://flag/v1', embedModel: 'eflag', scope: 'sflag' },
+      flags: {
+        chatModel: 'from-flag',
+        chatBaseUrl: 'http://flag/v1',
+        embedModel: 'eflag',
+        scope: 'sflag',
+      },
     });
     // flag wins over env wins over file
     expect(cfg.chat.model).toBe('from-flag');
@@ -97,7 +112,11 @@ describe('resolveConfig precedence', () => {
 
   it('env wins over file when no flag given', () => {
     const h = harness();
-    h.writeGlobal({ chat: { model: 'from-file', baseURL: 'http://file/v1' }, embed: { model: 'efile' }, scope: 'sfile' });
+    h.writeGlobal({
+      chat: { model: 'from-file', baseURL: 'http://file/v1' },
+      embed: { model: 'efile' },
+      scope: 'sfile',
+    });
     const cfg = resolveConfig({
       root: h.root,
       env: { XDG_CONFIG_HOME: h.xdg, CHATGML_CHAT_MODEL: 'from-env' },
@@ -144,7 +163,11 @@ describe('resolveConfig precedence', () => {
 describe('search.minScore (D1 relevance floor)', () => {
   it('defaults to undefined (no floor) when no layer sets it', () => {
     const h = harness();
-    const cfg = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: baseFlags() });
+    const cfg = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: baseFlags(),
+    });
     expect(cfg.search.minScore).toBeUndefined();
   });
 
@@ -191,14 +214,18 @@ describe('search.minScore (D1 relevance floor)', () => {
       scope: 's',
       search: { minScore: 1.5 },
     });
-    expect(() => resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} })).toThrow(
-      ConfigError,
-    );
+    expect(() =>
+      resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} }),
+    ).toThrow(ConfigError);
   });
 
   it('redact omits the search lane by default and surfaces it when minScore is set', () => {
     const h = harness();
-    const off = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: baseFlags() });
+    const off = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: baseFlags(),
+    });
     expect((redact(off) as Record<string, unknown>).search).toBeUndefined();
 
     const on = resolveConfig({
@@ -307,9 +334,9 @@ describe('required-field validation (paths only, never values)', () => {
   it('invalid JSON in a config file throws ConfigError', () => {
     const h = harness();
     writeFileSync(path.join(h.root, '.chatgml.json'), '{ not json', 'utf8');
-    expect(() => resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} })).toThrow(
-      ConfigError,
-    );
+    expect(() =>
+      resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} }),
+    ).toThrow(ConfigError);
   });
 
   // F18: an unrecognized top-level key NAMES the offending key (not '(root)').
@@ -497,34 +524,41 @@ describe('DEFAULTS', () => {
 });
 
 describe('resolveConfig — required-field + hippo-key branches', () => {
+  // XDG_CONFIG_HOME must be set so `loadConfigFile` doesn't fall back to the developer's actual
+  // HOME (which would silently load their real ~/.config/chatgml/config.json and make the test
+  // hermetic only on a clean machine). Tests that exercise the file layer set it via the harness.
+  function h() {
+    return harness({ env: { XDG_CONFIG_HOME: makeHarness().xdg } });
+  }
+
   it("missing chat.model throws ConfigError referencing 'chat.model'", () => {
-    const h = harness();
+    const handle = h();
     expect(() =>
       resolveConfig({
-        root: h.root,
-        env: {},
+        root: handle.root,
+        env: handle.env,
         flags: { chatBaseUrl: 'http://chat/v1', embedModel: 'e', scope: 's' },
       }),
     ).toThrow(/chat\.model/);
   });
 
   it("missing chat.baseURL throws ConfigError referencing 'chat.baseURL'", () => {
-    const h = harness();
+    const handle = h();
     expect(() =>
       resolveConfig({
-        root: h.root,
-        env: {},
+        root: handle.root,
+        env: handle.env,
         flags: { chatModel: 'm', embedModel: 'e', scope: 's' },
       }),
     ).toThrow(/chat\.baseURL/);
   });
 
   it("missing scope throws ConfigError referencing 'scope'", () => {
-    const h = harness();
+    const handle = h();
     expect(() =>
       resolveConfig({
-        root: h.root,
-        env: {},
+        root: handle.root,
+        env: handle.env,
         flags: { chatModel: 'm', chatBaseUrl: 'http://c/v1', embedModel: 'e' },
       }),
     ).toThrow(/scope/);
@@ -562,6 +596,74 @@ describe('resolveConfig — required-field + hippo-key branches', () => {
     });
     expect(cfg.memory.provider).toBe('hippo');
     if (cfg.memory.provider === 'hippo') expect(cfg.memory.key).toBeUndefined();
+  });
+});
+
+describe('mode (P1.1)', () => {
+  it('defaults to code when no layer sets it', () => {
+    const h = harness();
+    const cfg = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: baseFlags(),
+    });
+    expect(cfg.mode).toBe('code');
+  });
+
+  it('reads mode from the config file', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      mode: 'ask',
+    });
+    const cfg = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} });
+    expect(cfg.mode).toBe('ask');
+  });
+
+  it('rejects an invalid mode enum', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      mode: 'spy',
+    });
+    expect(() =>
+      resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} }),
+    ).toThrow(ConfigError);
+  });
+
+  it('surfaces mode in redact', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      mode: 'architect',
+    });
+    const cfg = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} });
+    expect((redact(cfg) as { mode: string }).mode).toBe('architect');
+  });
+
+  it('allows mode to be set from the untrusted project file', () => {
+    const h = harness();
+    h.writeProject({ mode: 'debug' });
+    const cfg = resolveConfig({
+      root: h.root,
+      env: { XDG_CONFIG_HOME: h.xdg },
+      flags: { chatBaseUrl: 'http://c/v1', chatModel: 'c', embedModel: 'e', scope: 's' },
+    });
+    expect(cfg.mode).toBe('debug');
+  });
+
+  it('config set persists mode', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    const res = setUserGlobalConfigField('mode', 'debug', env);
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.mode).toBe('debug');
   });
 });
 
@@ -625,16 +727,16 @@ describe('setUserGlobalConfigField (durable config set)', () => {
 
   it('throws on an unknown field', () => {
     const h = harness();
-    expect(() =>
-      setUserGlobalConfigField('chat.nope', 'x', { XDG_CONFIG_HOME: h.xdg }),
-    ).toThrow(/unknown config field/);
+    expect(() => setUserGlobalConfigField('chat.nope', 'x', { XDG_CONFIG_HOME: h.xdg })).toThrow(
+      /unknown config field/,
+    );
   });
 
   it('rejects a value that would make the merged config invalid', () => {
     const h = harness();
-    expect(() =>
-      setUserGlobalConfigField('approval', 'maybe', { XDG_CONFIG_HOME: h.xdg }),
-    ).toThrow(ConfigError);
+    expect(() => setUserGlobalConfigField('approval', 'maybe', { XDG_CONFIG_HOME: h.xdg })).toThrow(
+      ConfigError,
+    );
   });
 
   it('refuses to overwrite a corrupt existing config file', () => {
@@ -645,5 +747,153 @@ describe('setUserGlobalConfigField (durable config set)', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, 'config.json'), '{ not json', 'utf8');
     expect(() => setUserGlobalConfigField('scope', 's', env)).toThrow(ConfigError);
+  });
+
+  it('writes toolApproval.execute_command=auto under the toolApproval lane', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    const res = setUserGlobalConfigField('toolApproval.execute_command', 'auto', env);
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.toolApproval).toEqual({ execute_command: 'auto' });
+  });
+
+  it('merges additional toolApproval policies into the existing lane', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    h.writeGlobal({ chat: { model: 'm', baseURL: 'http://c/v1' }, scope: 's' });
+    setUserGlobalConfigField('toolApproval.execute_command', 'auto', env);
+    setUserGlobalConfigField('toolApproval.apply_patch', 'gated', env);
+    const written = JSON.parse(readFileSync(userGlobalConfigPath(env), 'utf8'));
+    expect(written.toolApproval).toEqual({ execute_command: 'auto', apply_patch: 'gated' });
+    expect(written.chat.model).toBe('m');
+  });
+
+  it('rejects an unknown tool name in a toolApproval path', () => {
+    const h = harness();
+    expect(() =>
+      setUserGlobalConfigField('toolApproval.not_a_tool', 'auto', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(/unknown tool name/);
+  });
+
+  it('rejects an invalid toolApproval value', () => {
+    const h = harness();
+    expect(() =>
+      setUserGlobalConfigField('toolApproval.execute_command', 'sometimes', {
+        XDG_CONFIG_HOME: h.xdg,
+      }),
+    ).toThrow(ConfigError);
+  });
+});
+
+describe('mcpServers (P1.4)', () => {
+  it('reads mcpServers from the config file', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      mcpServers: {
+        fs: {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-filesystem'],
+          env: { ROOT: '/tmp' },
+        },
+      },
+    });
+    const cfg = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} });
+    expect(cfg.mcpServers).toBeDefined();
+    expect(cfg.mcpServers?.fs).toMatchObject({
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem'],
+    });
+    expect(cfg.mcpServers?.fs?.env?.ROOT).toBe('/tmp');
+  });
+
+  it('redact masks env values in mcpServers', () => {
+    const h = harness();
+    h.writeGlobal({
+      chat: { baseURL: 'http://c/v1', model: 'c' },
+      embed: { model: 'e' },
+      scope: 's',
+      mcpServers: {
+        fs: { command: 'npx', env: { SECRET: 'shh' } },
+      },
+    });
+    const cfg = resolveConfig({ root: h.root, env: { XDG_CONFIG_HOME: h.xdg }, flags: {} });
+    const redacted = redact(cfg);
+    const serialized = JSON.stringify(redacted);
+    expect(serialized).not.toContain('shh');
+    expect(serialized).toContain('***');
+    expect(serialized).toContain('npx');
+  });
+
+  it('config set persists mcpServers.<name>.command', () => {
+    const h = harness();
+    const res = setUserGlobalConfigField('mcpServers.fs.command', 'npx', {
+      XDG_CONFIG_HOME: h.xdg,
+    });
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.mcpServers.fs.command).toBe('npx');
+  });
+
+  it('config set persists mcpServers.<name>.args as a JSON array', () => {
+    const h = harness();
+    const res = setUserGlobalConfigField(
+      'mcpServers.fs.args',
+      '["-y", "@modelcontextprotocol/server-filesystem"]',
+      { XDG_CONFIG_HOME: h.xdg },
+    );
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.mcpServers.fs.args).toEqual(['-y', '@modelcontextprotocol/server-filesystem']);
+  });
+
+  it('config set persists mcpServers.<name>.env.<key>', () => {
+    const h = harness();
+    setUserGlobalConfigField('mcpServers.fs.env.ROOT', '/tmp', { XDG_CONFIG_HOME: h.xdg });
+    const written = JSON.parse(
+      readFileSync(userGlobalConfigPath({ XDG_CONFIG_HOME: h.xdg }), 'utf8'),
+    );
+    expect(written.mcpServers.fs.env).toEqual({ ROOT: '/tmp' });
+  });
+
+  it('config set coerces mcpServers.<name>.timeout to a number', () => {
+    const h = harness();
+    const res = setUserGlobalConfigField('mcpServers.fs.timeout', '60000', {
+      XDG_CONFIG_HOME: h.xdg,
+    });
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.mcpServers.fs.timeout).toBe(60000);
+    expect(typeof written.mcpServers.fs.timeout).toBe('number');
+  });
+
+  it('config set coerces mcpServers.<name>.disabled to a boolean', () => {
+    const h = harness();
+    const res = setUserGlobalConfigField('mcpServers.fs.disabled', 'true', {
+      XDG_CONFIG_HOME: h.xdg,
+    });
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.mcpServers.fs.disabled).toBe(true);
+  });
+
+  it('config set rejects invalid mcpServers fields', () => {
+    const h = harness();
+    expect(() =>
+      setUserGlobalConfigField('mcpServers.fs.nope', 'x', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      setUserGlobalConfigField('mcpServers.fs.args', 'not-json', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      setUserGlobalConfigField('mcpServers.fs.timeout', 'fast', { XDG_CONFIG_HOME: h.xdg }),
+    ).toThrow(ConfigError);
+  });
+
+  it('config set allows toolApproval for mcp-prefixed tool names', () => {
+    const h = harness();
+    const res = setUserGlobalConfigField('toolApproval.mcp_fs_echo', 'auto', {
+      XDG_CONFIG_HOME: h.xdg,
+    });
+    const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
+    expect(written.toolApproval).toEqual({ mcp_fs_echo: 'auto' });
   });
 });

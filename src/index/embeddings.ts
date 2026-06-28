@@ -6,6 +6,7 @@
 // L2-normalized so cosine similarity reduces to a dot product. Secrets are never logged; error
 // bodies are truncated + key-scrubbed.
 import type { FetchLike } from '../llm.js';
+import { scrubBody, resolveFetch, trimTrailingSlash } from '../http.js';
 
 export interface Embeddings {
   readonly dim: number;
@@ -45,20 +46,10 @@ export interface EmbeddingsDeps {
   fetch?: FetchLike;
 }
 
-const BODY_MAX = 2048;
 const DEFAULT_BATCH = 64;
 
 function embeddingsUrl(baseURL: string): string {
-  const trimmed = baseURL.replace(/\/+$/, '');
-  return `${trimmed}/embeddings`;
-}
-
-/** Truncate + key-scrub an arbitrary error body so a secret can never leak into a thrown error. */
-function scrubBody(text: string): string {
-  const scrubbed = text
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
-    .replace(/sk-[A-Za-z0-9._-]+/g, 'sk-***');
-  return scrubbed.length > BODY_MAX ? `${scrubbed.slice(0, BODY_MAX)}…` : scrubbed;
+  return `${trimTrailingSlash(baseURL)}/embeddings`;
 }
 
 /** L2-normalize a vector in place and return it. A zero vector is left as-is. */
@@ -93,9 +84,11 @@ export class OpenAIEmbeddings implements Embeddings {
     // DIMENSION is tracked separately (this.dim, learned from the first response if not configured).
     this.id = cfg.model;
     this._dim = cfg.dim ?? 0;
-    const f = deps?.fetch ?? (globalThis.fetch as FetchLike | undefined);
-    if (!f) throw new EmbeddingError('no fetch implementation available');
-    this.fetchImpl = f;
+    try {
+      this.fetchImpl = resolveFetch(deps);
+    } catch {
+      throw new EmbeddingError('no fetch implementation available');
+    }
   }
 
   get dim(): number {

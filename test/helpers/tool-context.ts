@@ -1,5 +1,12 @@
 // test/helpers/tool-context.ts — build a ToolContext for tool tests.
-import type { ToolContext, AgentEvent, ApprovalRequest, Scope, IgnoreFilter } from '../../src/types.js';
+import type {
+  ToolContext,
+  AgentEvent,
+  ApprovalRequest,
+  ApprovalResolution,
+  Scope,
+  IgnoreFilter,
+} from '../../src/types.js';
 import type { MemoryProvider } from '../../src/memory/provider.js';
 
 const ALLOW_ALL: IgnoreFilter = { ignores: () => false };
@@ -31,7 +38,7 @@ export interface FakeCtxOptions {
   approval?: 'gated' | 'auto';
   signal?: AbortSignal;
   searchMinScore?: number;
-  requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
+  requestApproval?: (req: ApprovalRequest) => Promise<ApprovalResolution>;
 }
 
 export interface FakeCtx {
@@ -55,7 +62,7 @@ export function makeToolContext(opts: FakeCtxOptions): FakeCtx {
       events.push(e);
     },
     async requestApproval(req) {
-      return opts.requestApproval ? opts.requestApproval(req) : false;
+      return opts.requestApproval ? opts.requestApproval(req) : { approved: false };
     },
     log(level, msg) {
       logs.push({ level, msg });

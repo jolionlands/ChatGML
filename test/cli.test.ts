@@ -30,12 +30,16 @@ function sink(): { out: Writable; text: () => string } {
 }
 
 function baseEnv(): NodeJS.ProcessEnv {
+  // XDG_CONFIG_HOME points at a tmpdir so config resolution never falls back to the developer's
+  // actual HOME (~/.config/chatgml) and silently loads their real config.
+  const xdg = mkdtempSync(path.join(tmpdir(), 'chatgml-cli-xdg-'));
   return {
     CHATGML_CHAT_BASE_URL: 'http://chat.local/v1',
     CHATGML_CHAT_MODEL: 'test-chat',
     CHATGML_CHAT_API_KEY: SENTINEL,
     CHATGML_EMBED_MODEL: 'test-embed',
     CHATGML_SCOPE: 'game',
+    XDG_CONFIG_HOME: xdg,
   };
 }
 
@@ -111,9 +115,7 @@ describe('cli main', () => {
     };
     expect(await main(['config', 'set', 'chat.model', 'persisted-model'], { io })).toBe(EXIT_OK);
     expect(await main(['config', 'set', 'scope', 'persisted-scope'], { io })).toBe(EXIT_OK);
-    const written = JSON.parse(
-      readFileSync(path.join(xdg, 'chatgml', 'config.json'), 'utf8'),
-    );
+    const written = JSON.parse(readFileSync(path.join(xdg, 'chatgml', 'config.json'), 'utf8'));
     expect(written.chat.model).toBe('persisted-model');
     expect(written.scope).toBe('persisted-scope'); // second set merges, not clobbers
   });
@@ -133,14 +135,20 @@ describe('cli main', () => {
 
   it('missing required config field -> exit code 3 (ConfigError)', async () => {
     const err = sink();
+    // XDG_CONFIG_HOME points at a fresh tmpdir so config resolution never falls back to the
+    // developer's actual HOME (which carries a real ~/.config/chatgml/config.json on this box).
+    const xdg = mkdtempSync(path.join(tmpdir(), 'chatgml-cli-xdg-'));
     const io: CliIo = {
       stdout: sink().out,
       stderr: err.out,
       stdin: Readable.from([]),
-      env: {}, // no chat.baseURL/model/scope
+      env: { XDG_CONFIG_HOME: xdg }, // no chat.baseURL/model/scope
     };
     const repo = makeTmpRepo({ 'a.gml': 'x\n' });
-    cleanup = repo.cleanup;
+    cleanup = () => {
+      repo.cleanup();
+      rmSync(xdg, { recursive: true, force: true });
+    };
     const code = await main(['config', 'show', repo.root], { io });
     expect(code).toBe(EXIT_CONFIG);
     expect(err.text()).toContain('config error');
@@ -153,7 +161,12 @@ describe('cli main', () => {
     });
     cleanup = repo.cleanup;
     const out = sink();
-    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['index', repo.root], depsWith({ io }));
     expect(code).toBe(EXIT_OK);
     expect(out.text()).toMatch(/indexed: \d+ scanned, \d+ added/);
@@ -163,7 +176,12 @@ describe('cli main', () => {
     const repo = makeTmpRepo({ 'objects/obj_player/Step_0.gml': 'hp -= 1;\n' });
     cleanup = repo.cleanup;
     const out = sink();
-    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const lineSource: LineSource = {
       async *[Symbol.asyncIterator]() {
         yield 'what does the player do?';
@@ -197,26 +215,49 @@ describe('cli main', () => {
     input.push(null); // EOF
     const code = await serve;
     expect(code).toBe(EXIT_OK);
-    const lines = out.text().split('\n').filter((l) => l.trim() !== '');
-    expect(JSON.parse(lines[0]!)).toEqual({ type: 'status', phase: 'ready', protocolVersion: 1 });
+    const lines = out
+      .text()
+      .split('\n')
+      .filter((l) => l.trim() !== '');
+    expect(JSON.parse(lines[0]!)).toEqual({
+      type: 'status',
+      phase: 'ready',
+      protocolVersion: 3,
+      mode: 'code',
+    });
     expect(out.text()).toContain('hello from serve');
   });
 
   it('unknown subcommand -> usage exit 2', async () => {
     const err = sink();
-    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['frobnicate'], { io });
     expect(code).toBe(EXIT_USAGE);
   });
 
   it('--version exits 0', async () => {
-    const io: CliIo = { stdout: sink().out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['--version'], { io });
     expect(code).toBe(EXIT_OK);
   });
 
   it('no subcommand -> usage exit 2', async () => {
-    const io: CliIo = { stdout: sink().out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main([], { io });
     expect(code).toBe(EXIT_USAGE);
   });
@@ -227,7 +268,12 @@ describe('cli main', () => {
     cleanup = () => rmSync(parent, { recursive: true, force: true });
     const bogus = path.join(parent, 'does-not-exist');
     const err = sink();
-    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['index', bogus], depsWith({ io }));
     expect(code).toBe(EXIT_USAGE);
     expect(err.text()).toContain('is not an existing directory');
@@ -239,7 +285,12 @@ describe('cli main', () => {
     const repo = makeTmpRepo({ 'BLANK.yyp': '{}' });
     cleanup = repo.cleanup;
     const err = sink();
-    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['index', path.join(repo.root, 'BLANK.yyp')], depsWith({ io }));
     expect(code).toBe(EXIT_USAGE);
     expect(err.text()).toContain('is a file, expected a directory');
@@ -252,7 +303,12 @@ describe('cli main', () => {
     cleanup = repo.cleanup;
     const out = sink();
     const err = sink();
-    const io: CliIo = { stdout: out.out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['index', repo.root], depsWith({ io }));
     expect(code).toBe(EXIT_OK);
     expect(out.text()).toContain('0 scanned');
@@ -265,7 +321,12 @@ describe('cli main', () => {
     cleanup = repo.cleanup;
     const out = sink();
     const err = sink();
-    const io: CliIo = { stdout: out.out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['index', repo.root], depsWith({ io }));
     expect(code).toBe(EXIT_OK);
     expect(out.text()).toContain('GameMaker project detected (BLANK GAME.yyp)');
@@ -277,7 +338,12 @@ describe('cli main', () => {
     const repo = makeTmpRepo({ 'a.gml': 'x\n' });
     cleanup = repo.cleanup;
     const err = sink();
-    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['--approval', 'BOGUS', 'config', 'show', repo.root], { io });
     expect(code).toBe(EXIT_USAGE);
   });
@@ -286,7 +352,12 @@ describe('cli main', () => {
     const repo = makeTmpRepo({ 'a.gml': 'x\n' });
     cleanup = repo.cleanup;
     const out = sink();
-    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(
       ['--approval', 'auto', '--trust-project-config', 'config', 'show', repo.root],
       { io },
@@ -298,7 +369,12 @@ describe('cli main', () => {
   // --- F16: usage error printed EXACTLY once. --------------------------------------------------
   it('unknown command prints the error exactly once — F16', async () => {
     const err = sink();
-    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['frobnicate'], { io });
     expect(code).toBe(EXIT_USAGE);
     const occurrences = err.text().split('unknown command').length - 1;
@@ -310,7 +386,12 @@ describe('cli main', () => {
     const repo = makeTmpRepo({ 'a.gml': 'x\n' });
     cleanup = repo.cleanup;
     const err = sink();
-    const io: CliIo = { stdout: sink().out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['index', repo.root, '--scope', 'foo'], depsWith({ io }));
     expect(code).toBe(EXIT_USAGE);
     expect(err.text()).toContain('must come BEFORE the subcommand');
@@ -327,7 +408,12 @@ describe('cli main', () => {
     );
     const out = sink();
     const err = sink();
-    const io: CliIo = { stdout: out.out, stderr: err.out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: err.out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['config', 'show', repo.root], { io });
     expect(code).toBe(EXIT_OK);
     expect(err.text()).toContain('WARNING');
@@ -339,7 +425,12 @@ describe('cli main', () => {
   // --- F20: config set --help lists settable fields + the env: secret rule. ---------------------
   it('config set --help lists settable fields and the env-only secret rule — F20', async () => {
     const out = sink();
-    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['config', 'set', '--help'], { io });
     expect(code).toBe(EXIT_OK);
     expect(out.text()).toContain('Settable fields');
@@ -350,7 +441,12 @@ describe('cli main', () => {
   // --- F23: version read from package.json (not hard-coded). ------------------------------------
   it('--version prints the package.json version — F23', async () => {
     const out = sink();
-    const io: CliIo = { stdout: out.out, stderr: sink().out, stdin: Readable.from([]), env: baseEnv() };
+    const io: CliIo = {
+      stdout: out.out,
+      stderr: sink().out,
+      stdin: Readable.from([]),
+      env: baseEnv(),
+    };
     const code = await main(['--version'], { io });
     expect(code).toBe(EXIT_OK);
     const pkg = JSON.parse(

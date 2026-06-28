@@ -9,7 +9,7 @@ describe('public API barrel', () => {
     expect(typeof api.buildSystemPrompt).toBe('function');
     expect(api.DEFAULT_MAX_STEPS).toBeGreaterThan(0);
     // protocol
-    expect(api.PROTOCOL_VERSION).toBe(1);
+    expect(api.PROTOCOL_VERSION).toBe(3);
     expect(typeof api.encodeEvent).toBe('function');
     expect(typeof api.NdjsonDecoder).toBe('function');
     // tools
@@ -20,6 +20,10 @@ describe('public API barrel', () => {
     expect(typeof api.editProposalId).toBe('function');
     // serve
     expect(typeof api.runServe).toBe('function');
+    // mcp
+    expect(typeof api.runMcpServer).toBe('function');
+    expect(api.MCP_PROTOCOL_VERSION).toBe('2024-11-05');
+    expect(api.MCP_SERVER_NAME).toBe('chatgml');
     // cli
     expect(typeof api.runCli).toBe('function');
     expect(typeof api.EventRenderer).toBe('function');
@@ -33,7 +37,18 @@ describe('public API barrel', () => {
   it('a registry built through the barrel has the expected tool names', () => {
     const reg = api.buildToolRegistry();
     expect([...reg.keys()].sort()).toEqual(
-      ['apply_patch', 'glob', 'graph_neighbors', 'grep', 'read_file', 'search_code', 'temporal_query'].sort(),
+      [
+        'apply_patch',
+        'execute_command',
+        'glob',
+        'graph_neighbors',
+        'grep',
+        'read_file',
+        'search_code',
+        'search_files',
+        'search_replace',
+        'temporal_query',
+      ].sort(),
     );
   });
 });

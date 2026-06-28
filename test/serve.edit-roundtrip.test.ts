@@ -48,6 +48,7 @@ function cfg(root: string): Config {
     embed: { baseURL: 'http://x', model: 'e', batchSize: 64 },
     memory: { provider: 'local' },
     scope: 'game',
+    mode: 'code',
     approval: 'gated',
     index: { chunkSize: 1500, chunkOverlap: 200, root },
     search: {},
@@ -74,7 +75,15 @@ async function buildAgentLike(root: string): Promise<AgentLike> {
     { embeddings: new FakeEmbeddings() },
   );
   const llm = new FakeLlm([
-    { toolCalls: [{ id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: TARGET, diff: CLEAN_DIFF }) }] },
+    {
+      toolCalls: [
+        {
+          id: 'e1',
+          name: 'apply_patch',
+          arguments: JSON.stringify({ path: TARGET, diff: CLEAN_DIFF }),
+        },
+      ],
+    },
     { tokens: ['Done.'] },
   ]);
   return createAgentLike({ llm, tools: buildToolRegistry(), config: cfg(root), memory, ignore });
@@ -134,6 +143,8 @@ describe('serve M4 edit approval round-trip (real agent + gate + serve)', () => 
     // Untouched.
     expect(readFileSync(path.join(root, TARGET), 'utf8')).toBe(ORIGINAL);
     const editResult = outEvents.find((e) => e.type === 'tool_result' && e.name === 'apply_patch');
-    expect(editResult && editResult.type === 'tool_result' && /not approved/i.test(editResult.content)).toBe(true);
+    expect(
+      editResult && editResult.type === 'tool_result' && /not approved/i.test(editResult.content),
+    ).toBe(true);
   });
 });

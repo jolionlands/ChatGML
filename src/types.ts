@@ -9,6 +9,39 @@ import type { MemoryProvider } from './memory/provider.js';
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
+export type Mode = 'architect' | 'code' | 'ask' | 'debug';
+
+/**
+ * Editor context the client (e.g. the GMEdit plugin) attaches to a `user` command so the agent
+ * knows what file/selection the human is looking at. All fields optional; absent fields are
+ * ignored. This is USER-originated context (the human's current view), not untrusted tool data —
+ * the agent may treat it as authoritative about what the user is asking about.
+ */
+export type Mention = {
+  type: 'file' | 'folder' | 'problems' | 'terminal' | 'url' | 'image';
+  target: string;
+  label?: string;
+  content?: string;
+};
+
+export interface EditorContext {
+  /** Repo-relative path of the currently open file, when known. */
+  openFile?: string;
+  /** The selected text in the editor (may be multi-line); empty/whitespace selections are dropped. */
+  selection?: string;
+  /** 1-based line number of the cursor in the open file. */
+  cursorLine?: number;
+  /** Resolved @mentions assembled by the client and attached as explicit context. */
+  mentions?: Mention[];
+}
+
+export interface UserCommand {
+  type: 'user';
+  text: string;
+  context?: EditorContext;
+  taskId?: string;
+}
+
 // OpenAI wire shape; arguments is a JSON STRING (the agent parses it).
 export interface ToolCall {
   id: string;
@@ -30,6 +63,15 @@ export interface ToolSpec {
   function: { name: string; description: string; parameters: Record<string, unknown> };
 }
 export type OpenAiToolSpec = ToolSpec;
+
+export type ToolCatalogEntry = {
+  name: string;
+  description: string;
+  kind: 'read' | 'gated' | 'command' | 'mcp';
+  /** Present when kind === 'mcp': the configured MCP server name. */
+  server?: string;
+  autoApprove?: boolean;
+};
 
 // ONE canonical Scope (the memory lens's {repoId} is renamed to {repo}).
 export interface Scope {
@@ -78,6 +120,7 @@ export type AgentEvent =
       phase: 'ready' | 'thinking' | 'streaming' | 'indexing' | 'idle' | 'done' | 'cancelled';
       detail?: string;
       protocolVersion?: number;
+      mode?: Mode;
     }
   | { type: 'token'; text: string }
   | { type: 'tool_call'; id: string; name: string; args: unknown }
@@ -88,27 +131,91 @@ export type AgentEvent =
       ok: boolean;
       content: string;
       citations?: Citation[];
+      error?: string;
+      code?: string;
     }
   | { type: 'edit_proposal'; id: string; path: string; diff: string }
   | { type: 'approval_request'; id: string; kind: 'edit'; path: string }
   | { type: 'answer'; text: string; sources: Citation[]; usage?: Usage }
+  // turn_end: a persistence side-channel. Emitted ONCE at the end of a `user` turn (after the
+  // terminal answer/error) carrying the original user text, the finalized assistant text, the
+  // turn's citations, and the editor context that was attached to the request. A client that wants
+  // to resume a conversation after a restart persists these records and replays them via a
+  // `resume` inbound command (see protocol.ts). The reducer treats it as a no-op side signal; it
+  // does NOT change the running/answer/phase state (those were already set by the answer event).
+  | {
+      type: 'turn_end';
+      userText: string;
+      assistantText: string;
+      sources: Citation[];
+      context?: EditorContext;
+      taskId?: string;
+    }
+  // Protocol v3 events: command execution lifecycle, checkpointing, and tool catalog.
+  | { type: 'pong'; id: string }
+  | { type: 'tool_catalog'; tools: ToolCatalogEntry[] }
+  | { type: 'checkpoint'; id: string; path: string; label?: string }
+  | { type: 'command_request'; id: string; command: string; cwd?: string }
+  | { type: 'command_output'; id: string; stream: 'stdout' | 'stderr'; text: string }
+  | { type: 'command_exit'; id: string; code: number }
+  // Protocol v4 events: MCP client activity. Emitted when ChatGML acts as an MCP client to
+  // external servers; the GMEdit plugin renders these in the activity panel.
+  | { type: 'mcp_tool_call'; id: string; name: string; server: string; args?: unknown }
+  | {
+      type: 'mcp_tool_result';
+      id: string;
+      name: string;
+      server: string;
+      ok: boolean;
+      content?: string;
+      error?: string;
+    }
+  | {
+      type: 'mcp_resource';
+      id: string;
+      server: string;
+      name: string;
+      uri?: string;
+      content?: string;
+    }
   | { type: 'error'; message: string; code?: string };
 
 // ONE approval request shape used by BOTH ToolContext and ApprovalGate.
-export interface ApprovalRequest {
-  id: string;
-  kind: 'edit';
-  path: string;
-  diff: string;
-  /**
-   * AUTO-MODE DESTRUCTIVE-EDIT BACKSTOP (GAP4). When `true`, the gate WAITS for an explicit human
-   * approve/reject EVEN in `auto` mode (it does not auto-resolve). The edit tool sets this for
-   * HIGH-RISK diffs (whole-file rewrite / mass deletion / net deletion beyond a threshold) so an
-   * injection-driven destructive edit cannot apply with no human in the loop. Small, additive,
-   * in-place auto edits leave it unset and still auto-apply. Absent ⇒ false (existing behavior).
-   */
-  forceGate?: boolean;
-}
+export type ApprovalRequest =
+  | {
+      id: string;
+      kind: 'edit';
+      path: string;
+      diff: string;
+      /**
+       * AUTO-MODE DESTRUCTIVE-EDIT BACKSTOP (GAP4). When `true`, the gate WAITS for an explicit human
+       * approve/reject EVEN in `auto` mode (it does not auto-resolve). The edit tool sets this for
+       * HIGH-RISK diffs (whole-file rewrite / mass deletion / net deletion beyond a threshold) so an
+       * injection-driven destructive edit cannot apply with no human in the loop. Small, additive,
+       * in-place auto edits leave it unset and still auto-apply. Absent ⇒ false (existing behavior).
+       */
+      forceGate?: boolean;
+      /**
+       * Per-request policy override. When set, the gate uses this instead of the global autoApprove
+       * setting, so per-tool approval policies can override the config default for one request.
+       */
+      policy?: 'gated' | 'auto';
+      /**
+       * Per-block approval tracking. Indices of hunks/blocks still pending a decision. Populated by
+       * the edit tool/agent loop so the gate can resolve individual blocks. Absent ⇒ whole-proposal.
+       */
+      blocks?: number[];
+      /**
+       * Populated by the gate on resolution: the indices that were ultimately approved. When `blocks`
+       * was set and the resolution is partial, this is a strict subset; when all blocks are approved
+       * it equals the original `blocks` array; on full rejection it is empty.
+       */
+      approvedBlocks?: number[];
+    }
+  | { id: string; kind: 'exec'; command: string; cwd?: string; policy?: 'gated' | 'auto' };
+
+/** Result of an approval request: full approve, full reject, or partial approve with approved blocks. */
+export type ApprovalResolution = { approved: true; blocks?: number[] } | { approved: false };
 
 // ToolErrorCode is a type (the ToolError CLASS lives in src/tool-error.ts to keep this file runtime-free).
 export type ToolErrorCode =
@@ -117,9 +224,13 @@ export type ToolErrorCode =
   | 'too_large'
   | 'binary'
   | 'bad_args'
+  | 'bad_patch'
   | 'not_implemented'
   | 'provider_error'
-  | 'aborted';
+  | 'aborted'
+  | 'timeout'
+  | 'nonzero_exit'
+  | 'interrupted';
 
 export interface ToolResult {
   content: string;
@@ -132,6 +243,7 @@ export interface ToolContext {
   readonly scope: Scope;
   readonly memory: MemoryProvider;
   readonly approval: 'gated' | 'auto';
+  readonly toolApproval?: Record<string, 'gated' | 'auto'>;
   readonly ignore: IgnoreFilter;
   readonly signal: AbortSignal;
   /**
@@ -139,8 +251,18 @@ export interface ToolContext {
    * `minScore` tool arg overrides it; undefined here AND in the arg means no floor.
    */
   readonly searchMinScore?: number;
+  /** The tool-call id from the model turn; useful for correlating approval/execution events. */
+  readonly toolCallId?: string;
+  /** True when the agent loop has already obtained human approval for this call. */
+  readonly preApproved?: boolean;
+  /**
+   * When the agent loop pre-approved an edit with per-block granularity, the indices of the blocks
+   * that were approved (undefined means the whole proposal was approved). The edit tools use this to
+   * apply only the approved subset when mixed approval is resolved.
+   */
+  readonly approvedBlocks?: number[];
   emit(event: AgentEvent): void;
-  requestApproval(req: ApprovalRequest): Promise<boolean>;
+  requestApproval(req: ApprovalRequest): Promise<ApprovalResolution>;
   log(level: 'debug' | 'info' | 'warn', msg: string, meta?: Record<string, unknown>): void;
 }
 
@@ -149,7 +271,15 @@ export interface ToolDef<A> {
   readonly name: string;
   readonly description: string;
   readonly schema: ZodType<A>;
-  readonly kind: 'read' | 'gated';
+  readonly kind: 'read' | 'gated' | 'command' | 'mcp';
+  /** Present when kind === 'mcp': the configured MCP server name. */
+  server?: string;
+  /**
+   * Optional override JSON Schema for OpenAI tool-spec generation. Used for MCP tools so the
+   * advertised parameters match the external server's inputSchema instead of a permissive zod
+   * fallback.
+   */
+  inputSchema?: Record<string, unknown>;
   execute(args: A, ctx: ToolContext): Promise<ToolResult>;
 }
 export type Tool = ToolDef<unknown>;
@@ -175,9 +305,7 @@ export interface EmbedLane {
   batchSize: number;
 }
 // ONE discriminated union for memory config (audit: declared exactly once, here).
-export type MemoryConfig =
-  | { provider: 'local' }
-  | { provider: 'hippo'; url: string; key?: string };
+export type MemoryConfig = { provider: 'local' } | { provider: 'hippo'; url: string; key?: string };
 
 // Retrieval-tuning lane. `minScore` is an OPT-IN absolute cosine floor for `search_code` (raw cosine
 // of the L2-normalized query/chunk embeddings, ~[0,1]); when set, semantic hits below it are dropped.
@@ -186,12 +314,34 @@ export interface SearchConfig {
   minScore?: number;
 }
 
+/** External MCP server configuration (ChatGML acts as an MCP client). */
+export interface McpServerConfig {
+  /** Display name; falls back to the record key when omitted. */
+  name?: string;
+  /** Stdio command to spawn. Required for stdio transport. */
+  command?: string;
+  /** Arguments passed to `command`. */
+  args?: string[];
+  /** Extra environment variables for the spawned process. */
+  env?: Record<string, string>;
+  /** SSE endpoint URL. Not yet implemented (stdio is the MVP transport). */
+  url?: string;
+  /** Request timeout in milliseconds. */
+  timeout?: number;
+  /** When true, this server is skipped during initialization. */
+  disabled?: boolean;
+}
+
 export interface Config {
   chat: ChatLane;
   embed: EmbedLane;
   memory: MemoryConfig;
   scope: string; // converted to Scope via makeScope at the wiring seam
+  mode: Mode;
   approval: 'gated' | 'auto';
+  toolApproval?: Record<string, 'gated' | 'auto'>;
   index: { chunkSize: number; chunkOverlap: number; root: string };
   search: SearchConfig;
+  /** External MCP servers whose tools/resources ChatGML can use. */
+  mcpServers?: Record<string, McpServerConfig>;
 }

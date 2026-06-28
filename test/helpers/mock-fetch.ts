@@ -62,9 +62,10 @@ function headersToObject(init?: RequestInit): Record<string, string> {
  * Install a fetch mock (via vi.stubGlobal) that routes by URL substring and records calls.
  * Returns the recorder; the installed function is also returned for direct injection (deps.fetch).
  */
-export function installFetchMock(
-  routes: Array<{ match: string | RegExp; responder: Responder }>,
-): { recorder: FetchRecorder; fetch: FetchLike } {
+export function installFetchMock(routes: Array<{ match: string | RegExp; responder: Responder }>): {
+  recorder: FetchRecorder;
+  fetch: FetchLike;
+} {
   const recorder = new FetchRecorder();
   const impl: FetchLike = async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -105,7 +106,10 @@ export function errorResponse(status: number, body: string): Response {
  * byte stream is chopped into chunks of that size to force mid-JSON splits across enqueues, so the
  * SSE buffering path is genuinely exercised.
  */
-export function sseResponse(events: unknown[], opts?: { splitAt?: number; done?: boolean }): Response {
+export function sseResponse(
+  events: unknown[],
+  opts?: { splitAt?: number; done?: boolean },
+): Response {
   const done = opts?.done ?? true;
   const frames = events.map((e) => `data: ${JSON.stringify(e)}\n\n`);
   if (done) frames.push('data: [DONE]\n\n');

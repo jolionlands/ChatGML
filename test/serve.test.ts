@@ -3,12 +3,26 @@ import { PassThrough } from 'node:stream';
 import { runServe, type Transport } from '../src/serve.js';
 import { NdjsonDecoder } from '../src/protocol.js';
 import { FakeAgent } from './helpers/fake-agent.js';
-import type { AgentEvent } from '../src/types.js';
+import type { AgentEvent, Config } from '../src/types.js';
+import { buildToolRegistry } from '../src/tools/index.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+function fakeConfig(approval: 'gated' | 'auto'): Config {
+  return {
+    chat: { baseURL: 'http://x', model: 'm', temperature: 0.2 },
+    embed: { baseURL: 'http://x', model: 'e', batchSize: 64 },
+    memory: { provider: 'local' },
+    scope: 'game',
+    mode: 'code',
+    approval,
+    index: { chunkSize: 1500, chunkOverlap: 200, root: '/r' },
+    search: {},
+  };
+}
 
 /** Collect every parsed outbound event from the output stream. */
 function makeTransport(): {
@@ -34,6 +48,28 @@ function makeTransport(): {
 }
 
 describe('runServe', () => {
+  it('ready handshake includes the configured mode', async () => {
+    const agent = new FakeAgent({
+      after: [{ type: 'answer', text: 'done', sources: [] }],
+    });
+    const { transport, input, outEvents } = makeTransport();
+    const config = fakeConfig('gated');
+    config.mode = 'ask';
+    const serve = runServe(agent, { transport, config });
+    input.write('{"type":"user","text":"hello"}\n');
+    await new Promise((r) => setTimeout(r, 10));
+    agent.release();
+    await new Promise((r) => setTimeout(r, 10));
+    input.end();
+    await serve;
+    expect(outEvents[0]).toEqual({
+      type: 'status',
+      phase: 'ready',
+      protocolVersion: 3,
+      mode: 'ask',
+    });
+  });
+
   it('writes the ready handshake first, then streams a user run, then EOF ends', async () => {
     const agent = new FakeAgent({
       after: [
@@ -42,7 +78,8 @@ describe('runServe', () => {
       ],
     });
     const { transport, input, outEvents } = makeTransport();
-    const serve = runServe(agent, { transport });
+    const config = fakeConfig('gated');
+    const serve = runServe(agent, { transport, config });
     input.write('{"type":"user","text":"hello"}\n');
     // allow the run to start, then release the gated answer
     await new Promise((r) => setTimeout(r, 10));
@@ -51,10 +88,57 @@ describe('runServe', () => {
     input.end();
     await serve;
 
-    expect(outEvents[0]).toEqual({ type: 'status', phase: 'ready', protocolVersion: 1 });
+    expect(outEvents[0]).toEqual({
+      type: 'status',
+      phase: 'ready',
+      protocolVersion: 3,
+      mode: 'code',
+    });
+    const catalog = outEvents.find((e) => e.type === 'tool_catalog');
+    expect(catalog).toBeDefined();
+    expect(catalog && catalog.type === 'tool_catalog' && catalog.tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(['read_file', 'execute_command', 'search_replace']),
+    );
+    if (catalog && catalog.type === 'tool_catalog') {
+      for (const tool of catalog.tools) {
+        if (tool.kind === 'read') {
+          expect(tool.autoApprove).toBe(true);
+        } else {
+          expect(tool.autoApprove).toBe(false);
+        }
+      }
+    }
     const types = outEvents.map((e) => e.type);
     expect(types).toContain('token');
     expect(types).toContain('answer');
+  });
+
+  it('tool_catalog is filtered by the active mode — ask mode omits gated + command tools', async () => {
+    const agent = new FakeAgent({ after: [{ type: 'answer', text: 'done', sources: [] }] });
+    const { transport, input, outEvents } = makeTransport();
+    const config: Config = { ...fakeConfig('gated'), mode: 'ask' };
+    const serve = runServe(agent, { transport, config });
+    input.write('{"type":"user","text":"hi"}\n');
+    await new Promise((r) => setTimeout(r, 10));
+    agent.release();
+    await new Promise((r) => setTimeout(r, 10));
+    input.end();
+    await serve;
+    const catalog = outEvents.find((e) => e.type === 'tool_catalog');
+    expect(catalog).toBeDefined();
+    if (catalog && catalog.type === 'tool_catalog') {
+      const names = catalog.tools.map((t) => t.name);
+      // Read tools still advertised.
+      expect(names).toContain('read_file');
+      expect(names).toContain('grep');
+      // Gated + command tools are filtered out of the catalog in ask mode.
+      expect(names).not.toContain('apply_patch');
+      expect(names).not.toContain('search_replace');
+      expect(names).not.toContain('execute_command');
+      for (const tool of catalog.tools) {
+        expect(tool.kind).toBe('read');
+      }
+    }
   });
 
   it('output stream contains ONLY valid JSON lines (no banners)', async () => {
@@ -67,7 +151,10 @@ describe('runServe', () => {
     await new Promise((r) => setTimeout(r, 10));
     input.end();
     await serve;
-    const lines = rawOut.join('').split('\n').filter((l) => l.trim() !== '');
+    const lines = rawOut
+      .join('')
+      .split('\n')
+      .filter((l) => l.trim() !== '');
     for (const line of lines) {
       expect(() => JSON.parse(line)).not.toThrow();
     }
@@ -239,9 +326,9 @@ describe('runServe', () => {
       .filter((l) => l.trim() !== '')
       .map((l) => JSON.parse(l) as AgentEvent);
 
-    // Replay every fixture event AFTER the ready handshake (the fixture begins with ready).
-    const afterReady = fixtureEvents.slice(1);
-    const agent = new FakeAgent({ after: afterReady });
+    // Replay every fixture event AFTER the handshake (ready + tool_catalog).
+    const afterHandshake = fixtureEvents.slice(2);
+    const agent = new FakeAgent({ after: afterHandshake });
     const { transport, input, outEvents } = makeTransport();
     const serve = runServe(agent, { transport });
     input.write('{"type":"user","text":"update the player Step event"}\n');
@@ -251,5 +338,43 @@ describe('runServe', () => {
     input.end();
     await serve;
     expect(outEvents).toEqual(fixtureEvents);
+  });
+
+  it('replies to a ping with a matching pong', async () => {
+    const agent = new FakeAgent();
+    const { transport, input, outEvents } = makeTransport();
+    const serve = runServe(agent, { transport });
+    input.write('{"type":"ping","id":"x"}\n');
+    await new Promise((r) => setTimeout(r, 5));
+    input.end();
+    await serve;
+    expect(outEvents.some((e) => e.type === 'pong' && e.id === 'x')).toBe(true);
+  });
+
+  it('routes undo command to agent.undo and emits an answer event', async () => {
+    const agent = new FakeAgent();
+    const { transport, input, outEvents } = makeTransport();
+    const serve = runServe(agent, { transport });
+    input.write('{"type":"undo","checkpointId":"cp-1"}\n');
+    await new Promise((r) => setTimeout(r, 10));
+    input.end();
+    await serve;
+    expect(outEvents.some((e) => e.type === 'answer' && e.text === 'undo cp-1')).toBe(true);
+  });
+
+  it('re-emits the tool catalog on list_tools', async () => {
+    const agent = new FakeAgent();
+    const { transport, input, outEvents } = makeTransport();
+    const serve = runServe(agent, { transport });
+    input.write('{"type":"list_tools"}\n');
+    await new Promise((r) => setTimeout(r, 5));
+    input.end();
+    await serve;
+    const catalogs = outEvents.filter((e) => e.type === 'tool_catalog');
+    expect(catalogs.length).toBe(2);
+    const expectedNames = [...buildToolRegistry({ readOnly: false }).values()].map((t) => t.name);
+    for (const c of catalogs) {
+      expect(c.type === 'tool_catalog' && c.tools.map((t) => t.name)).toEqual(expectedNames);
+    }
   });
 });

@@ -21,12 +21,12 @@ copied (verbatim, parity-tested) into `plugin/state.js`. The DOM glue is intenti
 |---|---|---|
 | `plugin/config.json` | plugin manifest: `name: "chatgml"`, scripts in load order, `style.css` | — |
 | `plugin/state.js` | pure logic (NDJSON buffer, `buildServeArgv`, `resolveServeBinary`, `reducePluginState`, `matchApproval`, `isReadyHandshake`) — a CommonJS port of `src/plugin-runtime.ts` | `test/plugin/runtime.test.ts` (TS source) + `test/plugin/parity.test.ts` (JS↔TS parity) |
-| `plugin/client.js` | `NdjsonClient`: resolve the binary, `spawn(…, {shell:false, env:minimal})`, raw-chunk decode, send commands, gate on the handshake | `test/plugin/client.test.ts` (fake serve) + `test/serve.spawn-integration.test.ts` (real core) |
+| `plugin/child-process.js` | shared process plumbing (binary resolution, env whitelist, Windows `.cmd` shim, spawn + NDJSON buffer + handshake gate + watchdog + cancel/end-stdin/kill cleanup) — used by the main plugin AND by both companion plugins via `require('../chatgml/child-process.js')` | `test/plugin/child-process.test.ts` (helpers) + `test/plugin/client.test.ts` (full spawn/handshake round-trip) |
+| `plugin/client.js` | `NdjsonClient`: thin wrapper around `child-process.js` exposing the per-tool API (`sendUser`, `reindex`, `approve`, `sendApprovalPolicy`, …) | `test/plugin/client.test.ts` (fake serve) + `test/serve.spawn-integration.test.ts` (real core) |
 | `plugin/panel.js` | `ChatPanel`: side-panel DOM rendered from `reducePluginState` | manual (DOM) + `glue-smoke` load test |
 | `plugin/diff-view.js` | `EditProposalView`: render an `edit_proposal` diff + Approve/Reject buttons | `diffLineClass` unit-tested; layout manual |
 | `plugin/config-bridge.js` | binary-path + scope Preferences; reads effective config via `chatgml config show` | manual + `glue-smoke` load test |
 | `plugin/chatgml.js` | GMEdit lifecycle (`register`/`init`/`cleanup`), context menu, splitter side panel, `projectOpen` | manual (needs GMEdit/Electron) |
-| `plugin/legacy/` | the old `show-codebase.js` / `plugin-button.js` / `js-yaml.min.js`, kept for reference | n/a |
 
 `plugin/package.json` (`{"type":"commonjs"}`) marks the `*.js` here as CommonJS so the Node-based
 parity/unit tests can `require()` them despite the repo root being `type:module`. It is not shipped.
@@ -98,7 +98,7 @@ The plugin reduces the [AgentEvent](./agent-api.md#outbound-events-server--clien
 
 | event | UI effect |
 |---|---|
-| `status` `phase:ready` | enable Send + Reindex (handshake gate) |
+| `status` `phase:ready` | enable Send + Reindex (handshake gate); pull effective config + resume last session |
 | `status` (other) | status line shows the phase |
 | `token` | append to the transcript region |
 | `tool_call` | add a "running" activity row |
@@ -106,12 +106,64 @@ The plugin reduces the [AgentEvent](./agent-api.md#outbound-events-server--clien
 | `edit_proposal` | render the unified diff in `EditProposalView` |
 | `approval_request` | show Approve/Reject buttons (wired to the proposal id) |
 | `answer` | show the final answer + sources list |
+| `turn_end` | appended to the per-project session file (a no-op on the visible panel state) |
 | `error` | show a (non-fatal) error line; the session survives |
 
 Approve/Reject send `{type:'approve'|'reject', id}` with the **same** deterministic id the core
-minted (`matchApproval` correlates by id only, so two edits to the same path never alias). On panel
+minted (`matchApproval` correlates by id only, so two edits to the same path never alias). On
+**approve**, if the touched file is the one currently open, the plugin reloads its Ace session from
+disk and jumps the cursor to the first changed hunk line (opencode-style inline diff). On panel
 close / GMEdit cleanup the plugin sends `cancel` then ends stdin (the core exits 0 cleanly), with
 `child.kill()` as a backstop against an orphan.
+
+### Editor context awareness (opencode-style)
+
+Every `user` message the panel sends carries an optional `context` object (see
+[docs/agent-api.md → Editor context](./agent-api.md#editor-context)) built from the active Ace
+session by the glue:
+
+- `openFile` — the repo-relative path of the currently open file;
+- `cursorLine` — the cursor's 1-based line;
+- `selection` — the selected text in the editor (empty/whitespace selections are dropped).
+
+The core prepends a clearly-framed DATA block to the user's text so the agent knows what you're
+pointing at without re-stating it. A second context-menu entry, **Ask about selection**, opens the
+panel and sends a primed message with the current selection (or, if nothing is selected, "explain
+this file") with the editor context attached.
+
+### Slash commands
+
+Typing a line that starts with `/` in the chat input is interpreted as a **client-side command**,
+not sent to the agent (`plugin/state.js#parseSlashCommand`):
+
+| command | action |
+|---|---|
+| `/clear` | send a `clear` control command (drops the core's in-memory history) AND clear the saved session file |
+| `/reindex` | send a `reindex` command (rebuild the code index) |
+| `/resume` | reload the last saved session for this project and send a `resume` command seeding the core's history |
+| `/scope <name>` | set the plugin Scope preference and restart the core (`--scope` is a serve-argv flag) |
+| `/model <id>` | run `chatgml config set chat.model <id>` then restart the core |
+| `/approval gated\|auto` | run `chatgml config set approval <mode>` then restart the core |
+| `/help` | show the command list in the panel |
+
+Unknown/empty slash commands show a hint instead of sending.
+
+### Quick-config row
+
+On `status:ready` the glue runs `chatgml config show <projectDir>` and renders the resolved (and
+secret-redacted) `scope` / `chat.model` / `approval` as chips at the top of the panel — a read-only
+snapshot so you never have to leave GMEdit to see what the core is configured with. `/model` and
+`/approval` edit these durably in the user-global config; `/scope` edits the plugin preference
+(scope is a serve-argv flag, not a config field).
+
+### Resumable conversation history
+
+The glue keeps one NDJSON file per project under `plugin/chatgml-sessions/<hash>.ndjson` and
+appends every `turn_end` record to it (capped to the most recent 50 turns). On the next `chatgml
+serve` start (e.g. after GMEdit is closed and reopened) the glue reads that file, converts the
+turns into `{role,content}` pairs via `turnEndToMessages`, and sends a single `resume` control
+command seeding the core's in-memory history — so multi-turn context survives the restart. `/clear`
+wipes both the in-memory history and the persisted file.
 
 ### GameMaker-aware citations
 

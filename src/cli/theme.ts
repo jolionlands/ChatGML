@@ -9,10 +9,7 @@ export interface ColorEnv {
   FORCE_COLOR?: string | undefined;
 }
 
-export function supportsColor(opts: {
-  isTTY?: boolean | undefined;
-  env?: ColorEnv;
-}): boolean {
+export function supportsColor(opts: { isTTY?: boolean | undefined; env?: ColorEnv }): boolean {
   const env = opts.env ?? {};
   if (env.NO_COLOR !== undefined && env.NO_COLOR !== '') return false;
   if (env.FORCE_COLOR !== undefined && env.FORCE_COLOR !== '' && env.FORCE_COLOR !== '0') {

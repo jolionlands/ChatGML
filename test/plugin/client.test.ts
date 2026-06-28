@@ -16,14 +16,16 @@ const require = createRequire(import.meta.url);
 
 interface ClientLike {
   start(): boolean;
-  sendUser(text: string): boolean;
+  sendUser(text: string, context?: unknown): boolean;
   approve(id: string): boolean;
   stop(): void;
+  sendResume(messages: unknown[]): boolean;
+  sendClear(): boolean;
   ready: boolean;
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { NdjsonClient } = require(path.join(HERE, '../../plugin/client.js')) as {
-  NdjsonClient: new (opts: Record<string, unknown>) => ClientLike;
+  NdjsonClient: new (opts: Record<string, unknown>) => ClientLike & { send(cmd: unknown): boolean };
 };
 
 // A fake `chatgml serve`: records its argv to a side file, prints the ready handshake, then for each
@@ -136,7 +138,16 @@ describe('NdjsonClient', () => {
     const argv = JSON.parse(await fsp.readFile(argvFile, 'utf8')) as string[];
     expect(argv).toEqual(['serve', '/my/gm/project']);
     const joined = argv.join(' ');
-    for (const banned of ['git', 'pull', 'python', 'venv', 'clone', 'talk-codebase', 'END', 'RECREATE']) {
+    for (const banned of [
+      'git',
+      'pull',
+      'python',
+      'venv',
+      'clone',
+      'talk-codebase',
+      'END',
+      'RECREATE',
+    ]) {
       expect(joined).not.toContain(banned);
     }
   });
@@ -155,6 +166,26 @@ describe('NdjsonClient', () => {
     client.approve('e9a1');
     await until(() => events.some((e) => e.type === 'token' && e.text === 'approved:e9a1'));
     expect(events.some((e) => e.type === 'token' && e.text === 'approved:e9a1')).toBe(true);
+  });
+
+  it('sendUser/sendResume/sendClear produce the v2 wire shapes (no spawn)', () => {
+    // Stub send() to record the command object (so we test wire shape without a child process).
+    const sent: unknown[] = [];
+    const client = new NdjsonClient({ projectDir: '/p', onEvent: () => {} });
+    (client as ClientLike & { send(cmd: unknown): boolean }).send = function (cmd: unknown) {
+      sent.push(cmd);
+      return true;
+    };
+    client.sendUser('hi');
+    client.sendUser('hi', { openFile: 'a.gml', cursorLine: 3 });
+    client.sendResume([{ role: 'user', content: 'q' }]);
+    client.sendClear();
+    expect(sent).toEqual([
+      { type: 'user', text: 'hi' },
+      { type: 'user', text: 'hi', context: { openFile: 'a.gml', cursorLine: 3 } },
+      { type: 'resume', messages: [{ role: 'user', content: 'q' }] },
+      { type: 'clear' },
+    ]);
   });
 
   it('surfaces a clear error (no silent ENOENT) when the binary cannot be resolved', async () => {

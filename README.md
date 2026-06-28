@@ -149,7 +149,8 @@ combined with positional subcommands, **must precede the subcommand**.
 |---|---|
 | `chatgml index [dir]` | Build or incrementally update the local index. |
 | `chatgml chat [dir]` | Start an interactive chat REPL. |
-| `chatgml serve [dir]` | Expose the agent over NDJSON-on-stdio (for editors/automation). |
+| `chatgml serve [dir]` | Expose the agent over NDJSON-on-stdio (for the GMEdit plugin / VS Code extension). |
+| `chatgml mcp [dir]` | Run the MCP server over stdio — for agent IDEs (Cline, Cursor, Claude Code, Copilot Chat). |
 | `chatgml config show [dir]` | Print the resolved config (secrets redacted) + the files searched. |
 | `chatgml config set <field> <value>` | Persist one field to the user-global config (refuses literal secrets). |
 
@@ -187,6 +188,133 @@ More detail and copy-pasteable recipes live in [docs/usage.md](docs/usage.md).
 ChatGML ships a GMEdit plugin (in `plugin/`) that spawns the core as a child process and renders the
 streaming agent events in a side panel — chat, tool activity, and approve/reject for gated edits.
 See **[docs/gmedit-plugin.md](docs/gmedit-plugin.md)** for install and architecture.
+
+## MCP server (the leverage route — use ChatGML from Cline, Cursor, Claude Code, Copilot Chat, …)
+
+ChatGML exposes its **GML-aware tool registry** as an **MCP server** over stdio, so ANY MCP-speaking
+agent IDE can use ChatGML's GML-aware code-graph retrieval (semantic search, graph neighbors,
+temporal history) and sandboxed edits. The agent IDE owns the chat/diff approval UX; ChatGML owns
+the GameMaker-aware index + retrieval.
+
+```bash
+# Index the repo once (builds the local vector store ChatGML's tools search):
+chatgml index .
+
+# Run the MCP server over stdio:
+chatgml mcp .
+```
+
+MCP tools exposed: `glob`, `grep`, `read_file`, `search_code` (GML-aware semantic + keyword search
+with collision-event enrichment), `graph_neighbors`, `temporal_query`, and `apply_patch` (sandboxed,
+auto-applies — the agent IDE's own diff UX is the human gate).
+
+### Install in agent IDEs
+
+**Cline** (the live successor to Roo Code — Roo was shut down 2026-05-15; Cline is its origin):
+`cline_mcp_settings.json`:
+```json
+{
+  "mcpServers": {
+    "chatgml": {
+      "command": "chatgml",
+      "args": ["mcp", "/path/to/your/gamemaker/project"],
+      "env": { "CHATGML_SCOPE": "mygame" }
+    }
+  }
+}
+```
+
+**Cursor**: Settings → MCP → Add new MCP Server:
+```json
+{ "mcpServers": { "chatgml": { "command": "chatgml", "args": ["mcp", "${workspaceFolder}"] } } }
+```
+
+**Claude Code** (`~/.claude.json` or `.claude/settings.json`):
+```json
+{ "mcpServers": { "chatgml": { "command": "chatgml", "args": ["mcp", "/path/to/project"] } } }
+```
+
+**Copilot Chat / VS Code** (with the Continue/Cline MCP host or GitHub's native MCP support):
+`settings.json`:
+```json
+{ "chatgml.mcp": { "command": "chatgml", "args": ["mcp", "${workspaceFolder}"] } }
+```
+
+The config (endpoints, models, scope) resolves exactly as for the CLI — flags, `CHATGML_*` env, the
+user-global config file, defaults. **Index once** with `chatgml index .` so `search_code` has a
+vector store to query; without an index, the retrieval tools return empty but `glob`/`grep`/`read_file`
+still work.
+
+> **Why MCP?** Roo Code and Continue were both shut down in 2026; Cline (Roo's origin) is live, and
+> the MCP standard means ChatGML's GML-aware retrieval works in ANY of them — past, present, or
+> future — without betting on any single extension. (Your shop already builds the `zmcp` Zig MCP
+> family; this is the TypeScript-native ChatGML counterpart.)
+
+## Additional GMEdit plugins
+
+Beyond the main ChatGML side panel (`plugin/`), ChatGML ships two focused companion plugins that
+bring the ChatGML agent into the Ace editor itself. Both are installed by symlinking their dirs into
+`%APPDATA%/AceGM/GMEdit/plugins/` (same as the main plugin):
+
+### chatgml-inline (`plugin-inline/`)
+
+**Inline AI edits** — the opencode-style inline editing experience:
+1. Select code in the Ace editor.
+2. Right-click → **Edit with AI** → type an instruction ("add error handling", "rename hp to
+   health", "extract into a function").
+3. ChatGML spawns `chatgml serve` as a one-shot child process, receives the selection + instruction
+   + editor context (open file, cursor), and proposes a unified diff.
+4. An **inline overlay** shows the diff with **Accept** / **Reject** buttons.
+5. On Accept, the edit is written to disk, the Ace session is reloaded, and the cursor jumps to the
+   change. On Reject, nothing is written.
+
+### chatgml-explain (`plugin-explain/`)
+
+**Inline explanations** — right-click → **Explain this** → ChatGML spawns a one-shot child process
+with the current selection (or the whole file if nothing is selected) + editor context and renders the
+explanation in an inline overlay. Useful for understanding unfamiliar GameMaker patterns, collision
+events, or inherited logic without leaving the editor.
+
+### Install all three plugins
+
+```
+cd %APPDATA%\AceGM\GMEdit\plugins
+mklink /D "chatgml" "C:\Users\you\Development\ChatGML\plugin"
+mklink /D "chatgml-inline" "C:\Users\you\Development\ChatGML\plugin-inline"
+mklink /D "chatgml-explain" "C:\Users\you\Development\ChatGML\plugin-explain"
+```
+
+Restart GMEdit. The main **ChatGML** entry + **Edit with AI** + **Explain this** all appear in the
+editor context menu. The companion plugins borrow the verified protocol logic from the main chatgml
+plugin's `state.js` (no second copy — guaranteed parity).
+
+## VS Code extension
+
+A co-shipped **GameMaker-aware VS Code extension** lives in `vscode/`. It mounts a **ChatGML** view
+in the activity bar and spawns the same `chatgml serve` core over the v2 NDJSON protocol (no second
+copy of the protocol logic — it `require()`s the core's verified `plugin/state.js` for the reducer,
+binary resolver, slash parser, editor-context builder, and resume-message builder, so it cannot drift
+from the GMEdit plugin). Features match the GMEdit plugin:
+
+- Editor-context awareness: every message carries the open file / selection / cursor line.
+- Slash commands: `/clear`, `/reindex`, `/resume`, `/scope`, `/model`, `/approval`, `/help`.
+- Quick-config chips (scope / model / approval) from `chatgml config show`.
+- Per-project resumable sessions (auto-replayed via a `resume` command on the next start).
+- Inline diff on approve: the open file is reloaded from disk and the cursor jumps to the changed
+  hunk. **Ask About Selection** is bound in the editor context menu.
+
+Build the extension (it reuses the core's built `dist/cli.js` and `plugin/state.js`):
+
+```bash
+cd vscode
+npm install
+npm run build        # emits vscode/dist/extension.js
+```
+
+To run it from this checkout, use the **Extension Development Host** (F5 in VS Code with the `vscode/`
+folder open) — the manifest points at the adjacent core, so no global install is required. Set
+`chatgml.binaryPath` if `chatgml` isn't on PATH. Coexists with any installed GML grammar extension
+(it does not register the `gml` language id).
 
 ---
 

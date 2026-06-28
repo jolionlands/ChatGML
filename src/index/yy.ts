@@ -201,7 +201,11 @@ export async function loadResourceMap(
     const ref = asRef(id);
     if (!ref) continue;
     const pathPosix = ref.path.replace(/\\/g, '/');
-    const entry: ResourceMapEntry = { name: ref.name, path: pathPosix, kind: kindFromPath(pathPosix) };
+    const entry: ResourceMapEntry = {
+      name: ref.name,
+      path: pathPosix,
+      kind: kindFromPath(pathPosix),
+    };
     byName.set(ref.name, entry);
     byPath.set(pathPosix, entry);
   }

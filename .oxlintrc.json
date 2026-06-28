@@ -9,8 +9,11 @@
     "dist/**",
     "coverage/**",
     "node_modules/**",
+    "vscode/node_modules/**",
+    "vscode/dist/**",
     "talk_codebase/**",
     "plugin/**",
+    "vscode/**",
     "**/*.js",
     "**/*.mjs",
     "**/*.cjs"

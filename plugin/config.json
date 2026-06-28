@@ -3,6 +3,7 @@
   "description": "GameMaker-aware agentic coding assistant (chatgml serve over NDJSON).",
   "scripts": [
     "state.js",
+    "child-process.js",
     "diff-view.js",
     "panel.js",
     "config-bridge.js",

@@ -16,8 +16,10 @@ import type {
   ToolResult,
   ToolSpec,
   Citation,
+  Mode,
 } from '../types.js';
 
+import { defineTool } from '../tool-error.js';
 import { globTool } from './glob.js';
 import { grepTool } from './grep.js';
 import { readTool } from './read.js';
@@ -25,31 +27,76 @@ import { searchTool } from './search.js';
 import { graphTool } from './graph.js';
 import { temporalTool } from './temporal.js';
 import { editTool } from './edit.js';
+import { executeCommandTool } from './exec.js';
+import { searchReplaceTool } from './search_replace.js';
+import { wrapMcpTools } from './mcp.js';
 
-export { globTool, grepTool, readTool, searchTool, graphTool, temporalTool, editTool };
-
-const READ_TOOLS: readonly Tool[] = [
+export {
   globTool,
   grepTool,
   readTool,
   searchTool,
   graphTool,
   temporalTool,
+  editTool,
+  executeCommandTool,
+  searchReplaceTool,
+  wrapMcpTools,
+};
+
+const searchFilesTool = defineTool({
+  name: 'search_files',
+  description: 'Search project files by regex or literal pattern.',
+  kind: 'read',
+  schema: grepTool.schema,
+  async execute(args, ctx) {
+    return grepTool.execute(args, ctx);
+  },
+});
+
+const READ_TOOLS: readonly Tool[] = [
+  globTool,
+  grepTool,
+  searchFilesTool,
+  readTool,
+  searchTool,
+  graphTool,
+  temporalTool,
 ] as unknown as readonly Tool[];
 
-const GATED_TOOLS: readonly Tool[] = [editTool] as unknown as readonly Tool[];
+const GATED_TOOLS: readonly Tool[] = [editTool, searchReplaceTool] as unknown as readonly Tool[];
+
+const COMMAND_TOOLS: readonly Tool[] = [executeCommandTool] as unknown as readonly Tool[];
+
+export const MODE_TOOL_KINDS: Record<Mode, Array<Tool['kind']>> = {
+  architect: ['read', 'gated', 'command', 'mcp'],
+  code: ['read', 'gated', 'command', 'mcp'],
+  ask: ['read', 'mcp'],
+  debug: ['read', 'command', 'mcp'],
+};
+
+/** Return a registry view containing only the tool kinds enabled for the requested mode. */
+export function filterToolsByMode(registry: ToolRegistry, mode: Mode): ToolRegistry {
+  const allowed = MODE_TOOL_KINDS[mode];
+  const map = new Map<string, Tool>();
+  for (const [name, tool] of registry) {
+    if (allowed.includes(tool.kind)) map.set(name, tool);
+  }
+  return map;
+}
 
 export interface BuildRegistryOptions {
   /** When true, omit the gated apply_patch tool (a pure read-only agent). */
   readOnly?: boolean;
 }
 
-/** Build the tool registry (read-only tools, plus the gated edit stub unless readOnly). */
+/** Build the tool registry (read-only tools, plus gated + command tools unless readOnly). */
 export function buildToolRegistry(opts: BuildRegistryOptions = {}): ToolRegistry {
   const map = new Map<string, Tool>();
   for (const t of READ_TOOLS) map.set(t.name, t);
   if (!opts.readOnly) {
     for (const t of GATED_TOOLS) map.set(t.name, t);
+    for (const t of COMMAND_TOOLS) map.set(t.name, t);
   }
   return map;
 }
@@ -71,15 +118,18 @@ function schemaToParameters(schema: ZodType<unknown>): Record<string, unknown> {
 }
 
 /** Build the `tools` array for an OpenAI-compatible chat request from a registry. */
-export function toOpenAiToolSpecs(registry: ToolRegistry): ToolSpec[] {
+export function toOpenAiToolSpecs(registry: ToolRegistry, mode?: Mode): ToolSpec[] {
+  const allowed = mode !== undefined ? MODE_TOOL_KINDS[mode] : undefined;
   const specs: ToolSpec[] = [];
   for (const tool of registry.values()) {
+    if (allowed !== undefined && !allowed.includes(tool.kind)) continue;
+    const parameters = tool.inputSchema ?? schemaToParameters(tool.schema as ZodType<unknown>);
     specs.push({
       type: 'function',
       function: {
         name: tool.name,
         description: tool.description,
-        parameters: schemaToParameters(tool.schema as ZodType<unknown>),
+        parameters,
       },
     });
   }
@@ -90,6 +140,8 @@ export interface DispatchResult {
   ok: boolean;
   content: string;
   citations?: Citation[];
+  isError?: boolean;
+  error?: string;
   code?: string;
 }
 
@@ -105,36 +157,59 @@ export async function dispatchTool(
   ctx: ToolContext,
 ): Promise<DispatchResult> {
   if (ctx.signal.aborted) {
-    return { ok: false, content: 'aborted', code: 'aborted' };
+    return { ok: false, content: 'aborted', isError: true, error: 'aborted', code: 'aborted' };
   }
   const tool = registry.get(name);
   if (!tool) {
-    return { ok: false, content: `unknown tool: ${name}`, code: 'bad_args' };
+    return {
+      ok: false,
+      content: `unknown tool: ${name}`,
+      isError: true,
+      error: `unknown tool: ${name}`,
+      code: 'bad_args',
+    };
   }
 
   let parsedJson: unknown;
   try {
     parsedJson = rawArgs.trim() === '' ? {} : JSON.parse(rawArgs);
   } catch {
-    return { ok: false, content: `malformed JSON arguments for ${name}`, code: 'bad_args' };
+    return {
+      ok: false,
+      content: `malformed JSON arguments for ${name}`,
+      isError: true,
+      error: `malformed JSON arguments for ${name}`,
+      code: 'bad_args',
+    };
   }
 
   const parsed = tool.schema.safeParse(parsedJson);
   if (!parsed.success) {
     const firstPath = parsed.error.issues[0]?.path.join('.') ?? '(root)';
     const msg = parsed.error.issues[0]?.message ?? 'invalid arguments';
-    return { ok: false, content: `bad arguments for ${name} (${firstPath}): ${msg}`, code: 'bad_args' };
+    const error = `bad arguments for ${name} (${firstPath}): ${msg}`;
+    return { ok: false, content: error, isError: true, error, code: 'bad_args' };
   }
 
   try {
     const result: ToolResult = await tool.execute(parsed.data, ctx);
     const out: DispatchResult = { ok: result.isError !== true, content: result.content };
+    if (result.isError === true) {
+      out.isError = true;
+      out.error = result.content;
+    }
     if (result.citations && result.citations.length > 0) out.citations = result.citations;
     return out;
   } catch (err) {
     if (err instanceof ToolError) {
-      return { ok: false, content: err.message, code: err.code };
+      return { ok: false, content: err.message, isError: true, error: err.message, code: err.code };
     }
-    return { ok: false, content: `tool ${name} failed`, code: 'provider_error' };
+    return {
+      ok: false,
+      content: `tool ${name} failed`,
+      isError: true,
+      error: `tool ${name} failed`,
+      code: 'provider_error',
+    };
   }
 }

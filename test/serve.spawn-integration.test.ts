@@ -267,7 +267,7 @@ describe.skipIf(!DIST_BUILT)('serve spawn integration (REAL child process over N
     const c = spawnServe(repoRoot, stub.url);
     activeChild = c;
     const ready = await c.waitForEvent((e) => e.type === 'status' && e.phase === 'ready');
-    expect(ready).toEqual({ type: 'status', phase: 'ready', protocolVersion: 1 });
+    expect(ready).toEqual({ type: 'status', phase: 'ready', protocolVersion: 3, mode: 'code' });
     c.endStdin();
     await c.waitForExit();
     expect(c.exitCode).toBe(0);

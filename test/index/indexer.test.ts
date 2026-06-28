@@ -12,7 +12,10 @@ import type { Config } from '../../src/types.js';
 const SCOPE: Scope = { repo: 'idx-repo' };
 
 function deps(root: string, emb = new FakeEmbeddings()) {
-  return { memory: new LocalMemoryProvider({ provider: 'local', root }, { embeddings: emb }), embeddings: emb };
+  return {
+    memory: new LocalMemoryProvider({ provider: 'local', root }, { embeddings: emb }),
+    embeddings: emb,
+  };
 }
 
 describe('runIndex (incremental)', () => {
@@ -234,6 +237,7 @@ describe('runIndexCommand (CLI wiring)', () => {
         embed: { baseURL: 'http://x', model: 'e', batchSize: 64 },
         memory: { provider: 'local' },
         scope: 'idx-repo',
+        mode: 'code',
         approval: 'gated',
         index: { chunkSize: 1500, chunkOverlap: 200, root: repo.root },
         search: {},
@@ -268,9 +272,15 @@ describe('runIndexCommand (CLI wiring)', () => {
       ]);
       const config: Config = {
         chat: { baseURL: 'http://chat', model: 'm', temperature: 0.2 },
-        embed: { baseURL: 'http://embed/v1', apiKey: 'sk-SENTINEL-DEADBEEF', model: 'e', batchSize: 8 },
+        embed: {
+          baseURL: 'http://embed/v1',
+          apiKey: 'sk-SENTINEL-DEADBEEF',
+          model: 'e',
+          batchSize: 8,
+        },
         memory: { provider: 'local' },
         scope: 'idx-repo',
+        mode: 'code',
         approval: 'gated',
         index: { chunkSize: 1500, chunkOverlap: 200, root: repo.root },
         search: {},
@@ -304,6 +314,7 @@ describe('runIndexCommand (CLI wiring)', () => {
         embed: { baseURL: 'http://embed/v1', model: 'e', batchSize: 64 },
         memory: { provider: 'local' },
         scope: 'idx-repo-2',
+        mode: 'code',
         approval: 'gated',
         index: { chunkSize: 1500, chunkOverlap: 200, root: repo.root },
         search: {},

@@ -43,10 +43,7 @@ describe('parseYy — tolerant trailing-comma parsing', () => {
         { id: { name: 'Object1', path: 'objects/Object1/Object1.yy' } },
         { id: { name: 'Room1', path: 'rooms/Room1/Room1.yy' } },
       ],
-      list: [
-        [1, 2],
-        [3],
-      ],
+      list: [[1, 2], [3]],
     });
   });
 
@@ -138,9 +135,12 @@ describe('loadObjectMeta — parent + collision resolution', () => {
       "resourceType":"GMObject",
       "resourceVersion":"2.0",
     }`;
-    const meta = await loadObjectMeta('objects/obj_enemy/obj_enemy.yy', memReader({
-      'objects/obj_enemy/obj_enemy.yy': objYy,
-    }));
+    const meta = await loadObjectMeta(
+      'objects/obj_enemy/obj_enemy.yy',
+      memReader({
+        'objects/obj_enemy/obj_enemy.yy': objYy,
+      }),
+    );
     expect(meta).toBeDefined();
     expect(meta!.name).toBe('obj_enemy');
     expect(meta!.parentName).toBe('obj_actor');
@@ -160,9 +160,12 @@ describe('loadObjectMeta — parent + collision resolution', () => {
       "resourceType":"GMObject",
       "resourceVersion":"2.0",
     }`;
-    const meta = await loadObjectMeta('objects/Object1/Object1.yy', memReader({
-      'objects/Object1/Object1.yy': objYy,
-    }));
+    const meta = await loadObjectMeta(
+      'objects/Object1/Object1.yy',
+      memReader({
+        'objects/Object1/Object1.yy': objYy,
+      }),
+    );
     expect(meta).toBeDefined();
     expect(meta!.name).toBe('Object1');
     expect(meta!.parentName).toBeUndefined();
@@ -177,16 +180,22 @@ describe('loadObjectMeta — parent + collision resolution', () => {
   });
 
   it('falls back to the path-derived name when "name" is absent', async () => {
-    const meta = await loadObjectMeta('objects/obj_path/obj_path.yy', memReader({
-      'objects/obj_path/obj_path.yy': '{"eventList":[],}',
-    }));
+    const meta = await loadObjectMeta(
+      'objects/obj_path/obj_path.yy',
+      memReader({
+        'objects/obj_path/obj_path.yy': '{"eventList":[],}',
+      }),
+    );
     expect(meta!.name).toBe('obj_path');
   });
 
   it('returns undefined when no "name" and the path is not an objects/<N>/<N>.yy', async () => {
-    const meta = await loadObjectMeta('weird/place/thing.yy', memReader({
-      'weird/place/thing.yy': '{"eventList":[],}',
-    }));
+    const meta = await loadObjectMeta(
+      'weird/place/thing.yy',
+      memReader({
+        'weird/place/thing.yy': '{"eventList":[],}',
+      }),
+    );
     expect(meta).toBeUndefined();
   });
 
@@ -205,18 +214,25 @@ describe('loadObjectMeta — parent + collision resolution', () => {
         {"eventType":4,"collisionObjectId":{"name":"obj_real","path":"objects/obj_real/obj_real.yy",},},
       ],
     }`;
-    const meta = await loadObjectMeta('objects/obj_mixed/obj_mixed.yy', memReader({
-      'objects/obj_mixed/obj_mixed.yy': objYy,
-    }));
+    const meta = await loadObjectMeta(
+      'objects/obj_mixed/obj_mixed.yy',
+      memReader({
+        'objects/obj_mixed/obj_mixed.yy': objYy,
+      }),
+    );
     // Only the valid eventType-4-with-ref entry counts; eventNum defaults to 0 when absent.
     expect([...meta!.collisionTargets]).toEqual(['obj_real']);
     expect(meta!.collisionTargetsByEvent.get(eventKeyFor(4, 0))).toBe('obj_real');
   });
 
   it('treats a non-object/array eventList and a non-object parentObjectId as absent', async () => {
-    const meta = await loadObjectMeta('objects/o/o.yy', memReader({
-      'objects/o/o.yy': '{"name":"o","parentObjectId":"not-a-ref","spriteId":42,"eventList":"nope",}',
-    }));
+    const meta = await loadObjectMeta(
+      'objects/o/o.yy',
+      memReader({
+        'objects/o/o.yy':
+          '{"name":"o","parentObjectId":"not-a-ref","spriteId":42,"eventList":"nope",}',
+      }),
+    );
     expect(meta!.parentName).toBeUndefined();
     expect(meta!.spriteName).toBeUndefined();
     expect(meta!.collisionTargets.size).toBe(0);

@@ -8,18 +8,78 @@
 import { z } from 'zod';
 import type { AgentEvent } from './types.js';
 
-export const PROTOCOL_VERSION = 1 as const;
+// Bumped to 2: `user` now carries optional editor `context`, and the inbound set adds `resume`
+// (seed conversation history) and `clear` (drop history). v1 clients that omit `context` keep
+// working; a v1 client receiving a v2-only `turn_end` event ignores it (the union is open). The
+// handshake still publishes this number so a client can branch if it ever needs to.
+export const PROTOCOL_VERSION = 3 as const;
 
 // ---------------------------------------------------------------------------
 // Inbound command schema. The type is INFERRED from the schema (no annotation) so the schema
 // and the type can never drift.
 // ---------------------------------------------------------------------------
+
+// Editor context attached to a `user` command (see src/types.ts EditorContext). All fields
+// optional; a v1-style bare {type:'user',text} still validates.
+export const EditorContextSchema = z
+  .object({
+    openFile: z.string().optional(),
+    selection: z.string().optional(),
+    cursorLine: z.number().int().positive().optional(),
+    mentions: z
+      .array(
+        z.object({
+          type: z.enum(['file', 'folder', 'problems', 'terminal', 'url', 'image']),
+          target: z.string(),
+          label: z.string().optional(),
+          content: z.string().optional(),
+        }),
+      )
+      .optional(),
+  })
+  .optional();
+
 export const InEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('user'), text: z.string() }),
-  z.object({ type: z.literal('approve'), id: z.string() }),
-  z.object({ type: z.literal('reject'), id: z.string() }),
+  z.object({
+    type: z.literal('user'),
+    text: z.string(),
+    context: EditorContextSchema,
+    taskId: z.string().max(64).optional(),
+  }),
+  z.object({
+    type: z.literal('approve'),
+    id: z.string(),
+    block: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    type: z.literal('reject'),
+    id: z.string(),
+    block: z.number().int().nonnegative().optional(),
+  }),
   z.object({ type: z.literal('reindex') }),
   z.object({ type: z.literal('cancel') }),
+  // Seed conversation history (sent once at session start to resume a prior conversation). The
+  // core stores these as the in-memory history so the next `user` turn has multi-turn context.
+  // Messages are plain user/assistant pairs (tool exchanges are flattened by the persisting
+  // client); the core never executes them.
+  z.object({ type: z.literal('resume'), messages: z.array(z.any()) }),
+  // Drop all in-memory conversation history (the /clear slash command).
+  z.object({ type: z.literal('clear') }),
+  // Protocol v3 keep-alive / round-trip probes.
+  z.object({ type: z.literal('ping'), id: z.string() }),
+  z.object({ type: z.literal('pong'), id: z.string() }),
+  // Rewind to a prior checkpoint.
+  z.object({ type: z.literal('undo'), checkpointId: z.string() }),
+  // Approve or reject a gated command execution request.
+  z.object({ type: z.literal('approve_command'), id: z.string() }),
+  z.object({ type: z.literal('reject_command'), id: z.string() }),
+  // Set per-tool approval policy (gated requires human approval, auto may proceed without).
+  z.object({
+    type: z.literal('approval_policy'),
+    policy: z.record(z.string(), z.enum(['gated', 'auto'])),
+  }),
+  // Request the agent's current tool catalog.
+  z.object({ type: z.literal('list_tools') }),
 ]);
 export type InEvent = z.infer<typeof InEventSchema>;
 export type ClientCommand = InEvent;
@@ -75,7 +135,7 @@ export class NdjsonDecoder {
 
   /**
    * Feed a chunk; returns parsed JSON values for every complete line found. On a malformed line it
-   * throws a ProtocolError whose `.parsed` holds the good values that preceded it; the buffer is
+   * throws a `ProtocolError` whose `.parsed` holds the good values that preceded it; the buffer is
    * left positioned past the bad line so a follow-up push('') resumes with the next line.
    */
   push(chunk: string | Buffer): unknown[] {
@@ -129,7 +189,17 @@ const AGENT_EVENT_TYPES = new Set([
   'edit_proposal',
   'approval_request',
   'answer',
+  'turn_end',
   'error',
+  'pong',
+  'tool_catalog',
+  'checkpoint',
+  'command_request',
+  'command_output',
+  'command_exit',
+  'mcp_tool_call',
+  'mcp_tool_result',
+  'mcp_resource',
 ]);
 
 /** Narrow an unknown to an AgentEvent (structural, by `type` discriminant). */

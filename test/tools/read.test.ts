@@ -96,7 +96,9 @@ describe('read_file tool', () => {
     const repo = makeTmpRepo({});
     cleanup = repo.cleanup;
     // 3MB file (well over the 2MB whole-file cap), but a small line window must still be readable.
-    const big = Array.from({ length: 50000 }, (_, i) => `line ${i + 1} ` + 'x'.repeat(50)).join('\n');
+    const big = Array.from({ length: 50000 }, (_, i) => `line ${i + 1} ` + 'x'.repeat(50)).join(
+      '\n',
+    );
     expect(big.length).toBeGreaterThan(2 * 1024 * 1024);
     writeFileSync(path.join(repo.root, 'huge.gml'), big);
     const { ctx } = makeToolContext({ root: repo.root });

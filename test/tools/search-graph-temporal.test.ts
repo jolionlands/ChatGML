@@ -154,7 +154,11 @@ describe('graph_neighbors tool', () => {
       { name: 'apply_dmg', path: 'scripts/scr_dmg/scr_dmg.gml', kind: 'function' },
       ctx,
     );
-    expect(ref).toEqual({ name: 'apply_dmg', path: 'scripts/scr_dmg/scr_dmg.gml', kind: 'function' });
+    expect(ref).toEqual({
+      name: 'apply_dmg',
+      path: 'scripts/scr_dmg/scr_dmg.gml',
+      kind: 'function',
+    });
     expect(res.citations).toHaveLength(1);
   });
 

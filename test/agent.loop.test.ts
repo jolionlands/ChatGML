@@ -1,6 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { runAgent, createApprovalGate, DEFAULT_MAX_STEPS, STUCK_TOOL_LIMIT, IDLE_MS } from '../src/agent.js';
+import {
+  runAgent,
+  createApprovalGate,
+  DEFAULT_MAX_STEPS,
+  STUCK_TOOL_LIMIT,
+  IDLE_MS,
+} from '../src/agent.js';
 import { FakeLlm, ThrowingLlm, SlowLlm } from './helpers/fake-llm.js';
 import { LlmError } from '../src/llm.js';
 import { buildToolRegistry } from '../src/tools/index.js';
@@ -17,6 +23,7 @@ function cfg(root: string, approval: 'gated' | 'auto' = 'gated'): Config {
     embed: { baseURL: 'http://x', model: 'e', batchSize: 64 },
     memory: { provider: 'local' },
     scope: 'game',
+    mode: 'code',
     approval,
     index: { chunkSize: 1500, chunkOverlap: 200, root },
     search: {},
@@ -79,7 +86,9 @@ describe('runAgent loop', () => {
   it('one tool round-trip: appends a role:tool message matching the tool_call_id', async () => {
     const { config, memory, ignore } = await setup();
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 'c1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }] },
+      {
+        toolCalls: [{ id: 'c1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }],
+      },
       { tokens: ['Found the files.'] },
     ]);
     const { events, emit } = collect();
@@ -148,7 +157,11 @@ describe('runAgent loop', () => {
       { repo: 'game' },
     );
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 's1', name: 'search_code', arguments: JSON.stringify({ query: 'destroy player' }) }] },
+      {
+        toolCalls: [
+          { id: 's1', name: 'search_code', arguments: JSON.stringify({ query: 'destroy player' }) },
+        ],
+      },
       { tokens: ['The player is destroyed when hp hits 0.'] },
     ]);
     const { events, emit } = collect();
@@ -175,7 +188,15 @@ describe('runAgent loop', () => {
     ]);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('x', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
     const tr = events.find((e) => e.type === 'tool_result');
     expect(tr && tr.type === 'tool_result' && tr.ok).toBe(false);
     expect(events.some((e) => e.type === 'answer')).toBe(true);
@@ -189,7 +210,15 @@ describe('runAgent loop', () => {
     ]);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('x', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
     const tr = events.find((e) => e.type === 'tool_result');
     expect(tr && tr.type === 'tool_result' && tr.ok).toBe(false);
   });
@@ -203,7 +232,11 @@ describe('runAgent loop', () => {
     const llm = new FakeLlm(turns);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { maxSteps: 3 });
+    await runAgent(
+      'x',
+      { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore },
+      { maxSteps: 3 },
+    );
     const err = events.find((e) => e.type === 'error');
     expect(err && err.type === 'error' && err.code).toBe('max_steps');
   });
@@ -213,7 +246,15 @@ describe('runAgent loop', () => {
     const llm = new ThrowingLlm(new LlmError('http', 'boom', { status: 503 }));
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    const res = await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    const res = await runAgent('x', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
     const err = events.find((e) => e.type === 'error');
     expect(err && err.type === 'error' && err.code).toBe('http');
     expect(res.message.role).toBe('assistant');
@@ -227,12 +268,25 @@ describe('runAgent loop', () => {
     // a user who DECLINES (resolve false) the moment an approval_request appears. The write must NOT
     // happen — prompt injection cannot bypass the gate.
     const before = readFileSync(`${root}/objects/obj_player/Step_0.gml`, 'utf8');
-    const cleanDiff = '--- a\n+++ b\n@@ -1,2 +1,2 @@\n-hp -= 1;\n+hp -= 999;\n if (hp <= 0) instance_destroy();\n';
+    const cleanDiff =
+      '--- a\n+++ b\n@@ -1,2 +1,2 @@\n-hp -= 1;\n+hp -= 999;\n if (hp <= 0) instance_destroy();\n';
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 'r1', name: 'read_file', arguments: JSON.stringify({ path: 'objects/obj_player/Step_0.gml' }) }] },
       {
         toolCalls: [
-          { id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: 'objects/obj_player/Step_0.gml', diff: cleanDiff }) },
+          {
+            id: 'r1',
+            name: 'read_file',
+            arguments: JSON.stringify({ path: 'objects/obj_player/Step_0.gml' }),
+          },
+        ],
+      },
+      {
+        toolCalls: [
+          {
+            id: 'e1',
+            name: 'apply_patch',
+            arguments: JSON.stringify({ path: 'objects/obj_player/Step_0.gml', diff: cleanDiff }),
+          },
         ],
       },
       { tokens: ['The edit was declined, so nothing changed.'] },
@@ -252,14 +306,24 @@ describe('runAgent loop', () => {
     };
     const gate = createApprovalGate({ autoApprove: false, emit });
     holder.gate = gate;
-    await runAgent('please review', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('please review', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
 
     // The gate DID surface the proposal (the model called apply_patch) but it was rejected ...
     expect(events.some((e) => e.type === 'edit_proposal')).toBe(true);
     expect(events.some((e) => e.type === 'approval_request')).toBe(true);
     // ... so the apply_patch tool_result is ok:true with a "not approved" message (no error, no write),
     const editResult = events.find((e) => e.type === 'tool_result' && e.name === 'apply_patch');
-    expect(editResult && editResult.type === 'tool_result' && /not approved/i.test(editResult.content)).toBe(true);
+    expect(
+      editResult && editResult.type === 'tool_result' && /not approved/i.test(editResult.content),
+    ).toBe(true);
     // and the file on disk is UNCHANGED — the injection produced no write.
     expect(readFileSync(`${root}/objects/obj_player/Step_0.gml`, 'utf8')).toBe(before);
   });
@@ -294,7 +358,15 @@ describe('runAgent terminal-event contract', () => {
     const llm = new FakeLlm([{ tokens: ['done'] }]);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('hi', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
     expectSingleTerminal(events, 'answer');
   });
 
@@ -303,7 +375,15 @@ describe('runAgent terminal-event contract', () => {
     const llm = new ThrowingLlm(new LlmError('http', 'boom', { status: 503 }));
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('x', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
     const term = expectSingleTerminal(events, 'error');
     expect(term.type === 'error' && term.code).toBe('http');
   });
@@ -316,7 +396,11 @@ describe('runAgent terminal-event contract', () => {
     const llm = new FakeLlm(turns);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { maxSteps: 3 });
+    await runAgent(
+      'x',
+      { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore },
+      { maxSteps: 3 },
+    );
     const term = expectSingleTerminal(events, 'error');
     expect(term.type === 'error' && term.code).toBe('max_steps');
   });
@@ -328,18 +412,31 @@ describe('runAgent terminal-event contract', () => {
     const gate = createApprovalGate({ autoApprove: false, emit });
     const ac = new AbortController();
     ac.abort();
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, signal: ac.signal, ignore });
+    await runAgent('x', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      signal: ac.signal,
+      ignore,
+    });
     const term = expectSingleTerminal(events, 'error');
     expect(term.type === 'error' && term.code).toBe('aborted');
     // GAP2: the cancelled status is emitted at most once (was duplicated before the fix).
-    const cancelledCount = events.filter((e) => e.type === 'status' && e.phase === 'cancelled').length;
+    const cancelledCount = events.filter(
+      (e) => e.type === 'status' && e.phase === 'cancelled',
+    ).length;
     expect(cancelledCount).toBe(1);
   });
 
   it('abort mid-run (after the first tool call) ends with one terminal error{aborted}; cancelled once', async () => {
     const { config, memory, ignore } = await setup();
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 't1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }] },
+      {
+        toolCalls: [{ id: 't1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }],
+      },
       { tokens: ['should not reach'] },
     ]);
     const events: AgentEvent[] = [];
@@ -350,10 +447,21 @@ describe('runAgent terminal-event contract', () => {
       if (e.type === 'tool_result') ac.abort();
     };
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('go', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, signal: ac.signal, ignore });
+    await runAgent('go', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      signal: ac.signal,
+      ignore,
+    });
     const term = expectSingleTerminal(events, 'error');
     expect(term.type === 'error' && term.code).toBe('aborted');
-    const cancelledCount = events.filter((e) => e.type === 'status' && e.phase === 'cancelled').length;
+    const cancelledCount = events.filter(
+      (e) => e.type === 'status' && e.phase === 'cancelled',
+    ).length;
     expect(cancelledCount).toBe(1);
     // The second model turn never ran (we aborted before answering).
     expect(events.some((e) => e.type === 'answer')).toBe(false);
@@ -371,7 +479,11 @@ describe('runAgent terminal-event contract', () => {
     const llm = new FakeLlm(turns);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { maxSteps: 10 });
+    await runAgent(
+      'x',
+      { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore },
+      { maxSteps: 10 },
+    );
     const term = expectSingleTerminal(events, 'error');
     expect(term.type === 'error' && term.code).toBe('stuck_tool');
     expect(term.type === 'error' && /read_file/.test(term.message)).toBe(true);
@@ -386,14 +498,30 @@ describe('runAgent terminal-event contract', () => {
     const { config, memory, ignore } = await setup();
     // Alternate two DISTINCT failing calls then answer. Never 3 of the SAME in a row -> no stuck error.
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 'a', name: 'read_file', arguments: JSON.stringify({ path: 'nope-a.gml' }) }] },
-      { toolCalls: [{ id: 'b', name: 'read_file', arguments: JSON.stringify({ path: 'nope-b.gml' }) }] },
-      { toolCalls: [{ id: 'c', name: 'read_file', arguments: JSON.stringify({ path: 'nope-a.gml' }) }] },
+      {
+        toolCalls: [
+          { id: 'a', name: 'read_file', arguments: JSON.stringify({ path: 'nope-a.gml' }) },
+        ],
+      },
+      {
+        toolCalls: [
+          { id: 'b', name: 'read_file', arguments: JSON.stringify({ path: 'nope-b.gml' }) },
+        ],
+      },
+      {
+        toolCalls: [
+          { id: 'c', name: 'read_file', arguments: JSON.stringify({ path: 'nope-a.gml' }) },
+        ],
+      },
       { tokens: ['gave up cleanly'] },
     ]);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('x', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { maxSteps: 10 });
+    await runAgent(
+      'x',
+      { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore },
+      { maxSteps: 10 },
+    );
     // It answered, not stuck_tool — alternating fingerprints never reached 3-in-a-row.
     expectSingleTerminal(events, 'answer');
     expect(events.some((e) => e.type === 'error')).toBe(false);
@@ -418,12 +546,28 @@ describe('runAgent auto-mode destructive-edit backstop (GAP4)', () => {
   it('auto mode: a SMALL additive apply_patch auto-applies with NO approval_request and writes', async () => {
     const { config, memory, ignore, root } = await setup('auto');
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: STEP_TARGET, diff: ADDITIVE_DIFF }) }] },
+      {
+        toolCalls: [
+          {
+            id: 'e1',
+            name: 'apply_patch',
+            arguments: JSON.stringify({ path: STEP_TARGET, diff: ADDITIVE_DIFF }),
+          },
+        ],
+      },
       { tokens: ['Applied the guard.'] },
     ]);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: true, emit });
-    await runAgent('add an hp guard', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('add an hp guard', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
     // Auto-applied: edit_proposal is emitted, but NO approval_request (no human prompted).
     expect(events.some((e) => e.type === 'edit_proposal')).toBe(true);
     expect(events.some((e) => e.type === 'approval_request')).toBe(false);
@@ -437,7 +581,15 @@ describe('runAgent auto-mode destructive-edit backstop (GAP4)', () => {
     const before = readFileSync(`${root}/${STEP_TARGET}`, 'utf8');
     expect(before).toBe(STEP_ORIGINAL);
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: STEP_TARGET, diff: WIPE_DIFF }) }] },
+      {
+        toolCalls: [
+          {
+            id: 'e1',
+            name: 'apply_patch',
+            arguments: JSON.stringify({ path: STEP_TARGET, diff: WIPE_DIFF }),
+          },
+        ],
+      },
       { tokens: ['Wiped the file.'] },
     ]);
     const events: AgentEvent[] = [];
@@ -457,7 +609,15 @@ describe('runAgent auto-mode destructive-edit backstop (GAP4)', () => {
     };
     const gate = createApprovalGate({ autoApprove: true, emit });
     holder.gate = gate;
-    await runAgent('delete everything', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('delete everything', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
 
     // Even in AUTO mode the destructive edit was gated: an approval_request WAS emitted ...
     expect(sawApprovalRequest).toBe(true);
@@ -470,7 +630,15 @@ describe('runAgent auto-mode destructive-edit backstop (GAP4)', () => {
     const { config, memory, ignore, root } = await setup('auto');
     const before = readFileSync(`${root}/${STEP_TARGET}`, 'utf8');
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 'e1', name: 'apply_patch', arguments: JSON.stringify({ path: STEP_TARGET, diff: WIPE_DIFF }) }] },
+      {
+        toolCalls: [
+          {
+            id: 'e1',
+            name: 'apply_patch',
+            arguments: JSON.stringify({ path: STEP_TARGET, diff: WIPE_DIFF }),
+          },
+        ],
+      },
       { tokens: ['Edit was declined.'] },
     ]);
     const events: AgentEvent[] = [];
@@ -484,7 +652,15 @@ describe('runAgent auto-mode destructive-edit backstop (GAP4)', () => {
     };
     const gate = createApprovalGate({ autoApprove: true, emit });
     holder.gate = gate;
-    await runAgent('delete everything', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore });
+    await runAgent('delete everything', {
+      llm,
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
     expect(events.some((e) => e.type === 'approval_request')).toBe(true);
     // Rejected -> the file is UNCHANGED. An injection-driven wipe applied nothing in auto mode.
     expect(readFileSync(`${root}/${STEP_TARGET}`, 'utf8')).toBe(before);
@@ -508,10 +684,19 @@ describe('runAgent slow-upstream idle heartbeat (GAP5)', () => {
     const llm = new SlowLlm('slow answer', 80);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { idleMs: 20 });
+    await runAgent(
+      'hi',
+      { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore },
+      { idleMs: 20 },
+    );
 
     const types = events.map((e) => e.type);
-    const firstStreaming = types.findIndex((t, i) => t === 'status' && events[i]!.type === 'status' && (events[i] as { phase?: string }).phase === 'streaming');
+    const firstStreaming = types.findIndex(
+      (t, i) =>
+        t === 'status' &&
+        events[i]!.type === 'status' &&
+        (events[i] as { phase?: string }).phase === 'streaming',
+    );
     const firstToken = types.indexOf('token');
     const heartbeats = events.filter((e) => e.type === 'status' && e.phase === 'streaming');
     expect(heartbeats.length).toBeGreaterThanOrEqual(1);
@@ -530,7 +715,11 @@ describe('runAgent slow-upstream idle heartbeat (GAP5)', () => {
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
     // Even with a small idleMs, a synchronous (no-stall) FakeLlm never idles long enough to trip it.
-    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { idleMs: 20 });
+    await runAgent(
+      'hi',
+      { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore },
+      { idleMs: 20 },
+    );
     expect(events.some((e) => e.type === 'status' && e.phase === 'streaming')).toBe(false);
     // It still streams tokens and answers.
     expect(events.some((e) => e.type === 'token')).toBe(true);
@@ -542,7 +731,11 @@ describe('runAgent slow-upstream idle heartbeat (GAP5)', () => {
     const llm = new SlowLlm('done', 50);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
-    await runAgent('hi', { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore }, { idleMs: 15 });
+    await runAgent(
+      'hi',
+      { llm, tools: buildToolRegistry(), config, memory, emit, approvals: gate, ignore },
+      { idleMs: 15 },
+    );
     const answerIdx = events.findIndex((e) => e.type === 'answer');
     expect(answerIdx).toBeGreaterThanOrEqual(0);
     // Nothing after the answer (the interval was cleared in the finally).

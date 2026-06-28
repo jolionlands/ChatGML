@@ -90,8 +90,7 @@ describe('readJson', () => {
     try {
       const reasons: ReadJsonReason[] = [];
       const out = readJson<{ ok: boolean }>(path.join(repo.root, 'x.json'), {
-        validate: (v): v is { ok: boolean } =>
-          typeof v === 'object' && v !== null && 'ok' in v,
+        validate: (v): v is { ok: boolean } => typeof v === 'object' && v !== null && 'ok' in v,
         warn: (r) => reasons.push(r),
       });
       expect(out).toBeNull();

@@ -15,6 +15,7 @@ function cfg(root: string, approval: 'gated' | 'auto' = 'gated'): Config {
     embed: { baseURL: 'http://x', model: 'e', batchSize: 64 },
     memory: { provider: 'local' },
     scope: 'game',
+    mode: 'code',
     approval,
     index: { chunkSize: 1500, chunkOverlap: 200, root },
     search: {},
@@ -53,7 +54,9 @@ describe('createAgentLike control surface', () => {
     const { config, memory, ignore } = await ctx();
     const llm = new FakeLlm([{ tokens: ['hello'] }]);
     const agent = createAgentLike({ llm, tools: buildToolRegistry(), config, memory, ignore });
-    const events = await drain(agent.run({ type: 'user', text: 'hi' }, new AbortController().signal));
+    const events = await drain(
+      agent.run({ type: 'user', text: 'hi' }, new AbortController().signal),
+    );
     expect(events.some((e) => e.type === 'answer')).toBe(true);
     expect(events.some((e) => e.type === 'token')).toBe(true);
   });
@@ -91,7 +94,9 @@ describe('createAgentLike control surface', () => {
     const { config, memory, ignore } = await ctx();
     // A model that takes two turns; we cancel after the first tool call.
     const llm = new FakeLlm([
-      { toolCalls: [{ id: 't1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }] },
+      {
+        toolCalls: [{ id: 't1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }],
+      },
       { tokens: ['done'] },
     ]);
     const agent = createAgentLike({ llm, tools: buildToolRegistry(), config, memory, ignore });
@@ -123,5 +128,21 @@ describe('createAgentLike control surface', () => {
     ac.abort();
     const events = await drain(agent.run({ type: 'user', text: 'hi' }, ac.signal));
     expect(events.some((e) => e.type === 'status' && e.phase === 'cancelled')).toBe(true);
+  });
+
+  it('emits error and code on a failed tool_result', async () => {
+    const { config, memory, ignore } = await ctx();
+    const llm = new FakeLlm([
+      { toolCalls: [{ id: 't1', name: 'no_such_tool', arguments: '{}' }] },
+      { tokens: ['recovered'] },
+    ]);
+    const agent = createAgentLike({ llm, tools: buildToolRegistry(), config, memory, ignore });
+    const events = await drain(
+      agent.run({ type: 'user', text: 'go' }, new AbortController().signal),
+    );
+    const tr = events.find((e) => e.type === 'tool_result');
+    expect(tr && tr.type === 'tool_result' && tr.ok).toBe(false);
+    expect(tr && tr.type === 'tool_result' && tr.error).toContain('unknown tool');
+    expect(tr && tr.type === 'tool_result' && tr.code).toBe('bad_args');
   });
 });

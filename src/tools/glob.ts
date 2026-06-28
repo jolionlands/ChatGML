@@ -17,7 +17,13 @@ const MAX_LIMIT = 5000;
 
 const GlobArgs = z.object({
   pattern: z.string().min(1).describe('a glob pattern, e.g. "objects/**/*.gml"'),
-  limit: z.number().int().positive().max(MAX_LIMIT).optional().describe('max results (default 200)'),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_LIMIT)
+    .optional()
+    .describe('max results (default 200)'),
 });
 type GlobArgs = z.infer<typeof GlobArgs>;
 
@@ -28,7 +34,8 @@ export const globTool: ToolDef<GlobArgs> = defineTool<GlobArgs>({
   kind: 'read',
   schema: GlobArgs,
   async execute(args: GlobArgs, ctx: ToolContext): Promise<ToolResult> {
-    if (args.pattern.includes('\0')) throw new ToolError('bad_args', 'pattern contains a null byte');
+    if (args.pattern.includes('\0'))
+      throw new ToolError('bad_args', 'pattern contains a null byte');
     const limit = Math.min(args.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
     let matches: string[];
@@ -74,7 +81,9 @@ export const globTool: ToolDef<GlobArgs> = defineTool<GlobArgs>({
       const meta = derive(p);
       if (!meta || meta.kind !== 'event') return p;
       const target =
-        meta.collisionWith !== undefined ? `Collision with ${meta.collisionWith}` : meta.displayName;
+        meta.collisionWith !== undefined
+          ? `Collision with ${meta.collisionWith}`
+          : meta.displayName;
       return `${p}  [${target}]`;
     });
     const truncated = matches.length > out.length && out.length >= limit;

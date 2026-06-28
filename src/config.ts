@@ -12,8 +12,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { z } from 'zod';
 
-import type { Config, ChatLane, EmbedLane, MemoryConfig } from './types.js';
-export type { Config, ChatLane, EmbedLane, MemoryConfig };
+import type { Config, ChatLane, EmbedLane, MemoryConfig, Mode, McpServerConfig } from './types.js';
+export type { Config, ChatLane, EmbedLane, MemoryConfig, McpServerConfig };
 
 // ---------------------------------------------------------------------------
 // The ONE defaults object.
@@ -23,6 +23,7 @@ export const DEFAULTS = {
   embed: { batchSize: 64 },
   memory: { provider: 'local' },
   approval: 'gated',
+  mode: 'code',
   index: { chunkSize: 1500, chunkOverlap: 200 },
 } as const;
 
@@ -173,15 +174,31 @@ const PartialSearchSchema = z
   .partial()
   .strict();
 
+const McpServerConfigSchema = z
+  .object({
+    name: z.string(),
+    command: z.string(),
+    args: z.array(z.string()),
+    env: z.record(z.string(), z.string()),
+    url: z.string(),
+    timeout: z.number(),
+    disabled: z.boolean(),
+  })
+  .partial()
+  .strict();
+
 const PartialConfigSchema = z
   .object({
     chat: PartialChatSchema,
     embed: PartialEmbedSchema,
     memory: PartialMemorySchema,
     scope: z.string(),
+    mode: z.enum(['architect', 'code', 'ask', 'debug']),
     approval: z.enum(['gated', 'auto']),
+    toolApproval: z.record(z.string(), z.enum(['gated', 'auto'])),
     index: PartialIndexSchema,
     search: PartialSearchSchema,
+    mcpServers: z.record(z.string(), McpServerConfigSchema),
   })
   .partial()
   .strict();
@@ -301,9 +318,7 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
   const envLayer = layerFromEnv(env);
 
   const loaded = loadConfigFile(root, env);
-  const fileLayer: PartialConfig = loaded
-    ? parsePartial(loaded.value, loaded.path)
-    : {};
+  const fileLayer: PartialConfig = loaded ? parsePartial(loaded.value, loaded.path) : {};
   const fileTrusted = loaded ? loaded.trusted : true;
 
   // --- Untrusted project-config guards (only when the file layer is the untrusted project file).
@@ -312,6 +327,12 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
     if (fileLayer.approval === 'auto') {
       throw new ConfigError(
         "untrusted project config may not set approval='auto' (pass --trust-project-config to allow)",
+      );
+    }
+    // Per-tool approval policies may not be sourced from the project layer.
+    if (fileLayer.toolApproval !== undefined) {
+      throw new ConfigError(
+        'untrusted project config may not set toolApproval (pass --trust-project-config to allow)',
       );
     }
     // A project file may not override a secret-bearing endpoint while the matching key is env-sourced.
@@ -323,10 +344,22 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
   const embed = mergeEmbed(fileLayer.embed, envLayer.embed, flagLayer.embed, chat);
   const memory = mergeMemory(fileLayer.memory, envLayer.memory, flagLayer.memory);
   const scope = flagLayer.scope ?? envLayer.scope ?? fileLayer.scope;
+  const mode: Mode =
+    flagLayer.mode ?? envLayer.mode ?? (fileLayer.mode as Mode | undefined) ?? DEFAULTS.mode;
   const approval =
     flagLayer.approval ?? envLayer.approval ?? fileLayer.approval ?? DEFAULTS.approval;
+  const toolApproval = mergeToolApproval(
+    fileLayer.toolApproval,
+    envLayer.toolApproval,
+    flagLayer.toolApproval,
+  );
   const index = mergeIndex(fileLayer.index, root);
   const search = mergeSearch(fileLayer.search, envLayer.search, flagLayer.search);
+  const mcpServers = mergeMcpServers(
+    fileLayer.mcpServers,
+    envLayer.mcpServers,
+    flagLayer.mcpServers,
+  );
 
   // --- Required-field validation (paths only in error messages, never values).
   if (chat.baseURL === undefined) {
@@ -400,9 +433,12 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
     embed: embedLane,
     memory: memoryValue,
     scope,
+    mode,
     approval,
+    toolApproval,
     index,
     search,
+    ...(mcpServers !== undefined ? { mcpServers } : {}),
   };
   return config;
 }
@@ -503,6 +539,30 @@ function mergeSearch(
   return minScore !== undefined ? { minScore } : {};
 }
 
+/**
+ * Merge per-tool approval policies (flags > env > file). The record is taken from the highest
+ * precedence layer that defines it; undefined means "no per-tool overrides".
+ */
+function mergeToolApproval(
+  file: PartialConfig['toolApproval'],
+  env: PartialConfig['toolApproval'],
+  flags: PartialConfig['toolApproval'],
+): Record<string, 'gated' | 'auto'> | undefined {
+  return pick(flags, env, file);
+}
+
+/**
+ * Merge MCP server configs (flags > env > file). Only the file layer is typically used; flags/env
+ * are accepted for completeness but currently have no extraction path.
+ */
+function mergeMcpServers(
+  file: PartialConfig['mcpServers'],
+  env: PartialConfig['mcpServers'],
+  flags: PartialConfig['mcpServers'],
+): Record<string, McpServerConfig> | undefined {
+  return pick(flags, env, file);
+}
+
 // ---------------------------------------------------------------------------
 // Untrusted-config endpoint guard.
 // ---------------------------------------------------------------------------
@@ -580,12 +640,32 @@ export function redact(config: Config): unknown {
           }
         : { provider: 'local' },
     scope: config.scope,
+    mode: config.mode,
     approval: config.approval,
+    // Only surface the toolApproval lane when policies are actually configured.
+    ...(config.toolApproval !== undefined ? { toolApproval: config.toolApproval } : {}),
     index: config.index,
     // Only surface the search lane when a floor is actually configured (keeps default `config show`
     // output unchanged: no `search` key appears unless minScore is set).
     ...(config.search.minScore !== undefined ? { search: config.search } : {}),
+    // Surface MCP server config but mask any env values (they may contain secrets).
+    ...(config.mcpServers !== undefined ? { mcpServers: redactMcpServers(config.mcpServers) } : {}),
   };
+  return out;
+}
+
+function redactMcpServers(
+  servers: Record<string, McpServerConfig>,
+): Record<string, McpServerConfig> {
+  const out: Record<string, McpServerConfig> = {};
+  for (const [key, server] of Object.entries(servers)) {
+    out[key] = {
+      ...server,
+      ...(server.env
+        ? { env: Object.fromEntries(Object.entries(server.env).map(([k]) => [k, REDACTED])) }
+        : {}),
+    };
+  }
   return out;
 }
 
@@ -620,6 +700,7 @@ const SETTABLE_FIELDS: Record<string, { path: string[]; type: 'string' | 'number
   'memory.hippo.url': { path: ['memory', 'url'], type: 'string' },
   'memory.hippo.key': { path: ['memory', 'key'], type: 'string' },
   scope: { path: ['scope'], type: 'string' },
+  mode: { path: ['mode'], type: 'string' },
   approval: { path: ['approval'], type: 'string' },
   'index.chunkSize': { path: ['index', 'chunkSize'], type: 'number' },
   'index.chunkOverlap': { path: ['index', 'chunkOverlap'], type: 'number' },
@@ -628,7 +709,105 @@ const SETTABLE_FIELDS: Record<string, { path: string[]; type: 'string' | 'number
 };
 
 /** The dotted field names `config set` accepts (sorted), for help text and validation hints. */
-export const SETTABLE_FIELD_NAMES: readonly string[] = Object.keys(SETTABLE_FIELDS).sort();
+export const SETTABLE_FIELD_NAMES: readonly string[] = [
+  ...Object.keys(SETTABLE_FIELDS).sort(),
+  'mcpServers.<name>.command',
+  'mcpServers.<name>.args',
+  'mcpServers.<name>.env.<key>',
+  'mcpServers.<name>.url',
+  'mcpServers.<name>.timeout',
+  'mcpServers.<name>.disabled',
+  'mcpServers.<name>.name',
+];
+
+interface McpSetField {
+  keys: string[];
+  coerced: string | number | boolean | string[];
+}
+
+/**
+ * Parse a `config set mcpServers.<name>.<field>` dotted path. Supports per-leaf fields and
+ * `mcpServers.<name>.env.<key>`. `args` is parsed as a JSON array of strings.
+ */
+function parseMcpSetField(field: string, value: string): McpSetField {
+  const parts = field.split('.');
+  // mcpServers.<name>.<field>  OR  mcpServers.<name>.env.<key>
+  if (parts.length < 3) {
+    throw new ConfigError(`invalid MCP config field '${field}'`);
+  }
+  const serverName = parts[1];
+  if (!serverName || serverName.length === 0) {
+    throw new ConfigError(`missing MCP server name in '${field}'`);
+  }
+  const leaf = parts[2];
+  const validLeaves = new Set(['command', 'args', 'env', 'url', 'timeout', 'disabled', 'name']);
+  if (!leaf || !validLeaves.has(leaf)) {
+    throw new ConfigError(`unknown MCP config field '${field}'`);
+  }
+
+  if (leaf === 'env') {
+    if (parts.length !== 4) {
+      throw new ConfigError(`invalid MCP env field '${field}'`);
+    }
+    const envKey = parts[3];
+    if (!envKey || envKey.length === 0) {
+      throw new ConfigError(`missing env key in '${field}'`);
+    }
+    return { keys: ['mcpServers', serverName, 'env', envKey], coerced: value };
+  }
+
+  if (parts.length !== 3) {
+    throw new ConfigError(`invalid MCP config field '${field}'`);
+  }
+
+  switch (leaf) {
+    case 'timeout': {
+      const n = num(value);
+      if (n === undefined) {
+        throw new ConfigError(`MCP field '${field}' expects a number, got '${value}'`);
+      }
+      return { keys: ['mcpServers', serverName, 'timeout'], coerced: n };
+    }
+    case 'disabled': {
+      if (value === 'true') return { keys: ['mcpServers', serverName, 'disabled'], coerced: true };
+      if (value === 'false')
+        return { keys: ['mcpServers', serverName, 'disabled'], coerced: false };
+      throw new ConfigError(`MCP field '${field}' expects 'true' or 'false', got '${value}'`);
+    }
+    case 'args': {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        throw new ConfigError(`MCP field '${field}' expects a JSON array of strings`);
+      }
+      if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === 'string')) {
+        throw new ConfigError(`MCP field '${field}' expects a JSON array of strings`);
+      }
+      return { keys: ['mcpServers', serverName, 'args'], coerced: parsed as string[] };
+    }
+    case 'command':
+    case 'url':
+    case 'name':
+      return { keys: ['mcpServers', serverName, leaf], coerced: value };
+    default:
+      throw new ConfigError(`unknown MCP config field '${field}'`);
+  }
+}
+
+/** Tool names that may appear in a `toolApproval.<name>` dotted path. */
+const KNOWN_TOOL_NAMES = new Set([
+  'glob',
+  'grep',
+  'search_files',
+  'read_file',
+  'search_code',
+  'graph_neighbors',
+  'temporal_query',
+  'apply_patch',
+  'search_replace',
+  'execute_command',
+]);
 
 export interface SetConfigResult {
   /** The absolute path of the user-global config file that was written. */
@@ -649,26 +828,45 @@ export function setUserGlobalConfigField(
   value: string,
   env: NodeJS.ProcessEnv = process.env,
 ): SetConfigResult {
-  const spec = SETTABLE_FIELDS[field];
-  if (!spec) {
-    throw new ConfigError(`unknown config field '${field}'`);
-  }
-  if (SECRET_FIELD_PATHS.has(field) && !isEnvRef(value)) {
-    throw new ConfigError(
-      `refusing to persist a literal secret for '${field}'; use an env reference (env:NAME)`,
-    );
-  }
+  let keys: string[];
+  let coerced: string | number | boolean | string[];
 
-  // Coerce the value to the field's type.
-  let coerced: string | number;
-  if (spec.type === 'number') {
-    const n = num(value);
-    if (n === undefined) {
-      throw new ConfigError(`config field '${field}' expects a number, got '${value}'`);
+  if (field.startsWith('toolApproval.')) {
+    const toolName = field.slice('toolApproval.'.length);
+    if (!KNOWN_TOOL_NAMES.has(toolName) && !toolName.startsWith('mcp_')) {
+      throw new ConfigError(`unknown tool name '${toolName}' in '${field}'`);
     }
-    coerced = n;
-  } else {
+    if (value !== 'gated' && value !== 'auto') {
+      throw new ConfigError(`toolApproval value must be 'gated' or 'auto', got '${value}'`);
+    }
+    keys = ['toolApproval', toolName];
     coerced = value;
+  } else if (field.startsWith('mcpServers.')) {
+    const parsed = parseMcpSetField(field, value);
+    keys = parsed.keys;
+    coerced = parsed.coerced;
+  } else {
+    const spec = SETTABLE_FIELDS[field];
+    if (!spec) {
+      throw new ConfigError(`unknown config field '${field}'`);
+    }
+    if (SECRET_FIELD_PATHS.has(field) && !isEnvRef(value)) {
+      throw new ConfigError(
+        `refusing to persist a literal secret for '${field}'; use an env reference (env:NAME)`,
+      );
+    }
+
+    // Coerce the value to the field's type.
+    if (spec.type === 'number') {
+      const n = num(value);
+      if (n === undefined) {
+        throw new ConfigError(`config field '${field}' expects a number, got '${value}'`);
+      }
+      coerced = n;
+    } else {
+      coerced = value;
+    }
+    keys = spec.path;
   }
 
   const filePath = userGlobalConfigPath(env);
@@ -684,7 +882,7 @@ export function setUserGlobalConfigField(
     current = { ...(existing as Record<string, unknown>) };
   }
 
-  setNested(current, spec.path, coerced);
+  setNested(current, keys, coerced);
 
   // Validate the merged object so we never write a structurally-invalid config.
   const parsed = PartialConfigSchema.safeParse(current);

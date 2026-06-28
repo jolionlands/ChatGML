@@ -169,7 +169,8 @@ export class LocalMemoryProvider implements MemoryProvider {
       const existing = st.chunks.get(c.id);
       if (!existing || existing.meta.contentHash !== c.contentHash) toEmbed.push(c);
     }
-    const vectors = toEmbed.length > 0 ? await this.embeddings.embed(toEmbed.map((c) => c.text)) : [];
+    const vectors =
+      toEmbed.length > 0 ? await this.embeddings.embed(toEmbed.map((c) => c.text)) : [];
 
     for (let i = 0; i < toEmbed.length; i++) {
       const c = toEmbed[i]!;
@@ -280,7 +281,10 @@ export class LocalMemoryProvider implements MemoryProvider {
 
   /**
    * Best-effort graph neighbors: chunks in the SAME FILE as `ref`, plus chunks whose text mentions
-   * `ref.name`. Documented as a heuristic (no real symbol graph in the local backend).
+   * `ref.name`. Documented as a heuristic (no real symbol graph in the local backend). Ranked by the
+   * only signal this backend has — same-file (1.0) above a bare name-mention (0.5) — score DESC with a
+   * deterministic chunkId tie-break. (D4: hippo ranks by its real walk score/depth; the local backend
+   * has no such graph, so this coarse relation score is the documented ordering.)
    */
   async graphNeighbors(ref: SymbolRef, scope: Scope): Promise<Hit[]> {
     const st = this.state(scope);
@@ -341,7 +345,8 @@ export class LocalMemoryProvider implements MemoryProvider {
       return [...st.notes].sort((a, b) => b.createdAt - a.createdAt);
     }
     const idx = new Bm25Index();
-    for (const n of st.notes) idx.add(n.id, `${n.text} ${n.topic ?? ''} ${(n.tags ?? []).join(' ')}`);
+    for (const n of st.notes)
+      idx.add(n.id, `${n.text} ${n.topic ?? ''} ${(n.tags ?? []).join(' ')}`);
     const ranked = idx.search(query);
     const byId = new Map(st.notes.map((n) => [n.id, n]));
     const hits = ranked.flatMap((r) => {

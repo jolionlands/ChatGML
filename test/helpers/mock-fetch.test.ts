@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import {
-  installFetchMock,
-  jsonResponse,
-  sseResponse,
-  FetchRecorder,
-} from './mock-fetch.js';
+import { installFetchMock, jsonResponse, sseResponse, FetchRecorder } from './mock-fetch.js';
 
 describe('mock-fetch helper', () => {
   afterEach(() => {

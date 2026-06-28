@@ -80,7 +80,9 @@ describe('protocol framing', () => {
 
   it('accepts a Buffer chunk', () => {
     const decoder = new NdjsonDecoder();
-    expect(decoder.push(Buffer.from('{"type":"reindex"}\n', 'utf8'))).toEqual([{ type: 'reindex' }]);
+    expect(decoder.push(Buffer.from('{"type":"reindex"}\n', 'utf8'))).toEqual([
+      { type: 'reindex' },
+    ]);
   });
 
   it('malformed JSON line throws ProtocolError and the loop can continue', () => {
@@ -101,6 +103,36 @@ describe('parseInEvent + InEventSchema', () => {
       { type: 'cancel' },
     ];
     for (const c of cases) expect(parseInEvent(JSON.stringify(c))).toEqual(c);
+  });
+
+  it('round-trips a user command with context.mentions', () => {
+    const ev: InEvent = {
+      type: 'user',
+      text: 'fix this',
+      context: {
+        openFile: 'obj_player/Step_0.gml',
+        mentions: [
+          { type: 'file', target: 'scripts/AI.gml', content: 'x = 1;' },
+          { type: 'folder', target: 'objects/', content: 'obj_player/\nobj_enemy/' },
+          { type: 'problems', target: 'problems', label: '3 errors', content: 'Type mismatch' },
+          { type: 'terminal', target: 'recent output', content: 'Build OK' },
+          { type: 'url', target: 'https://example.com', content: 'docs' },
+          { type: 'image', target: 'paste.png', label: 'screenshot' },
+        ],
+      },
+    };
+    expect(parseInEvent(JSON.stringify(ev))).toEqual(ev);
+  });
+
+  it('round-trips a user command with taskId', () => {
+    const ev: InEvent = { type: 'user', text: 'hello', taskId: 'task-abc-123' };
+    expect(parseInEvent(JSON.stringify(ev))).toEqual(ev);
+  });
+
+  it('rejects a taskId longer than 64 chars', () => {
+    expect(() =>
+      parseInEvent(JSON.stringify({ type: 'user', text: 'hello', taskId: 'x'.repeat(65) })),
+    ).toThrow(ProtocolError);
   });
 
   it('rejects a user command missing text', () => {

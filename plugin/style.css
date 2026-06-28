@@ -76,6 +76,25 @@ button[disabled] {
 .chatgml-activity-row {
   font-family: monospace;
   font-size: 12px;
+  cursor: pointer;
+}
+.chatgml-activity-header {
+  display: block;
+}
+.chatgml-activity-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.2s;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chatgml-activity-content.open {
+  max-height: 400px;
+  overflow: auto;
+}
+.chatgml-activity-error-content {
+  color: #b23b3b;
 }
 .chatgml-activity-running {
   opacity: 0.7;
@@ -131,6 +150,20 @@ button[disabled] {
 .chatgml-diff-hunk {
   color: #6a7ec0;
 }
+.chatgml-diff-block {
+  border: 1px solid #444;
+  border-radius: 3px;
+  margin: 6px 0;
+  padding: 6px;
+}
+.chatgml-diff-block-header {
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 4px;
+}
+.chatgml-diff-block-actions {
+  margin-top: 6px;
+}
 .chatgml-proposal-note {
   font-style: italic;
   opacity: 0.8;
@@ -149,4 +182,348 @@ button[disabled] {
 
 .chatgml-error {
   color: #b23b3b;
+}
+
+.chatgml-mode-segmented {
+  display: flex;
+  gap: 2px;
+  margin: 0 6px;
+}
+.chatgml-mode-btn {
+  background: #333;
+  color: #aaa;
+  border: 1px solid #555;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chatgml-mode-btn.active {
+  background: #555;
+  color: #fff;
+}
+.chatgml-mode-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #444;
+  color: #ccc;
+  font-size: 10px;
+  margin-left: 6px;
+}
+
+.chatgml-task-select {
+  background: #2d2d2d;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.chatgml-task-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #3a4a5a;
+  color: #ccc;
+  font-size: 10px;
+  margin-left: 6px;
+}
+
+.chatgml-task-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 6px;
+}
+
+.chatgml-task-delete {
+  background: #333;
+  color: #aaa;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chatgml-task-delete:hover {
+  background: #b23b3b;
+  color: #fff;
+}
+
+/* ---- Quick-config row (scope/model/approval chips) ---- */
+.chatgml-config-row {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+.chatgml-config-chip {
+  font-family: monospace;
+  font-size: 11px;
+  background-color: rgba(106, 126, 192, 0.14);
+  border: 1px solid rgba(106, 126, 192, 0.35);
+  border-radius: 3px;
+  padding: 1px 6px;
+  opacity: 0.92;
+}
+
+/* ---- Slash-command flash / help / error notices ---- */
+.chatgml-flash {
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  padding: 6px 8px;
+  margin: 4px 0;
+  border-left: 3px solid #6a7ec0;
+  background-color: rgba(106, 126, 192, 0.08);
+  opacity: 0.95;
+}
+.chatgml-flash-error {
+  border-left-color: #b23b3b;
+  background-color: rgba(178, 59, 59, 0.08);
+  color: #b23b3b;
+}
+.chatgml-help .chatgml-flash,
+.chatgml-help {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+/* ---- Input placeholder hint ---- */
+.chatgml-input::placeholder {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* ---- Command approval bar ---- */
+.chatgml-cmd-bar {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.chatgml-cmd-btn {
+  background: #333;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.chatgml-cmd-btn:hover {
+  background: #444;
+  color: #fff;
+}
+
+/* ---- Tool catalog (collapsible) ---- */
+.chatgml-tool-catalog {
+  margin: 6px 0;
+  border: 1px solid #444;
+  border-radius: 3px;
+  padding: 6px;
+}
+.chatgml-tool-catalog-header {
+  cursor: pointer;
+  font-size: 12px;
+  color: #ccc;
+}
+.chatgml-tool-row {
+  font-size: 11px;
+  margin: 2px 0;
+  color: #aaa;
+}
+.chatgml-tool-kind {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 10px;
+  margin-right: 4px;
+}
+.chatgml-tool-kind-read {
+  background-color: rgba(80, 160, 200, 0.18);
+  color: #8ecae6;
+}
+.chatgml-tool-kind-gated {
+  background-color: rgba(200, 160, 80, 0.18);
+  color: #ffb703;
+}
+.chatgml-tool-kind-command {
+  background-color: rgba(200, 80, 80, 0.18);
+  color: #ff8a8a;
+}
+.chatgml-tool-auto {
+  background: #2e7d32;
+  color: #fff;
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 9px;
+  margin-left: 4px;
+}
+.chatgml-tool-desc {
+  opacity: 0.85;
+}
+
+.chatgml-mcp-badge {
+  background: #6a4c93;
+  color: #fff;
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 2px;
+  margin-left: 4px;
+}
+.chatgml-mcp-server-row {
+  font-size: 11px;
+  color: #aaa;
+}
+
+/* ---- Tool approval preferences ---- */
+.chatgml-prefs-section {
+  margin-top: 12px;
+  font-weight: bold;
+  font-size: 13px;
+}
+.chatgml-prefs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0;
+}
+.chatgml-prefs-label {
+  font-size: 12px;
+}
+.chatgml-prefs-select {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+/* ---- Checkpoint chips ---- */
+.chatgml-checkpoint-row {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+.chatgml-checkpoint-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #333;
+  color: #aaa;
+  font-size: 11px;
+  margin: 2px;
+  cursor: pointer;
+}
+.chatgml-checkpoint-chip:hover {
+  background: #444;
+  color: #fff;
+}
+.chatgml-checkpoint-chip.selected {
+  background: #555;
+  color: #fff;
+}
+.chatgml-undo-btn {
+  background: #333;
+  color: #aaa;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.chatgml-undo-btn:hover {
+  background: #444;
+  color: #fff;
+}
+
+/* ---- @mention chips + autocomplete ---- */
+.chatgml-mention-row {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  margin: 2px 0;
+}
+.chatgml-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #3a3a3a;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  margin: 2px;
+}
+.chatgml-mention-chip button {
+  background: transparent;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+.chatgml-mention-chip button:hover {
+  color: #fff;
+}
+.chatgml-mention-autocomplete {
+  position: absolute;
+  background: #2d2d2d;
+  border: 1px solid #555;
+  border-radius: 3px;
+  z-index: 1000;
+}
+.chatgml-mention-autocomplete-item {
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #ccc;
+}
+.chatgml-mention-autocomplete-item:hover,
+.chatgml-mention-autocomplete-item.selected {
+  background: #444;
+  color: #fff;
+}
+
+/* ---- Inline Ace diff markers + per-hunk approval ---- */
+#main .chatgml-diff-add-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(80, 200, 80, 0.15);
+}
+
+#main .chatgml-diff-del-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(200, 80, 80, 0.15);
+}
+
+#main .ace_gutter-cell.chatgml-diff-add {
+  background-color: rgba(80, 200, 80, 0.3);
+}
+
+#main .ace_gutter-cell.chatgml-diff-del {
+  background-color: rgba(200, 80, 80, 0.3);
+}
+
+.chatgml-hunk-bar {
+  display: flex;
+  gap: 6px;
+  padding: 2px 6px;
+  background: #2d2d2d;
+  border: 1px solid #555;
+  border-radius: 3px;
+}
+
+.chatgml-hunk-bar button {
+  font-size: 11px;
+  padding: 1px 8px;
 }

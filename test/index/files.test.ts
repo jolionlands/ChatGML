@@ -102,10 +102,7 @@ describe('walkFiles', () => {
   });
 
   it('respects ignored files and directories', async () => {
-    const repo = makeTmpRepo(
-      { 'a.gml': 'x', 'secret/b.gml': 'y' },
-      { gitignore: 'secret/\n' },
-    );
+    const repo = makeTmpRepo({ 'a.gml': 'x', 'secret/b.gml': 'y' }, { gitignore: 'secret/\n' });
     try {
       const ig = await buildIgnoreFilter(repo.root);
       const files = await collect(repo.root, (p) => ig.ignores(p));
@@ -115,7 +112,7 @@ describe('walkFiles', () => {
     }
   });
 
-  it('never walks ChatGML\'s own project-local .chatgml.json — F7', async () => {
+  it("never walks ChatGML's own project-local .chatgml.json — F7", async () => {
     const repo = makeTmpRepo({ 'a.gml': 'x', '.chatgml.json': '{"chat":{"model":"m"}}' });
     try {
       // Even with allExtensions, the config dotfile (a .json) must be excluded.

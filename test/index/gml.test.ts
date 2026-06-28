@@ -111,7 +111,12 @@ describe('deriveGmlMeta — non-event resources', () => {
 describe('deriveGmlMeta — more resources and fallbacks', () => {
   it('an unrecognized event file under an object becomes a generic object event', () => {
     const m = deriveGmlMeta('objects/obj_a/Weird_thing.gml');
-    expect(m).toMatchObject({ kind: 'event', object: 'obj_a', eventType: 'Other', displayName: 'Weird_thing' });
+    expect(m).toMatchObject({
+      kind: 'event',
+      object: 'obj_a',
+      eventType: 'Other',
+      displayName: 'Weird_thing',
+    });
   });
 
   it('a .gml under shaders classifies by stage hint', () => {
@@ -133,7 +138,10 @@ describe('deriveGmlMeta — more resources and fallbacks', () => {
   });
 
   it('timelines / sequences / notes classify by their resource kind', () => {
-    expect(deriveGmlMeta('timelines/tl_a/tl_a.gml')).toMatchObject({ resource: 'timeline', name: 'tl_a' });
+    expect(deriveGmlMeta('timelines/tl_a/tl_a.gml')).toMatchObject({
+      resource: 'timeline',
+      name: 'tl_a',
+    });
     expect(deriveGmlMeta('sequences/sq_a/sq_a.gml')).toMatchObject({ resource: 'sequence' });
     expect(deriveGmlMeta('notes/todo.gml')).toMatchObject({ resource: 'note', name: 'todo' });
   });

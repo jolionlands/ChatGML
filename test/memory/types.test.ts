@@ -41,7 +41,12 @@ describe('hitToCitation', () => {
   });
 
   it('a pathless hit produces a citation without a path or gml', () => {
-    const hit: Hit = { chunkId: 'hippo:node:5', text: 'a memory node', score: 0.5, source: 'hippo' };
+    const hit: Hit = {
+      chunkId: 'hippo:node:5',
+      text: 'a memory node',
+      score: 0.5,
+      source: 'hippo',
+    };
     const c = hitToCitation(hit, 'hippo', deriveGmlMeta);
     expect(c.path).toBeUndefined();
     expect(c.gml).toBeUndefined();

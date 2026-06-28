@@ -28,7 +28,7 @@ global `fetch` — there is no `node-fetch`/`undici` dependency. TypeScript is p
   0 on the current tree; new code must keep it clean (do not blanket-disable rules — fix the cause).
 - **Format:** [`prettier`](https://prettier.io) with `.prettierrc` (100 cols, single quotes,
   trailing commas, LF). `.prettierignore` excludes `dist/`, `coverage/`, the legacy Python tree,
-  the legacy `plugin/`, test fixtures (exact bytes), and Markdown.
+  test fixtures (exact bytes), and Markdown.
 
 ### Platform note
 
@@ -85,4 +85,6 @@ plugin Preference / `CHATGML_BIN` to a resolved `chatgml`. The plugin↔core tra
 headlessly by `test/serve.spawn-integration.test.ts` (spawns the real `node dist/cli.js serve`
 against a local SSE stub and drives a full streaming turn + an `apply_patch` approve round-trip). See
 [docs/gmedit-plugin.md](docs/gmedit-plugin.md) for the full install, config, and event→UI mapping.
-The old `show-codebase` plugin is kept for reference under `plugin/legacy/`.
+The companion plugins (`plugin-inline/`, `plugin-explain/`) share the main plugin's
+`plugin/child-process.js` + `plugin/state.js` via `require('../chatgml/…')` so protocol logic and
+spawn plumbing live in one place.

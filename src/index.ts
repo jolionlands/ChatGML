@@ -16,13 +16,7 @@ export * from './index/indexer.js';
 export * from './index/run-index.js';
 
 // fs-aware GameMaker .yy/.yyp resolution (collision targets + object inheritance).
-export {
-  parseYy,
-  YyError,
-  loadResourceMap,
-  loadObjectMeta,
-  eventKeyFor,
-} from './index/yy.js';
+export { parseYy, YyError, loadResourceMap, loadObjectMeta, eventKeyFor } from './index/yy.js';
 export type {
   ReadFile,
   YyRef,
@@ -98,6 +92,7 @@ export {
   graphTool,
   temporalTool,
   editTool,
+  searchReplaceTool,
 } from './tools/index.js';
 export type { BuildRegistryOptions, DispatchResult } from './tools/index.js';
 export {
@@ -112,6 +107,10 @@ export { editProposalId } from './tools/edit.js';
 // Serve transport.
 export { runServe, createStdioTransport } from './serve.js';
 export type { Transport, ServeOptions } from './serve.js';
+
+// MCP server (Model Context Protocol over stdio — the agent-IDE leverage route).
+export { runMcpServer, MCP_PROTOCOL_VERSION, MCP_SERVER_NAME, MCP_SERVER_VERSION } from './mcp.js';
+export type { McpTransport, McpServerDeps } from './mcp.js';
 
 // CLI surface.
 export { main as runCli, buildProgram } from './cli.js';

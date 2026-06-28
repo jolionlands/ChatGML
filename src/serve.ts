@@ -18,8 +18,9 @@ import {
   PROTOCOL_VERSION,
   type InEvent,
 } from './protocol.js';
-import type { AgentEvent } from './types.js';
+import type { AgentEvent, ChatMessage, Config, ToolCatalogEntry } from './types.js';
 import type { AgentLike } from './agent.js';
+import { filterToolsByMode } from './tools/index.js';
 
 export interface Transport {
   input: NodeJS.ReadableStream;
@@ -34,6 +35,8 @@ export function createStdioTransport(): Transport {
 
 export interface ServeOptions {
   transport: Transport;
+  /** Runtime config used to compute per-tool autoApprove flags in the tool_catalog handshake. */
+  config?: Config;
 }
 
 /** Write a single outbound event as a framed NDJSON line to the protocol output stream. */
@@ -51,7 +54,38 @@ export async function runServe(agent: AgentLike, opts: ServeOptions): Promise<vo
   const decoder = new NdjsonDecoder();
 
   // Handshake first.
-  writeOut(output, { type: 'status', phase: 'ready', protocolVersion: PROTOCOL_VERSION });
+  const handshake: AgentEvent = {
+    type: 'status',
+    phase: 'ready',
+    protocolVersion: PROTOCOL_VERSION,
+  };
+  if (opts.config?.mode !== undefined) {
+    handshake.mode = opts.config.mode;
+  }
+  writeOut(output, handshake);
+
+  const registry = await agent.tools();
+  // The catalog is filtered by the active mode so an `ask`-mode serve does not advertise
+  // apply_patch / search_replace / execute_command to clients. The agent loop applies the same
+  // filter (filterToolsByMode in agent.ts), so the model never sees them either; this just makes the
+  // tool_catalog wire event consistent.
+  const mode = opts.config?.mode;
+  const filteredRegistry = mode !== undefined ? filterToolsByMode(registry, mode) : registry;
+  const catalog: ToolCatalogEntry[] = [...filteredRegistry.values()].map((tool) => {
+    // When no config is supplied (e.g. legacy tests / fixture replays), default every entry to
+    // autoApprove:false so existing exact-match fixtures stay stable. Real CLI always passes config.
+    const effective = opts.config
+      ? (opts.config.toolApproval?.[tool.name] ??
+        (tool.kind === 'read' ? 'auto' : opts.config.approval))
+      : 'gated';
+    return {
+      name: tool.name,
+      description: tool.description,
+      kind: tool.kind,
+      autoApprove: effective === 'auto',
+    };
+  });
+  writeOut(output, { type: 'tool_catalog', tools: catalog });
 
   // Serialize runs: a `user`/`reindex` command starts a run; subsequent run commands queue behind it.
   let activeRun: Promise<void> = Promise.resolve();
@@ -82,15 +116,56 @@ export async function runServe(agent: AgentLike, opts: ServeOptions): Promise<vo
         break;
       }
       case 'approve':
+        agent.resolveApproval(cmd.id, true, cmd.block);
+        break;
+      case 'approve_command':
         agent.resolveApproval(cmd.id, true);
         break;
       case 'reject':
+        agent.resolveApproval(cmd.id, false, cmd.block);
+        break;
+      case 'reject_command':
         agent.resolveApproval(cmd.id, false);
         break;
       case 'cancel':
         agent.cancel();
         activeController?.abort();
         break;
+      case 'resume':
+        // Seed conversation history (out-of-band control: never starts a run). The agent coerces
+        // the inbound messages into plain user/assistant pairs.
+        agent.resume(cmd.messages as ChatMessage[]);
+        break;
+      case 'clear':
+        agent.clear();
+        break;
+      case 'ping':
+        writeOut(output, { type: 'pong', id: cmd.id });
+        break;
+      case 'list_tools':
+        writeOut(output, { type: 'tool_catalog', tools: catalog });
+        break;
+      case 'undo': {
+        const controller = new AbortController();
+        activeController = controller;
+        const prior = activeRun;
+        activeRun = (async () => {
+          await prior.catch(() => {});
+          try {
+            for await (const e of agent.undo(cmd.checkpointId)) {
+              writeOut(output, e);
+            }
+          } catch (err) {
+            writeOut(output, {
+              type: 'error',
+              message: err instanceof Error ? err.message : 'undo failed',
+            });
+          } finally {
+            if (activeController === controller) activeController = null;
+          }
+        })();
+        break;
+      }
     }
   };
 

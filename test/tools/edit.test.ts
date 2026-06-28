@@ -6,7 +6,10 @@ import {
   editTool,
   editProposalId,
   assessEditRisk,
+  applyPatchBlocks,
+  diffBlockIndices,
   DESTRUCTIVE_NET_DELETE_LINES,
+  WHOLE_FILE_REPLACE_MIN_LINES,
 } from '../../src/tools/edit.js';
 import { parsePatch } from 'diff';
 import { makeToolContext } from '../helpers/tool-context.js';
@@ -17,7 +20,9 @@ const ORIGINAL = 'hp -= 1;\n';
 const PATCHED = 'hp -= dmg;\n';
 
 /** A real temp repo with one file; returns the root + cleanup. */
-async function makeRepo(files: Record<string, string> = {}): Promise<{ root: string; cleanup: () => Promise<void> }> {
+async function makeRepo(
+  files: Record<string, string> = {},
+): Promise<{ root: string; cleanup: () => Promise<void> }> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'edit-test-'));
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(root, rel);
@@ -27,8 +32,12 @@ async function makeRepo(files: Record<string, string> = {}): Promise<{ root: str
   return { root, cleanup: () => fsp.rm(root, { recursive: true, force: true }) };
 }
 
-const approve = async (): Promise<boolean> => true;
-const reject = async (): Promise<boolean> => false;
+const approve = async (): Promise<import('../../src/types.js').ApprovalResolution> => ({
+  approved: true,
+});
+const reject = async (): Promise<import('../../src/types.js').ApprovalResolution> => ({
+  approved: false,
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -156,6 +165,12 @@ describe('apply_patch (M4) — TEST 1: applying a real diff yields correct conte
       expect(after).toBe(PATCHED);
       // a citation for the written file is surfaced
       expect(res.citations?.[0]?.path).toBe('objects/obj_player/Step_0.gml');
+      // a checkpoint event is emitted after a successful edit of an existing file
+      const checkpoint = events.find((e) => e.type === 'checkpoint');
+      expect(checkpoint).toBeDefined();
+      expect(checkpoint && checkpoint.type === 'checkpoint' && checkpoint.path).toBe(
+        'objects/obj_player/Step_0.gml',
+      );
       // no protocol noise from the tool itself in auto path (gate emits, not the tool)
       expect(events.every((e) => e.type !== 'error')).toBe(true);
     } finally {
@@ -214,9 +229,9 @@ describe('apply_patch (M4) — TEST 5: gated waits then writes on approve, no wr
         root,
         approval: 'gated',
         requestApproval: (req) =>
-          new Promise<boolean>((resolve) => {
+          new Promise<import('../../src/types.js').ApprovalResolution>((resolve) => {
             seenReq = req;
-            resolveApproval = resolve;
+            resolveApproval = (ok: boolean) => resolve({ approved: ok });
           }),
       });
 
@@ -232,8 +247,12 @@ describe('apply_patch (M4) — TEST 5: gated waits then writes on approve, no wr
         await new Promise((r) => setTimeout(r, 0));
       }
       expect(seenReq).not.toBeNull();
-      expect(seenReq!.id).toBe(editProposalId('a.gml', DIFF));
-      expect(seenReq!.diff).toBe(DIFF);
+      const req = seenReq!;
+      expect(req.kind).toBe('edit');
+      expect(req.id).toBe(editProposalId('a.gml', DIFF));
+      if (req.kind === 'edit') {
+        expect(req.diff).toBe(DIFF);
+      }
       // The tool is BLOCKED on approval: not settled, file still original.
       expect(settled).toBe(false);
       expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe(ORIGINAL); // still original
@@ -250,7 +269,11 @@ describe('apply_patch (M4) — TEST 5: gated waits then writes on approve, no wr
 
 describe('apply_patch (M4) — TEST 2/3/4: symlink / TOCTOU safety on the write path', () => {
   // Helper: create a symlink, skipping (not silently passing) when the OS lacks privilege.
-  async function trySymlink(target: string, linkPath: string, type: 'dir' | 'file'): Promise<boolean> {
+  async function trySymlink(
+    target: string,
+    linkPath: string,
+    type: 'dir' | 'file',
+  ): Promise<boolean> {
     try {
       await fsp.symlink(target, linkPath, type);
       return true;
@@ -289,7 +312,11 @@ describe('apply_patch (M4) — TEST 2/3/4: symlink / TOCTOU safety on the write 
     const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'edit-out-'));
     try {
       await fsp.writeFile(path.join(outside, 'secret.gml'), ORIGINAL);
-      const ok = await trySymlink(path.join(outside, 'secret.gml'), path.join(root, 'a.gml'), 'file');
+      const ok = await trySymlink(
+        path.join(outside, 'secret.gml'),
+        path.join(root, 'a.gml'),
+        'file',
+      );
       if (!ok) return;
       const { ctx } = makeToolContext({ root, approval: 'auto', requestApproval: approve });
       await expect(editTool.execute({ path: 'a.gml', diff: DIFF }, ctx)).rejects.toMatchObject({
@@ -315,7 +342,11 @@ describe('apply_patch (M4) — TEST 2/3/4: symlink / TOCTOU safety on the write 
       await fsp.writeFile(path.join(outside, 'secret.gml'), ORIGINAL);
       // Leaf is a symlink to an outside file. The eager lstat check rejects it, but even if that were
       // bypassed, the O_NOFOLLOW temp-open + same-dir rename would never write through the link.
-      const ok = await trySymlink(path.join(outside, 'secret.gml'), path.join(root, 'a.gml'), 'file');
+      const ok = await trySymlink(
+        path.join(outside, 'secret.gml'),
+        path.join(root, 'a.gml'),
+        'file',
+      );
       if (!ok) return;
       const { ctx } = makeToolContext({ root, approval: 'auto', requestApproval: approve });
       await expect(editTool.execute({ path: 'a.gml', diff: DIFF }, ctx)).rejects.toMatchObject({
@@ -383,6 +414,80 @@ describe('assessEditRisk — destructive-edit classification', () => {
   });
 });
 
+describe('assessEditRisk — boundary cases at the thresholds', () => {
+  const risk = (diff: string, lines: number) => assessEditRisk(parsePatch(diff), lines);
+
+  // WHOLE_FILE_REPLACE_MIN_LINES boundary
+  it(`at the whole-file-rewrite floor: removed===lines AND added===${WHOLE_FILE_REPLACE_MIN_LINES} IS high-risk`, () => {
+    const n = WHOLE_FILE_REPLACE_MIN_LINES;
+    // Header declares "remove n starting at line 1, add n starting at line 1".
+    // Hunk body: n '-' lines (the old file) then n '+' lines (the new file).
+    const removedPart = Array.from({ length: n }, (_, i) => `-old ${i}`).join('\n');
+    const addedPart = Array.from({ length: n }, (_, i) => `+new ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${n} +1,${n} @@\n${removedPart}\n${addedPart}\n`;
+    expect(risk(diff, n).highRisk).toBe(true);
+  });
+
+  it(`one below the whole-file-rewrite floor: added===${WHOLE_FILE_REPLACE_MIN_LINES - 1} is NOT high-risk`, () => {
+    const lines = WHOLE_FILE_REPLACE_MIN_LINES;
+    const added = WHOLE_FILE_REPLACE_MIN_LINES - 1;
+    const removed = lines; // ==originalLineCount so the wipe rule doesn't fire (added > 0)
+    const removedPart = Array.from({ length: removed }, (_, i) => `-old ${i}`).join('\n');
+    const addedPart = Array.from({ length: added }, (_, i) => `+new ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${removed} +1,${added} @@\n${removedPart}\n${addedPart}\n`;
+    const r = risk(diff, lines);
+    expect(r.added).toBe(added);
+    expect(r.removed).toBe(removed);
+    // Below the rewrite floor, NOT high-risk (the net-deletion rules also don't fire: net = removed
+    // - added = 1, lines = 20 so net/lines = 0.05 well under the 0.5 fraction floor).
+    expect(r.highRisk).toBe(false);
+  });
+
+  // DESTRUCTIVE_NET_DELETE_LINES boundary (uses >, so AT is safe, AT+1 fires)
+  it(`net deletion AT exactly ${DESTRUCTIVE_NET_DELETE_LINES} lines is NOT high-risk (boundary uses strict >)`, () => {
+    const lines = 1000; // large file so the fraction rule doesn't fire
+    const removed = DESTRUCTIVE_NET_DELETE_LINES;
+    const body = Array.from({ length: removed }, (_, i) => `-old ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${removed} +0,0 @@\n${body}\n`;
+    expect(risk(diff, lines).highRisk).toBe(false);
+  });
+
+  it(`net deletion of ${DESTRUCTIVE_NET_DELETE_LINES + 1} lines IS high-risk`, () => {
+    const lines = 1000;
+    const removed = DESTRUCTIVE_NET_DELETE_LINES + 1;
+    const body = Array.from({ length: removed }, (_, i) => `-old ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${removed} +0,0 @@\n${body}\n`;
+    expect(risk(diff, lines).highRisk).toBe(true);
+  });
+
+  // DESTRUCTIVE_DELETE_FRACTION boundary (uses >, so AT is safe, AT+epsilon fires)
+  it(`proportional deletion AT exactly 50% is NOT high-risk (boundary uses strict >)`, () => {
+    // 10-line file, remove 5 net -> exactly 50%, NOT high-risk.
+    const lines = 10;
+    const removed = 5;
+    const body = Array.from({ length: removed }, (_, i) => `-line ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${removed} +0,0 @@\n${body}\n`;
+    expect(risk(diff, lines).highRisk).toBe(false);
+  });
+
+  it(`proportional deletion of 51% IS high-risk`, () => {
+    // 100-line file, remove 51 net.
+    const lines = 100;
+    const removed = 51;
+    const body = Array.from({ length: removed }, (_, i) => `-line ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${removed} +0,0 @@\n${body}\n`;
+    expect(risk(diff, lines).highRisk).toBe(true);
+  });
+
+  // Whole-file wipe boundary (uses >=, so AT removed===lines IS high-risk even with added=0)
+  it(`whole-file wipe boundary: removed===lines AND added===0 IS high-risk (>= rule)`, () => {
+    const lines = 5;
+    const body = Array.from({ length: lines }, (_, i) => `-line ${i}`).join('\n');
+    const diff = `--- a\n+++ b\n@@ -1,${lines} +0,0 @@\n${body}\n`;
+    expect(risk(diff, lines).highRisk).toBe(true);
+  });
+});
+
 describe('apply_patch — auto-mode backstop sets forceGate for destructive edits', () => {
   it('auto mode: a SMALL additive edit auto-applies (forceGate false) and writes', async () => {
     const { root, cleanup } = await makeRepo({ 'a.gml': 'hp -= 1;\n' });
@@ -393,14 +498,16 @@ describe('apply_patch — auto-mode backstop sets forceGate for destructive edit
         approval: 'auto',
         requestApproval: async (req) => {
           seen.push(req);
-          return true; // emulate the auto gate: a non-forced request resolves true
+          return { approved: true }; // emulate the auto gate: a non-forced request resolves true
         },
       });
       const additive = '--- a\n+++ b\n@@ -1,1 +1,2 @@\n hp -= 1;\n+hp = max(hp, 0);\n';
       const res = await editTool.execute({ path: 'a.gml', diff: additive }, ctx);
       expect(res.isError).not.toBe(true);
-      expect(seen[0]?.forceGate).toBe(false);
-      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe('hp -= 1;\nhp = max(hp, 0);\n');
+      expect(seen[0]?.kind === 'edit' ? seen[0]?.forceGate : undefined).toBe(false);
+      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe(
+        'hp -= 1;\nhp = max(hp, 0);\n',
+      );
     } finally {
       await cleanup();
     }
@@ -416,15 +523,96 @@ describe('apply_patch — auto-mode backstop sets forceGate for destructive edit
         // Decline to prove no write happens when the human is asked.
         requestApproval: async (req) => {
           seen.push(req);
-          return false;
+          return { approved: false };
         },
       });
       const wipe = '--- a\n+++ b\n@@ -1,2 +0,0 @@\n-line one;\n-line two;\n';
       const res = await editTool.execute({ path: 'a.gml', diff: wipe }, ctx);
-      expect(seen[0]?.forceGate).toBe(true);
+      expect(seen[0]?.kind === 'edit' ? seen[0]?.forceGate : undefined).toBe(true);
       expect(res.content).toMatch(/not approved/i);
       // The file is UNCHANGED — the destructive edit did not auto-apply.
       expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe('line one;\nline two;\n');
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('applyPatchBlocks — per-hunk filtering', () => {
+  const MULTI =
+    '--- a\n+++ b\n@@ -1,2 +1,2 @@\n-hp -= 1;\n+hp -= 999;\n if (hp <= 0) instance_destroy();\n@@ -4,2 +4,3 @@\n x;\n y;\n+z;\n';
+
+  it('diffBlockIndices returns one index per hunk', () => {
+    expect(diffBlockIndices(MULTI)).toEqual([0, 1]);
+    expect(diffBlockIndices(DIFF)).toEqual([0]);
+    expect(diffBlockIndices('not a diff')).toEqual([]);
+  });
+
+  it('keeps only approved hunks', () => {
+    const filtered = applyPatchBlocks(MULTI, [1]);
+    expect(filtered).toContain('@@ -4,2 +4,3 @@');
+    expect(filtered).not.toContain('hp -= 1;');
+    expect(filtered).toContain('--- a');
+    expect(filtered).toContain('+++ b');
+  });
+
+  it('approving all hunks returns the equivalent full diff', () => {
+    expect(applyPatchBlocks(MULTI, [0, 1])).toBe(MULTI);
+  });
+});
+
+describe('apply_patch — partial hunk approval applies only approved blocks', () => {
+  const ORIGINAL_MULTI = 'hp -= 1;\nif (hp <= 0) instance_destroy();\na;\nb;\n';
+  const MULTI_DIFF =
+    '--- a\n+++ b\n@@ -1,2 +1,2 @@\n-hp -= 1;\n+hp -= 999;\n if (hp <= 0) instance_destroy();\n@@ -4,2 +4,3 @@\n a;\n b;\n+z;\n';
+
+  it('approving only hunk 0 writes only that change', async () => {
+    const { root, cleanup } = await makeRepo({ 'a.gml': ORIGINAL_MULTI });
+    try {
+      const { ctx } = makeToolContext({
+        root,
+        approval: 'auto',
+        requestApproval: async () => ({ approved: true, blocks: [0] }),
+      });
+      const res = await editTool.execute({ path: 'a.gml', diff: MULTI_DIFF }, ctx);
+      expect(res.isError).not.toBe(true);
+      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe(
+        'hp -= 999;\nif (hp <= 0) instance_destroy();\na;\nb;\n',
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('approving only hunk 1 writes only that change', async () => {
+    const { root, cleanup } = await makeRepo({ 'a.gml': ORIGINAL_MULTI });
+    try {
+      const { ctx } = makeToolContext({
+        root,
+        approval: 'auto',
+        requestApproval: async () => ({ approved: true, blocks: [1] }),
+      });
+      const res = await editTool.execute({ path: 'a.gml', diff: MULTI_DIFF }, ctx);
+      expect(res.isError).not.toBe(true);
+      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe(
+        'hp -= 1;\nif (hp <= 0) instance_destroy();\na;\nb;\nz;\n',
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('approving an empty block list writes nothing', async () => {
+    const { root, cleanup } = await makeRepo({ 'a.gml': ORIGINAL_MULTI });
+    try {
+      const { ctx } = makeToolContext({
+        root,
+        approval: 'auto',
+        requestApproval: async () => ({ approved: true, blocks: [] }),
+      });
+      const res = await editTool.execute({ path: 'a.gml', diff: MULTI_DIFF }, ctx);
+      expect(res.content).toMatch(/not approved/i);
+      expect(await fsp.readFile(path.join(root, 'a.gml'), 'utf8')).toBe(ORIGINAL_MULTI);
     } finally {
       await cleanup();
     }

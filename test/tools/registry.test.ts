@@ -1,28 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import {
-  buildToolRegistry,
-  toOpenAiToolSpecs,
-  dispatchTool,
-} from '../../src/tools/index.js';
+import { buildToolRegistry, toOpenAiToolSpecs, dispatchTool } from '../../src/tools/index.js';
 import { makeToolContext } from '../helpers/tool-context.js';
 import { makeTmpRepo } from '../helpers/fakes.js';
 import { buildIgnoreFilter } from '../../src/index/files.js';
 
 describe('buildToolRegistry', () => {
-  it('includes the gated apply_patch by default', () => {
+  it('includes the gated apply_patch, search_replace and execute_command by default', () => {
     const reg = buildToolRegistry();
     expect(reg.has('apply_patch')).toBe(true);
+    expect(reg.has('search_replace')).toBe(true);
+    expect(reg.has('execute_command')).toBe(true);
     expect(reg.has('glob')).toBe(true);
     expect(reg.has('grep')).toBe(true);
+    expect(reg.has('search_files')).toBe(true);
     expect(reg.has('read_file')).toBe(true);
     expect(reg.has('search_code')).toBe(true);
     expect(reg.has('graph_neighbors')).toBe(true);
     expect(reg.has('temporal_query')).toBe(true);
   });
 
-  it('omits apply_patch when readOnly', () => {
+  it('omits apply_patch, search_replace and execute_command when readOnly', () => {
     const reg = buildToolRegistry({ readOnly: true });
     expect(reg.has('apply_patch')).toBe(false);
+    expect(reg.has('search_replace')).toBe(false);
+    expect(reg.has('execute_command')).toBe(false);
     expect(reg.has('glob')).toBe(true);
   });
 });
@@ -35,11 +36,14 @@ describe('toOpenAiToolSpecs', () => {
     expect(names).toEqual(
       [
         'apply_patch',
+        'execute_command',
         'glob',
-        'grep',
         'graph_neighbors',
+        'grep',
         'read_file',
         'search_code',
+        'search_files',
+        'search_replace',
         'temporal_query',
       ].sort(),
     );
@@ -49,7 +53,9 @@ describe('toOpenAiToolSpecs', () => {
       expect(params['additionalProperties']).toBe(false);
       expect(params['$schema']).toBeUndefined();
       // properties must be a populated object (proves zod3 + zod-to-json-schema produced a schema)
-      expect(Object.keys(params['properties'] as Record<string, unknown>).length).toBeGreaterThan(0);
+      expect(Object.keys(params['properties'] as Record<string, unknown>).length).toBeGreaterThan(
+        0,
+      );
     }
     const glob = specs.find((s) => s.function.name === 'glob')!;
     const gp = glob.function.parameters as { required?: string[] };

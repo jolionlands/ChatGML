@@ -6,6 +6,7 @@
 // it defaults to the global fetch (Node 25). Secrets are never logged and error bodies are
 // truncated + key-scrubbed.
 import type { ChatLane, ChatMessage, ToolSpec, Usage } from './types.js';
+import { scrubBody, resolveFetch, trimTrailingSlash } from './http.js';
 
 export interface ChatRequest {
   messages: ChatMessage[];
@@ -43,32 +44,15 @@ export class LlmError extends Error {
   }
 }
 
-export type FetchLike = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
+export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface LlmDeps {
   fetch?: FetchLike;
 }
 
-const BODY_MAX = 2048;
-
 /** Build the /chat/completions URL from a baseURL, normalizing a trailing slash. */
 function completionsUrl(baseURL: string): string {
-  const trimmed = baseURL.replace(/\/+$/, '');
-  return `${trimmed}/chat/completions`;
-}
-
-/**
- * Truncate + key-scrub an arbitrary error/response body. Removes Bearer tokens and `sk-...` keys
- * so a leaked endpoint response can never carry a secret into a thrown error.
- */
-function scrubBody(text: string): string {
-  const scrubbed = text
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
-    .replace(/sk-[A-Za-z0-9._-]+/g, 'sk-***');
-  return scrubbed.length > BODY_MAX ? `${scrubbed.slice(0, BODY_MAX)}…` : scrubbed;
+  return `${trimTrailingSlash(baseURL)}/chat/completions`;
 }
 
 interface RawDelta {
@@ -216,11 +200,11 @@ export class LlmClient {
 
   constructor(lane: ChatLane, deps?: LlmDeps) {
     this.lane = lane;
-    const f = deps?.fetch ?? (globalThis.fetch as FetchLike | undefined);
-    if (!f) {
+    try {
+      this.fetchImpl = resolveFetch(deps);
+    } catch {
       throw new LlmError('config', 'no fetch implementation available');
     }
-    this.fetchImpl = f;
   }
 
   private buildBody(req: ChatRequest, stream: boolean): Record<string, unknown> {
@@ -370,7 +354,10 @@ export class LlmClient {
       reader.releaseLock();
     }
 
-    const message: ChatMessage = { role: 'assistant', content: textBuffer.length > 0 ? textBuffer : null };
+    const message: ChatMessage = {
+      role: 'assistant',
+      content: textBuffer.length > 0 ? textBuffer : null,
+    };
     if (toolDeltas.length > 0) {
       message.tool_calls = assembleToolCalls(toolDeltas);
     }

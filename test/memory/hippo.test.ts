@@ -21,10 +21,7 @@ import type { Scope } from '../../src/memory/types.js';
 const URL = 'http://127.0.0.1:7077';
 const SCOPE: Scope = { repo: 'hippo-repo' };
 
-function make(
-  fetchImpl: FetchLike,
-  root = makeTmpRepo({}).root,
-): HippoMemoryProvider {
+function make(fetchImpl: FetchLike, root = makeTmpRepo({}).root): HippoMemoryProvider {
   return new HippoMemoryProvider(
     { provider: 'hippo', url: URL, root },
     { embeddings: new FakeEmbeddings(), fetch: fetchImpl },
@@ -80,8 +77,20 @@ describe('hippo wire mapping (pure)', () => {
 
   it('fromRecallResults sets path ONLY for code nodes with a path-shaped topic', () => {
     const nodes: HippoNode[] = [
-      { id: 1, kind: 'code_file', topic: 'objects/obj_player/Step_0.gml', text: 'hp -= dmg;', score: 0.9 },
-      { id: 2, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', text: 'fn', score: 0.8 },
+      {
+        id: 1,
+        kind: 'code_file',
+        topic: 'objects/obj_player/Step_0.gml',
+        text: 'hp -= dmg;',
+        score: 0.9,
+      },
+      {
+        id: 2,
+        kind: 'code_symbol',
+        topic: 'scripts/scr_util/scr_util.gml',
+        text: 'fn',
+        score: 0.8,
+      },
       // code node but the topic is a sentence, not a path -> no path
       { id: 3, kind: 'code_symbol', topic: 'a free-text concept', text: 'concept', score: 0.7 },
       // non-code node whose topic happens to look path-y -> still no path
@@ -107,7 +116,13 @@ describe('hippo wire mapping (pure)', () => {
 
   it('hitToCitation carries hippo path-bearing hits to a code Citation; non-path hits stay path-free', () => {
     const [codeHit, conceptHit] = fromRecallResults([
-      { id: 1, kind: 'code_file', topic: 'objects/obj_player/Step_0.gml', text: 'hp -= dmg;', score: 0.9 },
+      {
+        id: 1,
+        kind: 'code_file',
+        topic: 'objects/obj_player/Step_0.gml',
+        text: 'hp -= dmg;',
+        score: 0.9,
+      },
       { id: 5, kind: 'concept', topic: 'spaced repetition', text: 'sr', score: 0.5 },
     ]);
     const c1 = hitToCitation(codeHit!, 'hippo', deriveGmlMeta);
@@ -137,7 +152,9 @@ describe('hippo wire mapping (pure)', () => {
   });
 
   it('resolveNodeId returns undefined when nothing matches', () => {
-    expect(resolveNodeId([{ id: 1, kind: 'concept', topic: 'x' }], { name: 'y', path: 'p' })).toBeUndefined();
+    expect(
+      resolveNodeId([{ id: 1, kind: 'concept', topic: 'x' }], { name: 'y', path: 'p' }),
+    ).toBeUndefined();
   });
 
   it('fromWalk maps neighbors to graph hits', () => {
@@ -149,6 +166,37 @@ describe('hippo wire mapping (pure)', () => {
     expect(hits[0]!.chunkId).toBe('hippo:node:11');
     expect(hits[0]!.path).toBe('scripts/s/s.gml');
     expect(hits[1]!.path).toBeUndefined();
+  });
+
+  it('fromWalk RANKS neighbors by score DESC regardless of input order (D4)', () => {
+    // Deliberately scrambled input order; the higher score must come first.
+    const hits = fromWalk([
+      { id: 1, kind: 'concept', topic: 'low', score: 0.1 },
+      { id: 2, kind: 'concept', topic: 'high', score: 0.9 },
+      { id: 3, kind: 'concept', topic: 'mid', score: 0.5 },
+    ]);
+    expect(hits.map((h) => h.chunkId)).toEqual(['hippo:node:2', 'hippo:node:3', 'hippo:node:1']);
+    expect(hits.map((h) => h.score)).toEqual([0.9, 0.5, 0.1]);
+  });
+
+  it('fromWalk tie-breaks an equal score by SHALLOWER depth first, then chunkId (D4)', () => {
+    const hits = fromWalk([
+      { id: 30, kind: 'concept', topic: 'far', score: 0.5, depth: 2 },
+      { id: 31, kind: 'concept', topic: 'near', score: 0.5, depth: 1 },
+      // same score, no depth -> sorts after the known-depth nodes (Infinity), by chunkId
+      { id: 10, kind: 'concept', topic: 'nodepth', score: 0.5 },
+    ]);
+    expect(hits.map((h) => h.chunkId)).toEqual([
+      'hippo:node:31', // depth 1
+      'hippo:node:30', // depth 2
+      'hippo:node:10', // depth unknown (Infinity), last
+    ]);
+    // depth (when present) is surfaced for downstream consumers.
+    expect(hits[0]!.extra).toMatchObject({ nodeId: 31, depth: 1 });
+    // When depth is absent from the input, the surfaced `extra` carries no depth key (a present `kind`
+    // is still surfaced — only depth is gated on being defined).
+    expect(hits[2]!.extra).not.toHaveProperty('depth');
+    expect(hits[2]!.extra).toMatchObject({ nodeId: 10 });
   });
 });
 
@@ -201,7 +249,13 @@ describe('HippoMemoryProvider.search', () => {
             ok: true,
             query: 'how does the player lose health',
             results: [
-              { id: 1, kind: 'code_file', topic: 'objects/obj_player/Step_0.gml', content: 'hp -= dmg;', score: 0.9 },
+              {
+                id: 1,
+                kind: 'code_file',
+                topic: 'objects/obj_player/Step_0.gml',
+                content: 'hp -= dmg;',
+                score: 0.9,
+              },
               { id: 2, kind: 'concept', topic: 'health system', content: 'hp model', score: 0.7 },
             ],
           }),
@@ -287,6 +341,42 @@ describe('HippoMemoryProvider.graphNeighbors', () => {
     expect(neighbors[0]!.path).toBe('scripts/scr_util/scr_util.gml');
   });
 
+  it('ranks walked neighbors by score DESC even when hippo returns them out of order (D4)', async () => {
+    const { fetch } = installFetchMock([
+      {
+        match: '/api/recall',
+        responder: () =>
+          jsonResponse({
+            results: [{ id: 42, kind: 'code_symbol', topic: 'clampHealth', score: 1 }],
+          }),
+      },
+      {
+        match: '/api/walk',
+        responder: () =>
+          jsonResponse({
+            ok: true,
+            // Intentionally NOT in score order — the provider must sort by score desc.
+            walk: [
+              { id: 51, kind: 'concept', topic: 'weakly related', score: 0.2, depth: 2 },
+              { id: 52, kind: 'concept', topic: 'strongly related', score: 0.8, depth: 1 },
+              { id: 53, kind: 'concept', topic: 'mid related', score: 0.5, depth: 1 },
+            ],
+          }),
+      },
+    ]);
+    const p = make(fetch);
+    const neighbors = await p.graphNeighbors(
+      { name: 'clampHealth', path: 'scripts/scr_util/scr_util.gml' },
+      SCOPE,
+    );
+    expect(neighbors.map((h) => h.chunkId)).toEqual([
+      'hippo:node:52', // 0.8
+      'hippo:node:53', // 0.5
+      'hippo:node:51', // 0.2
+    ]);
+    expect(neighbors.map((h) => h.score)).toEqual([0.8, 0.5, 0.2]);
+  });
+
   it('returns [] for an ambiguous name (two matching code nodes) and never walks', async () => {
     const { recorder, fetch } = installFetchMock([
       {
@@ -328,7 +418,16 @@ describe('HippoMemoryProvider local shadow (writes/temporal/notes)', () => {
     try {
       const p = make(fetch, repo.root);
       await p.upsert(
-        [{ id: 'c1', path: 'a.gml', text: 'hp -= dmg', contentHash: 'h1', startLine: 1, endLine: 1 }],
+        [
+          {
+            id: 'c1',
+            path: 'a.gml',
+            text: 'hp -= dmg',
+            contentHash: 'h1',
+            startLine: 1,
+            endLine: 1,
+          },
+        ],
         SCOPE,
       );
       const hist = await p.temporalQuery({ kind: 'history', path: 'a.gml' }, SCOPE);
@@ -375,7 +474,12 @@ describe('HippoMemoryProvider local shadow (writes/temporal/notes)', () => {
 // ---------------------------------------------------------------------------
 describe('hippo wire mapping edge cases (pure)', () => {
   it('toRecallQuery emits false for all-off flags', () => {
-    const url = toRecallQuery(URL, 'q', 1, { ppr: false, hyde: false, rerank: false, spread: false });
+    const url = toRecallQuery(URL, 'q', 1, {
+      ppr: false,
+      hyde: false,
+      rerank: false,
+      spread: false,
+    });
     const qs = new URLSearchParams(url.split('?')[1]);
     expect(qs.get('ppr')).toBe('false');
     expect(qs.get('hyde')).toBe('false');
@@ -425,7 +529,10 @@ describe('hippo wire mapping edge cases (pure)', () => {
 // HTTP failure modes: network errors, unparseable bodies, non-ok walk.
 // ---------------------------------------------------------------------------
 function unparseableJson(): Response {
-  return new Response('{ not json', { status: 200, headers: { 'content-type': 'application/json' } });
+  return new Response('{ not json', {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 describe('HippoMemoryProvider HTTP failure modes', () => {
@@ -453,7 +560,9 @@ describe('HippoMemoryProvider HTTP failure modes', () => {
         },
       },
     ]);
-    await expect(make(net.fetch).search('q', { k: 1, scope: SCOPE })).rejects.toThrow(/network error/);
+    await expect(make(net.fetch).search('q', { k: 1, scope: SCOPE })).rejects.toThrow(
+      /network error/,
+    );
 
     const bad = installFetchMock([{ match: '/api/recall', responder: () => unparseableJson() }]);
     await expect(make(bad.fetch).search('q', { k: 1, scope: SCOPE })).rejects.toThrow(/parse/);
@@ -468,19 +577,21 @@ describe('HippoMemoryProvider HTTP failure modes', () => {
         },
       },
     ]);
-    await expect(
-      make(net.fetch).graphNeighbors({ name: 'x', path: 'p' }, SCOPE),
-    ).rejects.toThrow(/network error/);
+    await expect(make(net.fetch).graphNeighbors({ name: 'x', path: 'p' }, SCOPE)).rejects.toThrow(
+      /network error/,
+    );
 
-    const notOk = installFetchMock([{ match: '/api/recall', responder: () => errorResponse(500, 'no') }]);
-    await expect(
-      make(notOk.fetch).graphNeighbors({ name: 'x', path: 'p' }, SCOPE),
-    ).rejects.toThrow(/500/);
+    const notOk = installFetchMock([
+      { match: '/api/recall', responder: () => errorResponse(500, 'no') },
+    ]);
+    await expect(make(notOk.fetch).graphNeighbors({ name: 'x', path: 'p' }, SCOPE)).rejects.toThrow(
+      /500/,
+    );
 
     const bad = installFetchMock([{ match: '/api/recall', responder: () => unparseableJson() }]);
-    await expect(
-      make(bad.fetch).graphNeighbors({ name: 'x', path: 'p' }, SCOPE),
-    ).rejects.toThrow(/parse/);
+    await expect(make(bad.fetch).graphNeighbors({ name: 'x', path: 'p' }, SCOPE)).rejects.toThrow(
+      /parse/,
+    );
   });
 
   it('graphNeighbors surfaces walk network errors, non-ok walk, and unparseable walk', async () => {
@@ -507,15 +618,25 @@ describe('HippoMemoryProvider HTTP failure modes', () => {
     ]);
     await expect(make(notOk.fetch).graphNeighbors(ref, SCOPE)).rejects.toThrow(/502/);
 
-    const bad = installFetchMock([recallOk, { match: '/api/walk', responder: () => unparseableJson() }]);
+    const bad = installFetchMock([
+      recallOk,
+      { match: '/api/walk', responder: () => unparseableJson() },
+    ]);
     await expect(make(bad.fetch).graphNeighbors(ref, SCOPE)).rejects.toThrow(/parse/);
   });
 
   it('connect throws on an unparseable stats body shape and search tolerates a default fetch path', async () => {
     // walk tolerates the `neighbors` field name (vs `nodes`).
     const m = installFetchMock([
-      { match: '/api/recall', responder: () => jsonResponse({ results: [{ id: 3, kind: 'code_file', topic: 'a.gml' }] }) },
-      { match: '/api/walk', responder: () => jsonResponse({ neighbors: [{ id: 4, kind: 'code_file', topic: 'b.gml', score: 0.2 }] }) },
+      {
+        match: '/api/recall',
+        responder: () => jsonResponse({ results: [{ id: 3, kind: 'code_file', topic: 'a.gml' }] }),
+      },
+      {
+        match: '/api/walk',
+        responder: () =>
+          jsonResponse({ neighbors: [{ id: 4, kind: 'code_file', topic: 'b.gml', score: 0.2 }] }),
+      },
     ]);
     const out = await make(m.fetch).graphNeighbors({ name: 'a.gml', path: 'a.gml' }, SCOPE);
     expect(out.map((h) => h.chunkId)).toEqual(['hippo:node:4']);
@@ -591,7 +712,8 @@ describe('HippoMemoryProvider config', () => {
 function hippoContractFactory(): MemoryProvider {
   const repo = makeTmpRepo({}); // leaked per-test; OS tmp reaper cleans up
   const fetchImpl: FetchLike = async (input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof globalThis.URL ? input.href : input.url;
+    const url =
+      typeof input === 'string' ? input : input instanceof globalThis.URL ? input.href : input.url;
     void init;
     if (url.includes('/api/stats')) return jsonResponse({ ok: true });
     if (url.includes('/api/recall')) {
@@ -599,12 +721,21 @@ function hippoContractFactory(): MemoryProvider {
       return jsonResponse({
         ok: true,
         results: [
-          { id: 1, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', content: 'clampHealth', score: 0.9 },
+          {
+            id: 1,
+            kind: 'code_symbol',
+            topic: 'scripts/scr_util/scr_util.gml',
+            content: 'clampHealth',
+            score: 0.9,
+          },
         ],
       });
     }
     if (url.includes('/api/walk')) {
-      return jsonResponse({ ok: true, walk: [{ id: 2, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', score: 0.5 }] });
+      return jsonResponse({
+        ok: true,
+        walk: [{ id: 2, kind: 'code_symbol', topic: 'scripts/scr_util/scr_util.gml', score: 0.5 }],
+      });
     }
     return jsonResponse({});
   };

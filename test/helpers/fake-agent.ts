@@ -1,7 +1,8 @@
 // test/helpers/fake-agent.ts — a controllable AgentLike for serve + cli tests.
 import type { AgentLike } from '../../src/agent.js';
-import type { AgentEvent } from '../../src/types.js';
+import type { AgentEvent, ChatMessage, ToolRegistry } from '../../src/types.js';
 import type { InEvent } from '../../src/protocol.js';
+import { buildToolRegistry } from '../../src/tools/index.js';
 
 export interface FakeAgentScript {
   /** Events to emit BEFORE the release gate (e.g. an early token). */
@@ -19,6 +20,8 @@ export class FakeAgent implements AgentLike {
   readonly approvals: Array<{ id: string; approved: boolean }> = [];
   cancelled = false;
   lastSignalAborted = false;
+  resumed: ChatMessage[][] = [];
+  clearCount = 0;
   private releaseResolvers: Array<() => void> = [];
 
   constructor(private readonly script: FakeAgentScript = {}) {}
@@ -62,5 +65,25 @@ export class FakeAgent implements AgentLike {
 
   cancel(): void {
     this.cancelled = true;
+  }
+
+  resume(messages: ChatMessage[]): void {
+    this.resumed.push(messages);
+  }
+
+  clear(): void {
+    this.clearCount += 1;
+  }
+
+  async *undo(checkpointId?: string): AsyncGenerator<AgentEvent> {
+    yield {
+      type: 'answer',
+      text: `undo ${checkpointId ?? 'latest'}`,
+      sources: [],
+    };
+  }
+
+  tools(): Promise<ToolRegistry> {
+    return Promise.resolve(buildToolRegistry());
   }
 }

@@ -60,9 +60,7 @@ export interface BuildResolverOptions {
  * Disk access is injected via `opts.readFile` (project-relative POSIX -> text); the default reader
  * resolves against `opts.root`. The `.yyp` is parsed ONCE; object `.yy` files are read lazily + memoized.
  */
-export async function buildGmResolver(
-  opts: BuildResolverOptions,
-): Promise<GmResolver | undefined> {
+export async function buildGmResolver(opts: BuildResolverOptions): Promise<GmResolver | undefined> {
   let reader: ReadFile;
   if (opts.readFile !== undefined) {
     reader = opts.readFile;

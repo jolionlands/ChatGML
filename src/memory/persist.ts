@@ -10,8 +10,10 @@ import path from 'node:path';
 
 /** Encode a Float32Array as base64 of its little-endian bytes. Bit-exact (NaN/Inf/-0 preserved). */
 export function f32ToBase64(v: Float32Array): string {
-  // Copy into a tightly-sized buffer view of the underlying bytes.
-  const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength).slice();
+  // Buffer.from(uint8Array) copies exactly the typed view's bytes; the explicit Uint8Array cast is
+  // required because Buffer.from(float32Array) does NOT do what we want (it iterates the array as
+  // if it were UTF-16 code units).
+  const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
   return Buffer.from(bytes).toString('base64');
 }
 

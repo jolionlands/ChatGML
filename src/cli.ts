@@ -29,6 +29,7 @@ import { runIndexCommand } from './index/run-index.js';
 import { buildToolRegistry } from './tools/index.js';
 import { createAgentLike, type AgentLike, type LlmLike } from './agent.js';
 import { runServe, createStdioTransport } from './serve.js';
+import { runMcpServer, type McpTransport } from './mcp.js';
 import { runChatRepl, type LineSource } from './cli/repl.js';
 import { supportsColor } from './cli/theme.js';
 import { buildIgnoreFilter, DEFAULT_INDEX_EXTENSIONS } from './index/files.js';
@@ -258,12 +259,36 @@ async function cmdChat(root: string, flags: GlobalFlags, deps: CliDeps): Promise
 
 async function cmdServe(root: string, flags: GlobalFlags, deps: CliDeps): Promise<number> {
   const io = resolveIo(deps.io);
-  const { agent, memory } = await buildAgent(root, flags, deps);
+  const { agent, config, memory } = await buildAgent(root, flags, deps);
   const transport = deps.io
     ? { input: io.stdin, output: io.stdout, diagnostics: io.stderr }
     : createStdioTransport();
   try {
-    await runServe(agent, { transport });
+    await runServe(agent, { transport, config });
+  } finally {
+    if (memory.close) await memory.close();
+  }
+  return EXIT_OK;
+}
+
+/**
+ * `chatgml mcp <dir>` — run the MCP server over stdio, exposing ChatGML's GML-aware tool registry
+ * (glob, grep, read_file, search_code, graph_neighbors, temporal_query, apply_patch) as MCP tools.
+ * Any MCP-speaking agent IDE (Cline, Cursor, Claude Code, Copilot Chat, pi, openclaw) can then use
+ * ChatGML's GML-aware code-graph retrieval + sandboxed writes. The agent IDE owns the chat/diff
+ * approval UX; ChatGML owns the GML-aware index + retrieval.
+ */
+async function cmdMcp(root: string, flags: GlobalFlags, deps: CliDeps): Promise<number> {
+  const io = resolveIo(deps.io);
+  const config = buildConfig(root, flags, io);
+  const embeddings = makeEmbeddings(deps, config);
+  const memory = await makeMemory(deps, config, embeddings);
+  const ignore = await buildIgnoreFilter(config.index.root);
+  const transport: McpTransport = deps.io
+    ? { input: io.stdin, output: io.stdout, diagnostics: io.stderr }
+    : { input: process.stdin, output: process.stdout, diagnostics: process.stderr };
+  try {
+    await runMcpServer({ tools: buildToolRegistry(), config, memory, ignore }, transport);
   } finally {
     if (memory.close) await memory.close();
   }
@@ -350,9 +375,7 @@ export function buildProgram(deps: CliDeps): {
     .option('--embed-api-key <key>', 'embedding API key (prefer env:NAME)')
     .option('--embed-model <model>', 'embedding model id')
     .option('--scope <scope>', 'memory scope (repo or repo::sub)')
-    .addOption(
-      new Option('--approval <mode>', 'edit approval policy').choices(['gated', 'auto']),
-    )
+    .addOption(new Option('--approval <mode>', 'edit approval policy').choices(['gated', 'auto']))
     .option(
       '--min-score <n>',
       'absolute cosine floor for search_code (0..1); off unless set (search.minScore)',
@@ -397,6 +420,16 @@ export function buildProgram(deps: CliDeps): {
     .description('expose the agent over NDJSON on stdio')
     .action(async (dir: string, _opts, cmd: Command) => {
       action = () => cmdServe(dir, flagsOf(cmd), deps);
+    });
+
+  program
+    .command('mcp')
+    .argument('[dir]', 'project directory', '.')
+    .description(
+      'run the MCP (Model Context Protocol) server over stdio — for agent IDEs (Cline, Cursor, Claude Code, Copilot Chat)',
+    )
+    .action(async (dir: string, _opts, cmd: Command) => {
+      action = () => cmdMcp(dir, flagsOf(cmd), deps);
     });
 
   const config = program.command('config').description('inspect or set configuration');
@@ -449,7 +482,11 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   } catch (err) {
     // commander.exitOverride throws CommanderError; --version/--help exit 0.
     const e = err as { code?: string; exitCode?: number; message?: string };
-    if (e.code === 'commander.version' || e.code === 'commander.helpDisplayed' || e.code === 'commander.help') {
+    if (
+      e.code === 'commander.version' ||
+      e.code === 'commander.helpDisplayed' ||
+      e.code === 'commander.help'
+    ) {
       return EXIT_OK;
     }
     let msg = e.message ?? 'usage error';

@@ -8,7 +8,7 @@
 //
 // Nothing here touches the DOM, the filesystem, or `process` — every dependency (env, platform,
 // existence probe) is passed in, so the whole surface is deterministic under vitest.
-import type { AgentEvent, Citation } from './types.js';
+import type { AgentEvent, Citation, EditorContext, Mode, ToolCatalogEntry } from './types.js';
 
 // ---------------------------------------------------------------------------
 // 1. NDJSON line buffer (raw-chunk, streaming-UTF-8, tolerant of a malformed line).
@@ -38,8 +38,7 @@ export class NdjsonLineBuffer {
    * must not kill the plugin).
    */
   push(chunk: string | Uint8Array): DecodeResult {
-    this.buffer +=
-      typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true });
+    this.buffer += typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true });
     const events: unknown[] = [];
     const malformed: string[] = [];
     let nl: number;
@@ -81,9 +80,7 @@ export function isReadyHandshake(
 ): e is { type: 'status'; phase: 'ready'; protocolVersion: number } {
   if (typeof e !== 'object' || e === null) return false;
   const o = e as { type?: unknown; phase?: unknown; protocolVersion?: unknown };
-  return (
-    o.type === 'status' && o.phase === 'ready' && typeof o.protocolVersion === 'number'
-  );
+  return o.type === 'status' && o.phase === 'ready' && typeof o.protocolVersion === 'number';
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +155,14 @@ export function resolveServeBinary(opts: ResolveBinaryOpts): ResolvedBinary {
   if (fromEnv && fromEnv.trim() !== '') {
     return { cmd: fromEnv, argvPrefix: [] };
   }
-  // (3) win32 npm shim, if present (resolve the ABSOLUTE .cmd so shell:false can spawn it).
+  // (3) bundled dist/cli.js via node — the dev fallback (no global install required).
+  //     Preferred over the npm shim because Electron's renderer cannot reliably spawn .cmd
+  //     files with shell:false, and process.execPath in a packaged app is the app exe, not node.
+  if (opts.exists(opts.distCliPath)) {
+    return { cmd: opts.nodePath, argvPrefix: [opts.distCliPath] };
+  }
+  // (4) win32 npm shim, if present (spawned via cmd.exe /c in client.js because .cmd files
+  //     cannot be run directly with shell:false).
   if (opts.platform === 'win32') {
     const appData = opts.env['APPDATA'];
     if (appData && appData.trim() !== '') {
@@ -167,10 +171,6 @@ export function resolveServeBinary(opts: ResolveBinaryOpts): ResolvedBinary {
         return { cmd: shim, argvPrefix: [] };
       }
     }
-  }
-  // (4) bundled dist/cli.js via node — the dev fallback (no global install required).
-  if (opts.exists(opts.distCliPath)) {
-    return { cmd: opts.nodePath, argvPrefix: [opts.distCliPath] };
   }
   // Nothing resolved -> an actionable error rather than a silent ENOENT child.
   throw new Error(
@@ -200,8 +200,17 @@ export type PluginStatusPhase =
 export interface ActivityEntry {
   id: string;
   name: string;
-  /** 'running' once tool_call seen, then 'ok'/'error' once tool_result arrives. */
-  status: 'running' | 'ok' | 'error';
+  /** Discriminator so the panel can render tool calls, command execution, and MCP activity differently. */
+  kind: 'tool' | 'command' | 'mcp';
+  /** 'running' once tool_call or command_output seen; 'ok'/'error' once resolved; 'waiting' for command approval. */
+  status: 'running' | 'ok' | 'error' | 'waiting';
+  /** Present for MCP activity rows: the configured MCP server name. */
+  server?: string;
+  content?: string;
+  error?: string;
+  command?: string;
+  cwd?: string;
+  output?: string;
 }
 
 export interface PendingProposal {
@@ -210,10 +219,18 @@ export interface PendingProposal {
   diff: string;
 }
 
+export interface PluginCheckpoint {
+  id: string;
+  path: string;
+  label?: string;
+}
+
 export interface PluginState {
   /** True once the ready handshake arrived; gates Send/Approve. */
   ready: boolean;
   phase: PluginStatusPhase;
+  /** Active agent mode reported by the core in the ready handshake. */
+  mode: Mode;
   /** Accumulated streamed assistant text for the current turn (token deltas concatenated). */
   transcript: string;
   /** The finalized answer text + its sources (set on `answer`). */
@@ -224,18 +241,25 @@ export interface PluginState {
   pendingProposals: Map<string, PendingProposal>;
   /** Last error message, if any (cleared at the start of a new user turn). */
   error: string | null;
+  /** Tool catalog broadcast by the core after the ready handshake. */
+  catalog?: ToolCatalogEntry[] | null;
+  /** Checkpoints emitted by the core after successful edits; rendered as clickable chips. */
+  checkpoints: PluginCheckpoint[];
 }
 
 export function initialPluginState(): PluginState {
   return {
     ready: false,
     phase: 'stopped',
+    mode: 'code',
     transcript: '',
     answer: null,
     sources: [],
     activity: [],
     pendingProposals: new Map(),
     error: null,
+    catalog: null,
+    checkpoints: [],
   };
 }
 
@@ -254,7 +278,11 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
   switch (event.type) {
     case 'status': {
       next.phase = event.phase;
-      if (event.phase === 'ready') next.ready = true;
+      if (event.phase === 'ready') {
+        next.ready = true;
+        const mode = (event as { mode?: Mode }).mode;
+        if (mode) next.mode = mode;
+      }
       return next;
     }
     case 'token': {
@@ -264,14 +292,125 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     case 'tool_call': {
       next.activity = [
         ...state.activity,
-        { id: event.id, name: event.name, status: 'running' },
+        {
+          id: event.id,
+          kind: 'tool',
+          name: event.name,
+          status: 'running',
+          content: undefined,
+          error: undefined,
+        },
       ];
       return next;
     }
     case 'tool_result': {
+      // The core wire shape for tool_result currently omits `error` from the TS union, but the
+      // plugin port defensively carries it when present so a future core event can surface it.
+      const toolEvent = event as typeof event & { error?: unknown };
       next.activity = state.activity.map((a) =>
-        a.id === event.id ? { ...a, status: event.ok ? ('ok' as const) : ('error' as const) } : a,
+        a.id === event.id
+          ? {
+              ...a,
+              status: event.ok ? ('ok' as const) : ('error' as const),
+              ...(event.content != null
+                ? {
+                    content:
+                      String(event.content).length > 4096
+                        ? String(event.content).slice(0, 4096) + '…'
+                        : String(event.content),
+                  }
+                : {}),
+              ...(toolEvent.error != null ? { error: String(toolEvent.error) } : {}),
+            }
+          : a,
       );
+      return next;
+    }
+    case 'command_request': {
+      next.activity = [
+        ...state.activity,
+        {
+          id: event.id,
+          kind: 'command',
+          name: 'execute_command',
+          status: 'waiting',
+          command: event.command,
+          cwd: event.cwd,
+          output: '',
+        },
+      ];
+      return next;
+    }
+    case 'command_output': {
+      const MAX_OUTPUT = 8192;
+      next.activity = state.activity.map((a) => {
+        if (a.id !== event.id || a.kind !== 'command') return a;
+        const text = String(a.output || '') + String(event.text || '');
+        const output = text.length > MAX_OUTPUT ? text.slice(0, MAX_OUTPUT) + '…' : text;
+        return { ...a, status: 'running', output };
+      });
+      return next;
+    }
+    case 'command_exit': {
+      next.activity = state.activity.map((a) => {
+        if (a.id !== event.id || a.kind !== 'command') return a;
+        const output = String(a.output || '') + '\n[exit code ' + event.code + ']';
+        return { ...a, status: event.code === 0 ? ('ok' as const) : ('error' as const), output };
+      });
+      return next;
+    }
+    case 'mcp_tool_call': {
+      next.activity = [
+        ...state.activity,
+        {
+          id: event.id,
+          kind: 'mcp',
+          name: event.name,
+          server: event.server,
+          status: 'running',
+          content: undefined,
+          error: undefined,
+        },
+      ];
+      return next;
+    }
+    case 'mcp_tool_result': {
+      next.activity = state.activity.map((a) =>
+        a.id === event.id && a.kind === 'mcp'
+          ? {
+              ...a,
+              status: event.ok ? ('ok' as const) : ('error' as const),
+              ...(event.content != null
+                ? {
+                    content:
+                      String(event.content).length > 4096
+                        ? String(event.content).slice(0, 4096) + '…'
+                        : String(event.content),
+                  }
+                : {}),
+              ...(event.error != null ? { error: String(event.error) } : {}),
+            }
+          : a,
+      );
+      return next;
+    }
+    case 'mcp_resource': {
+      next.activity = [
+        ...state.activity,
+        {
+          id: event.id,
+          kind: 'mcp',
+          name: event.name,
+          server: event.server,
+          status: 'ok',
+          content:
+            event.content != null
+              ? String(event.content).length > 4096
+                ? String(event.content).slice(0, 4096) + '…'
+                : String(event.content)
+              : undefined,
+        },
+      ];
       return next;
     }
     case 'edit_proposal': {
@@ -296,8 +435,30 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       next.sources = event.sources;
       return next;
     }
+    case 'turn_end': {
+      // A persistence side-channel (emitted after the terminal answer/error). The running/answer
+      // state was already finalized by the answer event, so the reducer does NOT mutate the visible
+      // state here; the panel picks the record up separately to append to its per-project session
+      // log. Returning `next` keeps the projection a pure function of (event, state).
+      return next;
+    }
     case 'error': {
       next.error = event.message;
+      return next;
+    }
+    // Protocol v3 events: tool catalog is stored; checkpoint chips are accumulated; pong is ignored.
+    case 'tool_catalog': {
+      next.catalog = event.tools;
+      return next;
+    }
+    case 'checkpoint': {
+      next.checkpoints = [
+        ...state.checkpoints,
+        { id: event.id, path: event.path, label: event.label },
+      ];
+      return next;
+    }
+    case 'pong': {
       return next;
     }
     default: {
@@ -326,4 +487,175 @@ export function matchApproval(
   pendingProposals: ReadonlyMap<string, PendingProposal>,
 ): PendingProposal | undefined {
   return pendingProposals.get(req.id);
+}
+
+// ---------------------------------------------------------------------------
+// 7. Slash commands (opencode-style chat input).
+//
+// The panel interprets a line that starts with '/' as a client-side command, NOT a user message
+// to the agent. parseSlashCommand returns a discriminated result the panel acts on (clear history,
+// reindex, resume last session, change scope/model/approval, show help). A leading '/' with no
+// recognized name is 'unknown' (the panel shows a hint). Returns null for a plain (non-slash)
+// line so the caller knows to send it as a user message. Case-insensitive on the command name;
+// the value argument keeps its case (a model id is case-sensitive). Trailing/leading whitespace
+// around the value is trimmed; an empty value for value-bearing commands is 'empty' so the panel
+// can prompt instead of silently no-op'ing.
+// ---------------------------------------------------------------------------
+export type SlashCommand =
+  | { kind: 'clear' }
+  | { kind: 'reindex' }
+  | { kind: 'resume' }
+  | { kind: 'scope'; value: string }
+  | { kind: 'model'; value: string }
+  | { kind: 'mode'; value: Mode }
+  | { kind: 'approval'; value: 'gated' | 'auto' }
+  | { kind: 'mcp' }
+  | { kind: 'undo'; checkpointId?: string }
+  | { kind: 'new_task'; value: string }
+  | { kind: 'list_tasks' }
+  | { kind: 'switch_task'; value: string }
+  | { kind: 'delete_task'; value: string }
+  | { kind: 'help' }
+  | { kind: 'unknown'; name: string }
+  | { kind: 'empty'; name: string };
+
+export function parseSlashCommand(line: string): SlashCommand | null {
+  const trimmed = line.trim();
+  if (trimmed === '' || trimmed[0] !== '/') return null;
+  // first whitespace splits name from the (optional) value
+  const sp = trimmed.indexOf(' ');
+  const name = (sp === -1 ? trimmed.slice(1) : trimmed.slice(1, sp)).toLowerCase();
+  if (name === '') return { kind: 'empty', name: '' };
+  const value = sp === -1 ? '' : trimmed.slice(sp + 1).trim();
+  switch (name) {
+    case 'clear':
+      return { kind: 'clear' };
+    case 'reindex':
+      return { kind: 'reindex' };
+    case 'resume':
+      return { kind: 'resume' };
+    case 'help':
+    case '?':
+      return { kind: 'help' };
+    case 'scope':
+      return value === '' ? { kind: 'empty', name } : { kind: 'scope', value };
+    case 'model':
+      return value === '' ? { kind: 'empty', name } : { kind: 'model', value };
+    case 'mode': {
+      if (value === '') return { kind: 'empty', name };
+      if (value !== 'architect' && value !== 'code' && value !== 'ask' && value !== 'debug')
+        return { kind: 'unknown', name: name + ' ' + value };
+      return { kind: 'mode', value };
+    }
+    case 'approval':
+      if (value !== 'gated' && value !== 'auto')
+        return { kind: 'unknown', name: name + ' ' + value };
+      return { kind: 'approval', value };
+    case 'mcp':
+      return { kind: 'mcp' };
+    case 'undo':
+      return { kind: 'undo', checkpointId: value || undefined };
+    case 'new':
+      return value === '' ? { kind: 'empty', name } : { kind: 'new_task', value };
+    case 'tasks':
+      return { kind: 'list_tasks' };
+    case 'switch':
+      return value === '' ? { kind: 'empty', name } : { kind: 'switch_task', value };
+    case 'delete-task':
+      return value === '' ? { kind: 'empty', name } : { kind: 'delete_task', value };
+    default:
+      return { kind: 'unknown', name };
+  }
+}
+
+// A short help string the panel renders for /help or an unknown/empty command. Kept here (pure)
+// so the test snapshot is stable and the help text is single-sourced.
+export const SLASH_HELP: readonly string[] = [
+  'ChatGML slash commands:',
+  '  /clear          drop conversation history (this session)',
+  '  /reindex        rebuild the code index now',
+  '  /resume         reload the last saved session for this project',
+  '  /new <name>     create a new task workspace',
+  '  /tasks          list existing task workspaces',
+  '  /switch <name>  switch to a task workspace',
+  '  /delete-task <name>  delete a task workspace',
+  '  /mode architect|code|ask|debug   set the agent mode and restart the core',
+  '  /scope <name>   set the memory scope and restart the core',
+  '  /model <id>     set the chat model (chat.model) and restart the core',
+  '  /approval gated|auto   set edit approval mode and restart the core',
+  '  /mcp            list configured MCP servers and tool counts',
+  '  /undo [id]      undo the most recent checkpoint (or the specified checkpoint id)',
+  '  /help           show this help',
+];
+
+// ---------------------------------------------------------------------------
+// 8. Editor context construction (opencode-style '@current file' awareness).
+//
+// buildEditorContext takes what the GMEdit glue knows about the active file and returns the
+// {openFile,selection,cursorLine} object attached to a `user` command, or undefined when there is
+// nothing useful to attach (so a bare user message is sent — v1 behavior). Empty/whitespace
+// selections are dropped; an openFile that is empty/whitespace is dropped; a cursorLine <= 0 is
+// dropped. Pure + total so it is unit-tested directly.
+// ---------------------------------------------------------------------------
+export function buildEditorContext(opts: {
+  openFile?: string;
+  selection?: string;
+  cursorLine?: number;
+}): EditorContext | undefined {
+  const context: EditorContext = {};
+  const file = opts.openFile != null ? String(opts.openFile) : '';
+  if (file.trim() !== '') context.openFile = file;
+  const sel = opts.selection != null ? String(opts.selection) : '';
+  if (sel.trim() !== '') context.selection = sel;
+  const line = Number(opts.cursorLine);
+  if (Number.isInteger(line) && line > 0) context.cursorLine = line;
+  if (
+    context.openFile === undefined &&
+    context.selection === undefined &&
+    context.cursorLine === undefined
+  ) {
+    return undefined;
+  }
+  return context;
+}
+
+// ---------------------------------------------------------------------------
+// 9. Session persistence (resumable conversation history).
+//
+// A `turn_end` outbound event is the per-turn persistence record. The panel appends these to a
+// per-project session file. On the next `chatgml serve` start the panel reads the file, converts
+// the turns into plain {role,content} pairs, and sends ONE `resume` command seeding the in-memory
+// history. turnEndToMessages flattens each turn_end into a user/assistant pair (the editor-context
+// is NOT replayed — it was only relevant to the turn it was attached to). Returns the array shape
+// the `resume` inbound command expects.
+// ---------------------------------------------------------------------------
+export interface ResumableMessage {
+  role: 'user' | 'assistant';
+  content: string | null;
+}
+
+export function turnEndToMessages(
+  turns: Array<{ userText: string; assistantText: string }>,
+): ResumableMessage[] {
+  const out: ResumableMessage[] = [];
+  for (const t of turns) {
+    // Skip turns with no user text (a user-spam/empty case) so we never replay a null user turn.
+    if (!t.userText || t.userText.trim() === '') continue;
+    out.push({ role: 'user', content: t.userText });
+    // An assistant turn that ended in an error has empty assistantText; keep it as null (the shape
+    // the core's resume() accepts — content string|null).
+    out.push({
+      role: 'assistant',
+      content: t.assistantText && t.assistantText.length > 0 ? t.assistantText : null,
+    });
+  }
+  return out;
+}
+
+/** Build the inbound `resume` command from a persisted turn list. */
+export function buildResumeCommand(turns: Array<{ userText: string; assistantText: string }>): {
+  type: 'resume';
+  messages: ResumableMessage[];
+} {
+  return { type: 'resume', messages: turnEndToMessages(turns) };
 }
