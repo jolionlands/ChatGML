@@ -5,6 +5,7 @@
     "state.js",
     "child-process.js",
     "diff-view.js",
+    "markdown.js",
     "panel.js",
     "config-bridge.js",
     "client.js",

@@ -176,7 +176,7 @@
     c.appendChild(this.catalogEl);
 
     // Transcript (streamed tokens) + final answer.
-    this.transcriptEl = document.createElement('pre');
+    this.transcriptEl = document.createElement('div');
     this.transcriptEl.className = 'chatgml-transcript';
     c.appendChild(this.transcriptEl);
 
@@ -514,6 +514,7 @@
     this.state.pendingProposals = new Map();
     this.state.error = null;
     this.state.checkpoints = [];
+    this.state.turns = [];
     this.lastWrittenPaths.clear();
     this.selectedCheckpointId = null;
     this.diffView.clear();
@@ -772,8 +773,92 @@
       }
     }
 
-    // Transcript / answer.
-    this.transcriptEl.textContent = s.answer != null ? s.answer : s.transcript;
+    // Transcript: render finalized turns as message bubbles; the in-flight `s.answer` (streaming)
+    // is rendered as a streaming bubble while it accumulates. Falls back to the legacy flat
+    // transcript text only when no turns and no answer are present (so a stale display survives
+    // /clear's transient state).
+    this.transcriptEl.innerHTML = '';
+    var MarkdownApi =
+      typeof root !== 'undefined' && root.ChatGmlMarkdown
+        ? root.ChatGmlMarkdown
+        : typeof ChatGmlMarkdown !== 'undefined'
+          ? ChatGmlMarkdown
+          : null;
+    var turns = s.turns || [];
+    var hasTurns = turns.length > 0;
+    var hasStreamingAnswer = s.answer != null && String(s.answer).length > 0;
+
+    if (hasTurns) {
+      for (var ti = 0; ti < turns.length; ti++) {
+        var turn = turns[ti];
+        if (turn.userText && String(turn.userText).trim() !== '') {
+          var userBubble = document.createElement('div');
+          userBubble.className = 'chatgml-turn chatgml-turn-user';
+          var userLabel = document.createElement('div');
+          userLabel.className = 'chatgml-turn-label';
+          userLabel.textContent = 'You';
+          userBubble.appendChild(userLabel);
+          var userBody = document.createElement('div');
+          userBody.className = 'chatgml-turn-body';
+          // User text is treated as plain text — never run markdown on what the user typed.
+          userBody.textContent = turn.userText;
+          userBubble.appendChild(userBody);
+          this.transcriptEl.appendChild(userBubble);
+        }
+        if (turn.assistantText && String(turn.assistantText).trim() !== '') {
+          var asstBubble = document.createElement('div');
+          asstBubble.className = 'chatgml-turn chatgml-turn-assistant';
+          var asstLabel = document.createElement('div');
+          asstLabel.className = 'chatgml-turn-label';
+          asstLabel.textContent = 'Assistant';
+          asstBubble.appendChild(asstLabel);
+          var asstBody = document.createElement('div');
+          asstBody.className = 'chatgml-turn-body chatgml-md-body';
+          if (MarkdownApi && typeof MarkdownApi.renderMarkdown === 'function') {
+            try {
+              MarkdownApi.renderMarkdown(turn.assistantText, asstBody);
+            } catch (e) {
+              asstBody.textContent = turn.assistantText;
+            }
+          } else {
+            asstBody.textContent = turn.assistantText;
+          }
+          asstBubble.appendChild(asstBody);
+          this.transcriptEl.appendChild(asstBubble);
+        }
+      }
+    }
+
+    if (hasStreamingAnswer) {
+      var streamBubble = document.createElement('div');
+      streamBubble.className = 'chatgml-turn chatgml-turn-assistant chatgml-turn-streaming';
+      var streamLabel = document.createElement('div');
+      streamLabel.className = 'chatgml-turn-label';
+      streamLabel.textContent = 'Assistant';
+      streamBubble.appendChild(streamLabel);
+      var streamBody = document.createElement('div');
+      streamBody.className = 'chatgml-turn-body chatgml-md-body';
+      if (MarkdownApi && typeof MarkdownApi.renderMarkdown === 'function') {
+        try {
+          MarkdownApi.renderMarkdown(s.answer, streamBody);
+        } catch (e) {
+          streamBody.textContent = s.answer;
+        }
+      } else {
+        streamBody.textContent = s.answer;
+      }
+      streamBubble.appendChild(streamBody);
+      this.transcriptEl.appendChild(streamBubble);
+    }
+
+    if (!hasTurns && !hasStreamingAnswer && s.transcript) {
+      var fallbackPre = document.createElement('pre');
+      fallbackPre.className = 'chatgml-transcript-legacy';
+      fallbackPre.textContent = s.transcript;
+      this.transcriptEl.appendChild(fallbackPre);
+    }
+
+    this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
 
     // Sources.
     this.sourcesEl.innerHTML = '';

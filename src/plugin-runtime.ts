@@ -225,6 +225,11 @@ export interface PluginCheckpoint {
   label?: string;
 }
 
+export interface TurnRecord {
+  userText: string;
+  assistantText: string;
+}
+
 export interface PluginState {
   /** True once the ready handshake arrived; gates Send/Approve. */
   ready: boolean;
@@ -245,6 +250,11 @@ export interface PluginState {
   catalog?: ToolCatalogEntry[] | null;
   /** Checkpoints emitted by the core after successful edits; rendered as clickable chips. */
   checkpoints: PluginCheckpoint[];
+  /**
+   * Per-turn conversation bubbles, accumulated as `turn_end` events arrive. The user message and
+   * the assistant text are kept together so the chat panel can render a chronological transcript.
+   */
+  turns: TurnRecord[];
 }
 
 export function initialPluginState(): PluginState {
@@ -260,6 +270,7 @@ export function initialPluginState(): PluginState {
     error: null,
     catalog: null,
     checkpoints: [],
+    turns: [],
   };
 }
 
@@ -274,6 +285,7 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     sources: state.sources,
     activity: state.activity,
     pendingProposals: state.pendingProposals,
+    turns: state.turns,
   };
   switch (event.type) {
     case 'status': {
@@ -436,10 +448,19 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       return next;
     }
     case 'turn_end': {
-      // A persistence side-channel (emitted after the terminal answer/error). The running/answer
-      // state was already finalized by the answer event, so the reducer does NOT mutate the visible
-      // state here; the panel picks the record up separately to append to its per-project session
-      // log. Returning `next` keeps the projection a pure function of (event, state).
+      // A persistence side-channel (emitted after the terminal answer/error). The reducer
+      // accumulates the turn so the chat panel can render it as a completed message bubble; the
+      // streaming `answer` text is also cleared so the next user turn starts clean.
+      if (event.userText != null || event.assistantText != null) {
+        next.turns = [
+          ...state.turns,
+          {
+            userText: event.userText ?? '',
+            assistantText: event.assistantText != null ? event.assistantText : (state.answer ?? ''),
+          },
+        ];
+      }
+      next.answer = null;
       return next;
     }
     case 'error': {

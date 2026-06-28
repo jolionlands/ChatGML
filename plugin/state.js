@@ -107,6 +107,7 @@
       error: null,
       catalog: null,
       checkpoints: [],
+      turns: [],
     };
   }
 
@@ -123,6 +124,7 @@
       error: state.error,
       catalog: state.catalog,
       checkpoints: state.checkpoints,
+      turns: state.turns,
     };
     switch (event.type) {
       case 'status':
@@ -255,6 +257,15 @@
         ]);
         return next;
       case 'turn_end':
+        if (event.userText != null || event.assistantText != null) {
+          next.turns = (state.turns || []).concat([
+            {
+              userText: event.userText || '',
+              assistantText: event.assistantText != null ? event.assistantText : state.answer || '',
+            },
+          ]);
+        }
+        next.answer = null; // the streaming answer is now captured in the turn
         return next;
       case 'tool_catalog':
         next.catalog = event.tools ? event.tools.slice() : event.tools;

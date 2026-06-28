@@ -23,6 +23,10 @@
   const DiffViewApi = globalThis.ChatGmlDiffView || require('./diff-view.js');
   const ConfigBridgeApi = globalThis.ChatGmlConfigBridge || require('./config-bridge.js');
   const State = globalThis.ChatGmlState || require('./state.js');
+  // Resolve markdown.js so the renderer global is populated (config.json loads it before
+  // panel.js, but the require fallback is also fine in Node-based test contexts).
+  const MarkdownApi = globalThis.ChatGmlMarkdown || require('./markdown.js');
+  void MarkdownApi;
 
   const PLUGIN_NAME = 'chatgml';
   const SESSION_DIR = join(__dirname, 'chatgml-sessions');

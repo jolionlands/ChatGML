@@ -1,4 +1,72 @@
+/* =========================================================================
+ * ChatGML plugin styles
+ * Theme-aware: variables inherit from Ace/GMEdit where possible
+ * (--ace_*, GMEdit panel tokens) and fall back to a Catppuccin-Mocha
+ * dark palette. A :root[data-theme="light"] (or .light) override is
+ * included for callers that opt in.
+ * ========================================================================= */
+
+:root {
+  /* ---- ChatGML tokens (dark defaults, Catppuccin Mocha-like) ---- */
+  --chatgml-bg: #1e1e2e;
+  --chatgml-fg: #cdd6f4;
+  --chatgml-border: #313244;
+  --chatgml-accent: #89b4fa;
+  --chatgml-accent-hover: #b4befe;
+  --chatgml-muted: #6c7086;
+  --chatgml-add-bg: rgba(166, 227, 161, 0.16);
+  --chatgml-add-fg: #a6e3a1;
+  --chatgml-del-bg: rgba(243, 139, 168, 0.16);
+  --chatgml-del-fg: #f38ba8;
+  --chatgml-card-bg: #181825;
+  --chatgml-card-border: #313244;
+
+  /* Derived surface tokens (used via var() chains at use sites) */
+  --chatgml-surface-0: var(--chatgml-bg);
+  --chatgml-surface-1: #232336;
+  --chatgml-surface-2: #2a2a40;
+  --chatgml-surface-hover: rgba(137, 180, 250, 0.08);
+  --chatgml-surface-active: rgba(137, 180, 250, 0.16);
+
+  /* Layout tokens */
+  --chatgml-radius: 6px;
+  --chatgml-radius-sm: 4px;
+  --chatgml-gap: 10px;
+  --chatgml-gap-sm: 6px;
+  --chatgml-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --chatgml-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+:root[data-theme='light'],
+:root.light {
+  --chatgml-bg: #fafafa;
+  --chatgml-fg: #1e1e2e;
+  --chatgml-border: #d9d9de;
+  --chatgml-accent: #1e66f5;
+  --chatgml-accent-hover: #4c8bf5;
+  --chatgml-muted: #6c6c7c;
+  --chatgml-add-bg: rgba(64, 160, 43, 0.12);
+  --chatgml-add-fg: #2f9e44;
+  --chatgml-del-bg: rgba(224, 49, 49, 0.12);
+  --chatgml-del-fg: #e03131;
+  --chatgml-card-bg: #ffffff;
+  --chatgml-card-border: #e1e1e6;
+
+  --chatgml-surface-0: #fafafa;
+  --chatgml-surface-1: #f0f0f3;
+  --chatgml-surface-2: #e7e7ec;
+  --chatgml-surface-hover: rgba(30, 102, 245, 0.06);
+  --chatgml-surface-active: rgba(30, 102, 245, 0.12);
+}
+
+/* =========================================================================
+ * Editor wrapper + splitter
+ * ========================================================================= */
+
 #chatgml_editor {
+  color: var(--chatgml-fg);
+  font-family: var(--chatgml-font);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -6,23 +74,72 @@
   overflow: hidden;
 }
 
+.splitter-td {
+  background: var(--chatgml-border);
+  width: 100%;
+  cursor: col-resize;
+}
+
+#chatgml_editor .ace_content {
+  border: 2px solid var(--chatgml-border);
+}
+
+/* =========================================================================
+ * Panel layout
+ * ========================================================================= */
+
+.chatgml-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--chatgml-gap-sm);
+  box-sizing: border-box;
+  font-size: 13px;
+  gap: var(--chatgml-gap-sm);
+  overflow: hidden;
+  background: var(--chatgml-surface-0);
+  color: var(--chatgml-fg);
+}
+
+.chatgml-controls,
+.chatgml-sources,
+.chatgml-config-row,
+.chatgml-checkpoint-row,
+.chatgml-mention-row {
+  flex: 0 0 auto;
+}
+
+/* =========================================================================
+ * Buttons (run, reject, undo, cmd, task-delete)
+ * ========================================================================= */
+
 .run-button {
-  padding: 5px 10px;
+  padding: 6px 14px;
   cursor: pointer;
   background-color: #4caf50;
   border: none;
-  color: white;
+  border-radius: var(--chatgml-radius);
+  color: #fff;
   text-align: center;
   text-decoration: none;
   display: inline-block;
-  font-size: 14px;
-  margin: 4px 2px;
-  transition-duration: 0.4s;
+  font-size: 13px;
+  font-weight: 500;
+  margin: 2px;
+  transition:
+    background-color 0.18s ease,
+    transform 0.05s ease,
+    box-shadow 0.18s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
-/* CSS has no darken() — use a concrete darker green (≈ darken(#4CAF50, 15%)). */
 .run-button:hover:not([disabled]) {
   background-color: #357a38;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.22);
+}
+
+.run-button:active:not([disabled]) {
+  transform: translateY(1px);
 }
 
 .run-button.chatgml-reject {
@@ -32,202 +149,656 @@
   background-color: #7d2929;
 }
 
-button[disabled] {
-  background-color: #ccc;
+button[disabled],
+.run-button[disabled] {
+  background-color: var(--chatgml-surface-2);
+  color: var(--chatgml-muted);
   cursor: not-allowed;
+  box-shadow: none;
 }
 
-.splitter-td {
-  background: #ccc;
-  width: 100%;
-  cursor: col-resize;
-}
-
-#chatgml_editor .ace_content {
-  border: 2px solid #948d8d;
-}
-
-/* ---- ChatGML panel ---- */
-.chatgml-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: 6px;
-  box-sizing: border-box;
-  font-size: 13px;
-  overflow: hidden;
-}
-
-.chatgml-controls {
-  flex: 0 0 auto;
-}
+/* =========================================================================
+ * Status line (pill / badge style — replaces italic plain text)
+ * ========================================================================= */
 
 .chatgml-status {
   flex: 0 0 auto;
-  font-style: italic;
-  opacity: 0.8;
-  margin: 4px 0;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-muted);
+  border: 1px solid var(--chatgml-border);
+  font-size: 11px;
+  line-height: 1.4;
+  font-style: normal;
+  opacity: 1;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+.chatgml-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--chatgml-accent);
+  flex: 0 0 auto;
+}
+
+.chatgml-error {
+  color: var(--chatgml-del-fg);
+}
+.chatgml-status.chatgml-status--error {
+  color: var(--chatgml-del-fg);
+  border-color: var(--chatgml-del-fg);
+}
+.chatgml-status.chatgml-status--error::before {
+  background: var(--chatgml-del-fg);
+}
+
+/* =========================================================================
+ * Activity rows (collapsible log)
+ * ========================================================================= */
 
 .chatgml-activity {
   flex: 0 0 auto;
-  margin: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
 }
+
 .chatgml-activity-row {
-  font-family: monospace;
+  font-family: var(--chatgml-mono);
   font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--chatgml-radius-sm);
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background-color 0.12s ease;
 }
+
+.chatgml-activity-row:hover {
+  background: var(--chatgml-surface-hover);
+}
+
 .chatgml-activity-header {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
 }
+
 .chatgml-activity-content {
   max-height: 0;
   overflow: hidden;
-  transition: max-height 0.2s;
+  transition: max-height 0.22s ease;
   margin: 0;
+  padding: 0 8px 0 18px;
   white-space: pre-wrap;
   word-break: break-word;
+  color: var(--chatgml-muted);
+  border-left: 2px solid var(--chatgml-border);
 }
+
 .chatgml-activity-content.open {
   max-height: 400px;
   overflow: auto;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
+
 .chatgml-activity-error-content {
-  color: #b23b3b;
+  color: var(--chatgml-del-fg);
 }
+
 .chatgml-activity-running {
-  opacity: 0.7;
+  opacity: 0.75;
 }
+
 .chatgml-activity-error {
-  color: #b23b3b;
+  color: var(--chatgml-del-fg);
 }
+
+/* Chevron indicator for collapsible rows */
+.chatgml-activity-chevron {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  color: var(--chatgml-muted);
+  font-size: 10px;
+  transition: transform 0.18s ease;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.chatgml-activity-chevron--open {
+  transform: rotate(90deg);
+  color: var(--chatgml-accent);
+}
+
+/* =========================================================================
+ * Transcript + message bubbles + markdown
+ * ========================================================================= */
 
 .chatgml-transcript {
   flex: 1 1 auto;
-  white-space: pre-wrap;
   overflow-y: auto;
-  margin: 4px 0;
+  margin: 0;
+  padding: var(--chatgml-gap-sm) 2px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--chatgml-gap-sm);
 }
 
-.chatgml-sources {
-  flex: 0 0 auto;
+/* ---- Message bubble wrapper ---- */
+.chatgml-message {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+  max-width: 100%;
+  border-radius: var(--chatgml-radius);
+  padding: 8px 12px;
+  border: 1px solid var(--chatgml-border);
+  background: var(--chatgml-card-bg);
+  box-sizing: border-box;
 }
-.chatgml-sources-title {
-  font-weight: bold;
+
+.chatgml-message--user {
+  align-self: flex-end;
+  background: var(--chatgml-surface-active);
+  border-color: var(--chatgml-accent);
+  max-width: 92%;
 }
-.chatgml-source {
-  font-family: monospace;
+
+.chatgml-message--assistant {
+  align-self: flex-start;
+  background: var(--chatgml-card-bg);
+  border-color: var(--chatgml-card-border);
+  max-width: 96%;
+}
+
+.chatgml-message--system {
+  align-self: center;
+  background: transparent;
+  border-style: dashed;
+  color: var(--chatgml-muted);
+  font-style: italic;
+  max-width: 100%;
+}
+
+.chatgml-message__role {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--chatgml-muted);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.chatgml-message--user .chatgml-message__role {
+  color: var(--chatgml-accent-hover);
+}
+
+.chatgml-message__body {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+  color: var(--chatgml-fg);
+}
+
+/* ---- Markdown content classes (rendered by panel.js / diff-view.js) ---- */
+.chatgml-md-p {
+  margin: 0 0 8px 0;
+}
+.chatgml-md-p:last-child {
+  margin-bottom: 0;
+}
+
+.chatgml-md-h1,
+.chatgml-md-h2,
+.chatgml-md-h3,
+.chatgml-md-h4 {
+  margin: 10px 0 6px;
+  line-height: 1.25;
+  font-weight: 600;
+  color: var(--chatgml-fg);
+}
+.chatgml-md-h1 {
+  font-size: 18px;
+}
+.chatgml-md-h2 {
+  font-size: 16px;
+}
+.chatgml-md-h3 {
+  font-size: 14px;
+}
+.chatgml-md-h4 {
+  font-size: 13px;
+  opacity: 0.92;
+}
+
+.chatgml-md-ul,
+.chatgml-md-ol {
+  margin: 6px 0 8px;
+  padding-left: 22px;
+}
+.chatgml-md-ul li,
+.chatgml-md-ol li {
+  margin: 2px 0;
+}
+
+.chatgml-md-link {
+  color: var(--chatgml-accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--chatgml-accent);
+  transition: color 0.15s ease;
+}
+.chatgml-md-link:hover {
+  color: var(--chatgml-accent-hover);
+}
+
+.chatgml-md-blockquote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--chatgml-accent);
+  color: var(--chatgml-muted);
+  background: var(--chatgml-surface-1);
+  border-radius: 0 var(--chatgml-radius-sm) var(--chatgml-radius-sm) 0;
+}
+
+.chatgml-md-code-inline {
+  font-family: var(--chatgml-mono);
   font-size: 12px;
-  opacity: 0.85;
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-accent-hover);
+  padding: 1px 5px;
+  border-radius: var(--chatgml-radius-sm);
+  border: 1px solid var(--chatgml-border);
 }
+
+.chatgml-md-code-block {
+  font-family: var(--chatgml-mono);
+  font-size: 12px;
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 8px 10px;
+  margin: 6px 0;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.45;
+  color: var(--chatgml-fg);
+}
+
+.chatgml-md-hr {
+  border: none;
+  border-top: 1px solid var(--chatgml-border);
+  margin: 10px 0;
+}
+
+/* ---- Streaming indicator ---- */
+.chatgml-transcript.chatgml-streaming {
+  position: relative;
+}
+
+.chatgml-transcript.chatgml-streaming::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  display: block;
+  height: 2px;
+  margin-top: -2px;
+  background: linear-gradient(90deg, transparent 0%, var(--chatgml-accent) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: chatgml-stream-pulse 1.1s linear infinite;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+@keyframes chatgml-stream-pulse {
+  0% {
+    background-position: 100% 0;
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    background-position: -100% 0;
+    opacity: 0.4;
+  }
+}
+
+.chatgml-streaming-cursor::after {
+  content: '▍';
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--chatgml-accent);
+  animation: chatgml-cursor-blink 0.9s steps(1) infinite;
+}
+
+@keyframes chatgml-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* =========================================================================
+ * Sources
+ * ========================================================================= */
+
+.chatgml-sources-title {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--chatgml-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.chatgml-source {
+  font-family: var(--chatgml-mono);
+  font-size: 12px;
+  opacity: 0.92;
+  padding: 2px 6px;
+  border-left: 2px solid var(--chatgml-border);
+  margin: 2px 0;
+}
+
+/* =========================================================================
+ * Proposals + legacy inline diff
+ * ========================================================================= */
 
 .chatgml-proposals {
   flex: 0 0 auto;
   overflow-y: auto;
   max-height: 40%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--chatgml-gap-sm);
+  padding-right: 2px;
 }
+
 .chatgml-proposal {
-  border: 1px solid #948d8d;
-  margin: 6px 0;
-  padding: 4px;
+  border: 1px solid var(--chatgml-card-border);
+  background: var(--chatgml-card-bg);
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--chatgml-radius);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
+
 .chatgml-proposal-header {
-  font-weight: bold;
+  font-weight: 600;
+  font-size: 12px;
 }
+
 .chatgml-diff {
   white-space: pre-wrap;
-  font-family: monospace;
+  font-family: var(--chatgml-mono);
   font-size: 12px;
-  margin: 4px 0;
+  margin: 0;
 }
+
 .chatgml-diff-add {
-  background-color: rgba(80, 200, 80, 0.18);
+  background-color: var(--chatgml-add-bg);
+  color: var(--chatgml-add-fg);
 }
 .chatgml-diff-del {
-  background-color: rgba(200, 80, 80, 0.18);
+  background-color: var(--chatgml-del-bg);
+  color: var(--chatgml-del-fg);
 }
 .chatgml-diff-hunk {
-  color: #6a7ec0;
+  color: var(--chatgml-accent);
+  font-weight: 600;
 }
+
 .chatgml-diff-block {
-  border: 1px solid #444;
-  border-radius: 3px;
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
   margin: 6px 0;
-  padding: 6px;
+  padding: 8px 10px;
+  background: var(--chatgml-surface-1);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
+
 .chatgml-diff-block-header {
   font-size: 11px;
-  color: #888;
-  margin-bottom: 4px;
+  color: var(--chatgml-muted);
+  margin-bottom: 2px;
+  font-family: var(--chatgml-mono);
 }
+
 .chatgml-diff-block-actions {
-  margin-top: 6px;
+  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
+
 .chatgml-proposal-note {
   font-style: italic;
-  opacity: 0.8;
+  opacity: 0.85;
+  color: var(--chatgml-muted);
 }
+
+/* =========================================================================
+ * Diff table view (new structured diff renderer)
+ * ========================================================================= */
+
+.chatgml-diff-table {
+  font-family: var(--chatgml-mono);
+  font-size: 12px;
+  border-radius: var(--chatgml-radius);
+  overflow: hidden;
+  border: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-1);
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0;
+}
+
+.chatgml-diff-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 18px;
+  line-height: 1.45;
+}
+
+.chatgml-diff-line-num {
+  flex: 0 0 auto;
+  min-width: 40px;
+  padding: 0 8px;
+  text-align: right;
+  color: var(--chatgml-muted);
+  background: var(--chatgml-surface-2);
+  border-right: 1px solid var(--chatgml-border);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.chatgml-diff-line-content {
+  flex: 1 1 auto;
+  padding: 0 8px;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.chatgml-diff-line--add {
+  background: var(--chatgml-add-bg);
+}
+.chatgml-diff-line--add .chatgml-diff-line-num {
+  color: var(--chatgml-add-fg);
+  background: rgba(166, 227, 161, 0.08);
+}
+.chatgml-diff-line--add .chatgml-diff-line-content {
+  color: var(--chatgml-add-fg);
+}
+
+.chatgml-diff-line--del {
+  background: var(--chatgml-del-bg);
+}
+.chatgml-diff-line--del .chatgml-diff-line-num {
+  color: var(--chatgml-del-fg);
+  background: rgba(243, 139, 168, 0.08);
+}
+.chatgml-diff-line--del .chatgml-diff-line-content {
+  color: var(--chatgml-del-fg);
+}
+
+.chatgml-diff-line--ctx {
+  background: transparent;
+}
+
+.chatgml-diff-line--hunk {
+  background: var(--chatgml-surface-active);
+  color: var(--chatgml-accent);
+  font-weight: 600;
+}
+.chatgml-diff-line--hunk .chatgml-diff-line-num {
+  color: var(--chatgml-accent);
+  background: transparent;
+  border-right-color: var(--chatgml-accent);
+}
+
+/* =========================================================================
+ * Input row + textarea
+ * ========================================================================= */
 
 .chatgml-input-row {
   flex: 0 0 auto;
   display: flex;
   flex-direction: row;
+  gap: 6px;
+  align-items: stretch;
+  padding-top: 6px;
+  border-top: 1px solid var(--chatgml-border);
 }
+
 .chatgml-input {
   flex: 1 1 auto;
   resize: vertical;
   min-height: 48px;
+  font-family: var(--chatgml-font);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  border-radius: var(--chatgml-radius);
+  border: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  box-sizing: border-box;
 }
 
-.chatgml-error {
-  color: #b23b3b;
+.chatgml-input:focus {
+  border-color: var(--chatgml-accent);
+  box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.22);
 }
+
+.chatgml-input::placeholder {
+  font-style: italic;
+  opacity: 0.65;
+  color: var(--chatgml-muted);
+}
+
+/* =========================================================================
+ * Mode segmented control (pill style)
+ * ========================================================================= */
 
 .chatgml-mode-segmented {
-  display: flex;
-  gap: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
   margin: 0 6px;
-}
-.chatgml-mode-btn {
-  background: #333;
-  color: #aaa;
-  border: 1px solid #555;
-  padding: 2px 8px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.chatgml-mode-btn.active {
-  background: #555;
-  color: #fff;
-}
-.chatgml-mode-badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: #444;
-  color: #ccc;
-  font-size: 10px;
-  margin-left: 6px;
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
+  border-radius: 999px;
+  padding: 2px;
 }
 
-.chatgml-task-select {
-  background: #2d2d2d;
-  color: #ccc;
-  border: 1px solid #555;
-  border-radius: 3px;
-  padding: 2px 6px;
+.chatgml-mode-btn {
+  background: transparent;
+  color: var(--chatgml-muted);
+  border: none;
+  padding: 3px 10px;
   font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 999px;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.chatgml-mode-btn:hover:not(.active) {
+  color: var(--chatgml-fg);
+  background: var(--chatgml-surface-hover);
+}
+
+.chatgml-mode-btn.active {
+  background: var(--chatgml-accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.chatgml-mode-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+  font-size: 10px;
+  margin-left: 6px;
+  border: 1px solid var(--chatgml-border);
+}
+
+/* =========================================================================
+ * Task select / badge / delete (session chip)
+ * ========================================================================= */
+
+.chatgml-task-select {
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 3px 8px;
+  font-size: 11px;
+  transition: border-color 0.15s ease;
+}
+.chatgml-task-select:focus {
+  outline: none;
+  border-color: var(--chatgml-accent);
 }
 
 .chatgml-task-badge {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: #3a4a5a;
-  color: #ccc;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(137, 180, 250, 0.14);
+  color: var(--chatgml-accent-hover);
   font-size: 10px;
   margin-left: 6px;
+  border: 1px solid rgba(137, 180, 250, 0.28);
 }
 
 .chatgml-task-wrap {
@@ -238,131 +809,197 @@ button[disabled] {
 }
 
 .chatgml-task-delete {
-  background: #333;
-  color: #aaa;
-  border: 1px solid #555;
-  border-radius: 3px;
-  padding: 0 4px;
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-muted);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  padding: 1px 6px;
   font-size: 11px;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .chatgml-task-delete:hover {
-  background: #b23b3b;
-  color: #fff;
+  background: var(--chatgml-del-bg);
+  color: var(--chatgml-del-fg);
+  border-color: var(--chatgml-del-fg);
 }
 
-/* ---- Quick-config row (scope/model/approval chips) ---- */
+/* =========================================================================
+ * Config chips (scope/model/approval)
+ * ========================================================================= */
+
 .chatgml-config-row {
   flex: 0 0 auto;
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 2px 0 4px;
-}
-.chatgml-config-chip {
-  font-family: monospace;
-  font-size: 11px;
-  background-color: rgba(106, 126, 192, 0.14);
-  border: 1px solid rgba(106, 126, 192, 0.35);
-  border-radius: 3px;
-  padding: 1px 6px;
-  opacity: 0.92;
+  margin: 0;
 }
 
-/* ---- Slash-command flash / help / error notices ---- */
+.chatgml-config-chip {
+  font-family: var(--chatgml-mono);
+  font-size: 11px;
+  background-color: var(--chatgml-surface-active);
+  color: var(--chatgml-fg);
+  border: 1px solid rgba(137, 180, 250, 0.28);
+  border-radius: var(--chatgml-radius);
+  padding: 2px 8px;
+  opacity: 1;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+  cursor: default;
+}
+
+.chatgml-config-chip:hover {
+  background-color: var(--chatgml-surface-hover);
+  border-color: var(--chatgml-accent);
+}
+
+/* =========================================================================
+ * Flash / help / error notices
+ * ========================================================================= */
+
 .chatgml-flash {
-  font-family: monospace;
+  font-family: var(--chatgml-mono);
   font-size: 12px;
   white-space: pre-wrap;
-  padding: 6px 8px;
-  margin: 4px 0;
-  border-left: 3px solid #6a7ec0;
-  background-color: rgba(106, 126, 192, 0.08);
-  opacity: 0.95;
+  padding: 8px 10px;
+  margin: 0;
+  border-left: 3px solid var(--chatgml-accent);
+  background-color: rgba(137, 180, 250, 0.1);
+  border-radius: var(--chatgml-radius-sm);
+  opacity: 1;
+  color: var(--chatgml-fg);
 }
+
 .chatgml-flash-error {
-  border-left-color: #b23b3b;
-  background-color: rgba(178, 59, 59, 0.08);
-  color: #b23b3b;
+  border-left-color: var(--chatgml-del-fg);
+  background-color: var(--chatgml-del-bg);
+  color: var(--chatgml-del-fg);
 }
-.chatgml-help .chatgml-flash,
-.chatgml-help {
-  font-family: monospace;
+
+.chatgml-help,
+.chatgml-help .chatgml-flash {
+  font-family: var(--chatgml-mono);
   font-size: 12px;
 }
 
-/* ---- Input placeholder hint ---- */
-.chatgml-input::placeholder {
-  font-style: italic;
-  opacity: 0.7;
-}
+/* =========================================================================
+ * Command approval bar
+ * ========================================================================= */
 
-/* ---- Command approval bar ---- */
 .chatgml-cmd-bar {
   display: flex;
   gap: 6px;
   margin-top: 4px;
-}
-.chatgml-cmd-btn {
-  background: #333;
-  color: #ccc;
-  border: 1px solid #555;
-  border-radius: 3px;
-  padding: 2px 8px;
-  cursor: pointer;
-  font-size: 11px;
-}
-.chatgml-cmd-btn:hover {
-  background: #444;
-  color: #fff;
+  flex-wrap: wrap;
 }
 
-/* ---- Tool catalog (collapsible) ---- */
-.chatgml-tool-catalog {
-  margin: 6px 0;
-  border: 1px solid #444;
-  border-radius: 3px;
-  padding: 6px;
+.chatgml-cmd-btn {
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
+
+.chatgml-cmd-btn:hover {
+  background: var(--chatgml-surface-hover);
+  color: var(--chatgml-accent-hover);
+}
+
+/* =========================================================================
+ * Tool catalog (collapsible)
+ * ========================================================================= */
+
+.chatgml-tool-catalog {
+  margin: 0;
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 8px 10px;
+  background: var(--chatgml-card-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .chatgml-tool-catalog-header {
   cursor: pointer;
   font-size: 12px;
-  color: #ccc;
+  color: var(--chatgml-fg);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+
+.chatgml-tool-catalog-header .chatgml-activity-chevron {
+  color: var(--chatgml-accent);
+}
+
 .chatgml-tool-row {
   font-size: 11px;
   margin: 2px 0;
-  color: #aaa;
+  color: var(--chatgml-muted);
+  padding: 3px 6px;
+  border-radius: var(--chatgml-radius-sm);
+  transition: background-color 0.12s ease;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
 }
+
+.chatgml-tool-row:hover {
+  background: var(--chatgml-surface-hover);
+  color: var(--chatgml-fg);
+}
+
 .chatgml-tool-kind {
   display: inline-block;
-  padding: 0 4px;
-  border-radius: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
   font-size: 10px;
   margin-right: 4px;
+  font-weight: 500;
 }
+
 .chatgml-tool-kind-read {
-  background-color: rgba(80, 160, 200, 0.18);
+  background-color: rgba(116, 199, 236, 0.18);
   color: #8ecae6;
 }
+
 .chatgml-tool-kind-gated {
-  background-color: rgba(200, 160, 80, 0.18);
+  background-color: rgba(224, 175, 80, 0.18);
   color: #ffb703;
 }
+
 .chatgml-tool-kind-command {
-  background-color: rgba(200, 80, 80, 0.18);
+  background-color: rgba(243, 139, 168, 0.2);
   color: #ff8a8a;
 }
+
 .chatgml-tool-auto {
   background: #2e7d32;
   color: #fff;
-  padding: 0 4px;
-  border-radius: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
   font-size: 9px;
   margin-left: 4px;
+  font-weight: 500;
 }
+
 .chatgml-tool-desc {
   opacity: 0.85;
 }
@@ -371,127 +1008,240 @@ button[disabled] {
   background: #6a4c93;
   color: #fff;
   font-size: 9px;
-  padding: 0 4px;
-  border-radius: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
   margin-left: 4px;
-}
-.chatgml-mcp-server-row {
-  font-size: 11px;
-  color: #aaa;
+  font-weight: 500;
 }
 
-/* ---- Tool approval preferences ---- */
+.chatgml-mcp-server-row {
+  font-size: 11px;
+  color: var(--chatgml-muted);
+  padding: 2px 6px;
+}
+
+/* =========================================================================
+ * Tool approval preferences
+ * ========================================================================= */
+
 .chatgml-prefs-section {
   margin-top: 12px;
-  font-weight: bold;
-  font-size: 13px;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--chatgml-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
+
 .chatgml-prefs-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin: 4px 0;
-}
-.chatgml-prefs-label {
-  font-size: 12px;
-}
-.chatgml-prefs-select {
-  font-size: 12px;
-  padding: 1px 4px;
+  padding: 2px 0;
 }
 
-/* ---- Checkpoint chips ---- */
+.chatgml-prefs-label {
+  font-size: 12px;
+  color: var(--chatgml-fg);
+}
+
+.chatgml-prefs-select {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+}
+
+/* =========================================================================
+ * Checkpoint chips + undo button
+ * ========================================================================= */
+
 .chatgml-checkpoint-row {
-  flex: 0 0 auto;
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin: 2px 0 4px;
-}
-.chatgml-checkpoint-chip {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: #333;
-  color: #aaa;
-  font-size: 11px;
-  margin: 2px;
-  cursor: pointer;
-}
-.chatgml-checkpoint-chip:hover {
-  background: #444;
-  color: #fff;
-}
-.chatgml-checkpoint-chip.selected {
-  background: #555;
-  color: #fff;
-}
-.chatgml-undo-btn {
-  background: #333;
-  color: #aaa;
-  border: 1px solid #555;
-  border-radius: 3px;
-  padding: 2px 8px;
-  cursor: pointer;
-  font-size: 11px;
-}
-.chatgml-undo-btn:hover {
-  background: #444;
-  color: #fff;
+  margin: 0;
 }
 
-/* ---- @mention chips + autocomplete ---- */
+.chatgml-checkpoint-chip {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: var(--chatgml-radius);
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid var(--chatgml-border);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.chatgml-checkpoint-chip:hover {
+  background: var(--chatgml-surface-hover);
+  color: var(--chatgml-accent-hover);
+  border-color: var(--chatgml-accent);
+}
+
+.chatgml-checkpoint-chip.selected {
+  background: var(--chatgml-accent);
+  color: #fff;
+  border-color: var(--chatgml-accent);
+}
+
+.chatgml-undo-btn {
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.chatgml-undo-btn:hover {
+  background: var(--chatgml-surface-hover);
+  color: var(--chatgml-accent-hover);
+}
+
+/* =========================================================================
+ * @mention chips + autocomplete
+ * ========================================================================= */
+
 .chatgml-mention-row {
-  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
-  margin: 2px 0;
+  margin: 0;
+  gap: 4px;
 }
+
 .chatgml-mention-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: #3a3a3a;
-  color: #ccc;
-  border: 1px solid #555;
-  border-radius: 3px;
-  padding: 1px 6px;
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 2px 6px 2px 8px;
   font-size: 11px;
-  margin: 2px;
+  margin: 0;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
+
+.chatgml-mention-chip:hover {
+  background: var(--chatgml-surface-hover);
+  border-color: var(--chatgml-accent);
+}
+
 .chatgml-mention-chip button {
   background: transparent;
   border: none;
-  color: #aaa;
+  color: var(--chatgml-muted);
   cursor: pointer;
   font-size: 11px;
   padding: 0 2px;
-}
-.chatgml-mention-chip button:hover {
-  color: #fff;
-}
-.chatgml-mention-autocomplete {
-  position: absolute;
-  background: #2d2d2d;
-  border: 1px solid #555;
-  border-radius: 3px;
-  z-index: 1000;
-}
-.chatgml-mention-autocomplete-item {
-  padding: 4px 10px;
-  cursor: pointer;
-  font-size: 12px;
-  color: #ccc;
-}
-.chatgml-mention-autocomplete-item:hover,
-.chatgml-mention-autocomplete-item.selected {
-  background: #444;
-  color: #fff;
+  transition: color 0.15s ease;
 }
 
-/* ---- Inline Ace diff markers + per-hunk approval ---- */
+.chatgml-mention-chip button:hover {
+  color: var(--chatgml-del-fg);
+}
+
+.chatgml-mention-autocomplete {
+  position: absolute;
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.chatgml-mention-autocomplete-item {
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--chatgml-fg);
+}
+
+.chatgml-mention-autocomplete-item:hover,
+.chatgml-mention-autocomplete-item.selected {
+  background: var(--chatgml-surface-hover);
+  color: var(--chatgml-accent-hover);
+}
+
+/* =========================================================================
+ * Scrollbars (themed, thin) — applied to scrollable areas in the panel
+ * ========================================================================= */
+
+.chatgml-panel ::-webkit-scrollbar,
+.chatgml-transcript::-webkit-scrollbar,
+.chatgml-proposals::-webkit-scrollbar,
+.chatgml-activity-content::-webkit-scrollbar,
+.chatgml-mention-autocomplete::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.chatgml-panel ::-webkit-scrollbar-track,
+.chatgml-transcript::-webkit-scrollbar-track,
+.chatgml-proposals::-webkit-scrollbar-track,
+.chatgml-activity-content::-webkit-scrollbar-track,
+.chatgml-mention-autocomplete::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chatgml-panel ::-webkit-scrollbar-thumb,
+.chatgml-transcript::-webkit-scrollbar-thumb,
+.chatgml-proposals::-webkit-scrollbar-thumb,
+.chatgml-activity-content::-webkit-scrollbar-thumb,
+.chatgml-mention-autocomplete::-webkit-scrollbar-thumb {
+  background: var(--chatgml-surface-2);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.chatgml-panel ::-webkit-scrollbar-thumb:hover,
+.chatgml-transcript::-webkit-scrollbar-thumb:hover,
+.chatgml-proposals::-webkit-scrollbar-thumb:hover,
+.chatgml-activity-content::-webkit-scrollbar-thumb:hover,
+.chatgml-mention-autocomplete::-webkit-scrollbar-thumb:hover {
+  background: var(--chatgml-border);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+.chatgml-panel ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox scrollbar styling (thin + themed) */
+.chatgml-panel,
+.chatgml-transcript,
+.chatgml-proposals,
+.chatgml-activity-content,
+.chatgml-mention-autocomplete {
+  scrollbar-width: thin;
+  scrollbar-color: var(--chatgml-surface-2) transparent;
+}
+
+/* =========================================================================
+ * Inline Ace diff markers + per-hunk approval
+ * ========================================================================= */
+
 #main .chatgml-diff-add-line {
   position: absolute;
   left: 0;
@@ -517,13 +1267,264 @@ button[disabled] {
 .chatgml-hunk-bar {
   display: flex;
   gap: 6px;
-  padding: 2px 6px;
-  background: #2d2d2d;
-  border: 1px solid #555;
-  border-radius: 3px;
+  padding: 4px 8px;
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
 }
 
 .chatgml-hunk-bar button {
   font-size: 11px;
-  padding: 1px 8px;
+  padding: 2px 10px;
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.chatgml-hunk-bar button:hover {
+  background: var(--chatgml-surface-hover);
+  color: var(--chatgml-accent-hover);
+}
+/* =========================================================================
+ * Turn-based message bubbles (replaces flat pre transcript)
+ * ========================================================================= */
+
+.chatgml-transcript {
+  /* It's now a div, not pre — reset pre defaults */
+  white-space: normal;
+  margin: 0;
+  padding: var(--chatgml-gap);
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 60px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--chatgml-gap);
+}
+
+.chatgml-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.chatgml-turn-user {
+  /* User bubbles: right-aligned, accent-tinted */
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--chatgml-surface-active);
+  border-radius: var(--chatgml-radius);
+  padding: 8px 12px;
+  border: 1px solid transparent;
+}
+
+.chatgml-turn-assistant {
+  /* Assistant bubbles: left-aligned, card-like */
+  align-self: flex-start;
+  max-width: 92%;
+  background: var(--chatgml-card-bg);
+  border: 1px solid var(--chatgml-card-border);
+  border-radius: var(--chatgml-radius);
+  padding: 10px 14px;
+}
+
+.chatgml-turn-streaming {
+  /* Subtle pulse to show it's still going */
+  border-color: var(--chatgml-accent);
+  box-shadow: 0 0 0 1px rgba(137, 180, 250, 0.12);
+}
+
+.chatgml-turn-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--chatgml-muted);
+  margin-bottom: 2px;
+}
+
+.chatgml-turn-user .chatgml-turn-label {
+  color: var(--chatgml-accent);
+}
+
+.chatgml-turn-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--chatgml-fg);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.chatgml-turn-user .chatgml-turn-body {
+  white-space: pre-wrap; /* preserve user formatting */
+}
+
+/* Legacy fallback pre */
+.chatgml-transcript-legacy {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--chatgml-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--chatgml-fg);
+}
+
+/* =========================================================================
+ * Markdown rendering inside turn bodies
+ * ========================================================================= */
+
+.chatgml-md-body p {
+  margin: 0 0 8px 0;
+}
+.chatgml-md-body p:last-child {
+  margin-bottom: 0;
+}
+
+.chatgml-md-body h1,
+.chatgml-md-body h2,
+.chatgml-md-body h3,
+.chatgml-md-body h4 {
+  margin: 12px 0 6px 0;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.chatgml-md-body h1 {
+  font-size: 16px;
+}
+.chatgml-md-body h2 {
+  font-size: 15px;
+}
+.chatgml-md-body h3 {
+  font-size: 14px;
+}
+.chatgml-md-body h4 {
+  font-size: 13px;
+}
+.chatgml-md-body h1:first-child,
+.chatgml-md-body h2:first-child,
+.chatgml-md-body h3:first-child {
+  margin-top: 0;
+}
+
+.chatgml-md-body pre {
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: var(--chatgml-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+.chatgml-md-body pre code {
+  /* fenced code block: no inline styling, just monospace */
+  background: none;
+  padding: 0;
+  border: none;
+  font-size: inherit;
+  color: var(--chatgml-fg);
+}
+.chatgml-md-body code {
+  /* inline code */
+  background: var(--chatgml-surface-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--chatgml-mono);
+  font-size: 0.9em;
+  color: var(--chatgml-accent-hover);
+}
+.chatgml-md-body ul,
+.chatgml-md-body ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+.chatgml-md-body li {
+  margin: 2px 0;
+}
+.chatgml-md-body blockquote {
+  border-left: 3px solid var(--chatgml-accent);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: var(--chatgml-muted);
+  background: var(--chatgml-surface-hover);
+  border-radius: 0 var(--chatgml-radius-sm) var(--chatgml-radius-sm) 0;
+}
+.chatgml-md-body a {
+  color: var(--chatgml-accent);
+  text-decoration: none;
+}
+.chatgml-md-body a:hover {
+  text-decoration: underline;
+}
+.chatgml-md-body hr {
+  border: none;
+  border-top: 1px solid var(--chatgml-border);
+  margin: 12px 0;
+}
+.chatgml-md-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.chatgml-md-body th,
+.chatgml-md-body td {
+  border: 1px solid var(--chatgml-border);
+  padding: 4px 8px;
+  text-align: left;
+}
+.chatgml-md-body th {
+  background: var(--chatgml-surface-1);
+  font-weight: 600;
+}
+
+/* =========================================================================
+ * Activity row polish: chevrons + hover affordance
+ * ========================================================================= */
+
+.chatgml-activity-row {
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  border-radius: var(--chatgml-radius-sm);
+  padding: 4px 8px;
+  margin-bottom: 2px;
+}
+.chatgml-activity-row:hover {
+  background: var(--chatgml-surface-hover);
+}
+.chatgml-activity-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chatgml-activity-header::before {
+  content: '▶';
+  font-size: 9px;
+  color: var(--chatgml-muted);
+  transition: transform 0.15s ease;
+  display: inline-block;
+  width: 10px;
+  flex-shrink: 0;
+}
+.chatgml-activity-row .chatgml-activity-content.open {
+  display: block;
+}
+.chatgml-activity-row .chatgml-activity-content {
+  display: none;
+}
+/* When the content has the 'open' class, rotate the chevron */
+.chatgml-activity-row:has(.chatgml-activity-content.open) .chatgml-activity-header::before {
+  transform: rotate(90deg);
+}
+/* Fallback for browsers without :has — always show chevron rotated when content is visible */
+.chatgml-activity-content.open ~ .chatgml-activity-header::before,
+.chatgml-activity-row:has(.open) .chatgml-activity-header::before {
+  transform: rotate(90deg);
 }
