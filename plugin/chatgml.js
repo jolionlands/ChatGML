@@ -728,6 +728,7 @@
         // Pull the effective config into the quick-config row (display-only; secrets are redacted).
         configBridge.showEffectiveConfig(projectDirectory, function (err, cfg) {
           if (!err && panel && cfg) panel.setConfig(cfg);
+          if (!err && panel && cfg) panel.setSettingsValues(cfg);
         });
         // Resume the last saved session for the current task so multi-turn context survives restarts.
         void (async function () {
@@ -896,6 +897,33 @@
       },
       onUndo: function () {
         if (client) client.send({ type: 'undo' });
+      },
+      onSaveSettings: function (settings) {
+        void (async function () {
+          var tasks = [];
+          if (settings.model) tasks.push(['chat.model', settings.model]);
+          if (settings.baseURL) tasks.push(['chat.baseURL', settings.baseURL]);
+          if (settings.mode) tasks.push(['mode', settings.mode]);
+          if (settings.approval) tasks.push(['approval', settings.approval]);
+          if (settings.scope) configBridge.setScope(settings.scope);
+          // Write each config field sequentially, then restart the core.
+          var i = 0;
+          function next() {
+            if (i >= tasks.length) {
+              restartCore();
+              if (panel) panel.flash('settings saved — restarting core…');
+              return;
+            }
+            var field = tasks[i][0];
+            var value = tasks[i][1];
+            i++;
+            configBridge.setConfigField(field, value, function (err) {
+              if (err && panel) panel.flash('config set ' + field + ' failed: ' + (err.message || err), true);
+              next();
+            });
+          }
+          next();
+        })();
       },
     });
 

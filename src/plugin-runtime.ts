@@ -255,6 +255,12 @@ export interface PluginState {
    * the assistant text are kept together so the chat panel can render a chronological transcript.
    */
   turns: TurnRecord[];
+  /**
+   * The user's text for the CURRENT (in-flight) turn, set by the client before any token events
+   * arrive so the chat panel can render the user's bubble immediately. Cleared by `turn_end` so
+   * the next turn starts clean.
+   */
+  pendingUserText: string | null;
 }
 
 export function initialPluginState(): PluginState {
@@ -271,6 +277,7 @@ export function initialPluginState(): PluginState {
     catalog: null,
     checkpoints: [],
     turns: [],
+    pendingUserText: null,
   };
 }
 
@@ -286,6 +293,7 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     activity: state.activity,
     pendingProposals: state.pendingProposals,
     turns: state.turns,
+    pendingUserText: state.pendingUserText,
   };
   switch (event.type) {
     case 'status': {
@@ -299,6 +307,7 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     }
     case 'token': {
       next.transcript = state.transcript + event.text;
+      next.answer = (state.answer ?? '') + event.text;
       return next;
     }
     case 'tool_call': {
@@ -461,6 +470,7 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
         ];
       }
       next.answer = null;
+      next.pendingUserText = null;
       return next;
     }
     case 'error': {

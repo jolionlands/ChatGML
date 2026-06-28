@@ -1528,3 +1528,76 @@ button[disabled],
 .chatgml-activity-row:has(.open) .chatgml-activity-header::before {
   transform: rotate(90deg);
 }
+
+/* =========================================================================
+ * Settings gear button + dropdown panel
+ * ========================================================================= */
+
+.chatgml-settings-btn {
+  margin-left: auto;
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 4px 10px;
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.chatgml-settings-btn:hover {
+  background: var(--chatgml-surface-hover);
+  color: var(--chatgml-accent-hover);
+  border-color: var(--chatgml-accent);
+}
+
+.chatgml-settings-panel {
+  flex: 0 0 auto;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--chatgml-card-bg);
+  border: 1px solid var(--chatgml-card-border);
+  border-radius: var(--chatgml-radius);
+  margin: 2px 0;
+}
+
+.chatgml-settings-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.chatgml-settings-label {
+  flex: 0 0 70px;
+  font-size: 12px;
+  color: var(--chatgml-muted);
+  font-weight: 500;
+}
+
+.chatgml-settings-input {
+  flex: 1 1 auto;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.chatgml-settings-input:focus {
+  border-color: var(--chatgml-accent);
+}
+
+.chatgml-settings-save {
+  align-self: flex-end;
+  margin-top: 4px;
+}

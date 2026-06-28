@@ -108,6 +108,7 @@
       catalog: null,
       checkpoints: [],
       turns: [],
+      pendingUserText: null,
     };
   }
 
@@ -125,6 +126,7 @@
       catalog: state.catalog,
       checkpoints: state.checkpoints,
       turns: state.turns,
+      pendingUserText: state.pendingUserText,
     };
     switch (event.type) {
       case 'status':
@@ -136,6 +138,7 @@
         return next;
       case 'token':
         next.transcript = state.transcript + event.text;
+        next.answer = (state.answer || '') + event.text;
         return next;
       case 'tool_call':
         next.activity = state.activity.concat([
@@ -266,6 +269,7 @@
           ]);
         }
         next.answer = null; // the streaming answer is now captured in the turn
+        next.pendingUserText = null;
         return next;
       case 'tool_catalog':
         next.catalog = event.tools ? event.tools.slice() : event.tools;

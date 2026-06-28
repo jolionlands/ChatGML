@@ -94,6 +94,8 @@
         (function (mode) {
           return function () {
             if (typeof self.opts.onModeChange === 'function') self.opts.onModeChange(mode);
+            self.setMode(mode);
+            self.flash('switching to ' + mode + ' mode…');
           };
         })(m),
       );
@@ -240,10 +242,129 @@
     this.mentionDropdownEl.className = 'chatgml-mention-autocomplete';
     this.mentionDropdownEl.style.display = 'none';
     inputRow.appendChild(this.mentionDropdownEl);
+    // Settings gear button (right-aligned in controls row).
+    this.settingsBtn = document.createElement('button');
+    this.settingsBtn.className = 'chatgml-settings-btn';
+    this.settingsBtn.title = 'Settings';
+    this.settingsBtn.innerHTML = '⚙';
+    this.settingsBtn.addEventListener('click', function () {
+      self._toggleSettings();
+    });
+    controls.appendChild(this.settingsBtn);
+
     this.sendBtn.setAttribute('disabled', 'disabled');
     inputRow.appendChild(this.inputEl);
     inputRow.appendChild(this.sendBtn);
     c.appendChild(inputRow);
+  };
+
+  /** Toggle the settings dropdown panel (lazy-builds on first open). */
+  ChatPanel.prototype._toggleSettings = function () {
+    if (this.settingsPanelEl) {
+      this.settingsPanelEl.style.display =
+        this.settingsPanelEl.style.display === 'none' ? '' : 'none';
+      return;
+    }
+    this._buildSettingsPanel();
+  };
+
+  /** Build the inline settings dropdown (model, base URL, mode, approval, scope + Save&Restart). */
+  ChatPanel.prototype._buildSettingsPanel = function () {
+    var self = this;
+    this.settingsPanelEl = document.createElement('div');
+    this.settingsPanelEl.className = 'chatgml-settings-panel';
+
+    function makeRow(labelText, el) {
+      var row = document.createElement('div');
+      row.className = 'chatgml-settings-row';
+      var label = document.createElement('label');
+      label.textContent = labelText;
+      label.className = 'chatgml-settings-label';
+      row.appendChild(label);
+      row.appendChild(el);
+      return row;
+    }
+
+    // Model
+    this.settingsModelInput = document.createElement('input');
+    this.settingsModelInput.type = 'text';
+    this.settingsModelInput.className = 'chatgml-settings-input';
+    this.settingsModelInput.placeholder = 'chat model id';
+    this.settingsPanelEl.appendChild(makeRow('Model', this.settingsModelInput));
+
+    // Base URL
+    this.settingsUrlInput = document.createElement('input');
+    this.settingsUrlInput.type = 'text';
+    this.settingsUrlInput.className = 'chatgml-settings-input';
+    this.settingsUrlInput.placeholder = 'chat endpoint URL';
+    this.settingsPanelEl.appendChild(makeRow('Base URL', this.settingsUrlInput));
+
+    // Mode select
+    this.settingsModeSelect = document.createElement('select');
+    this.settingsModeSelect.className = 'chatgml-settings-input';
+    var modes = ['code', 'ask', 'debug', 'architect'];
+    for (var i = 0; i < modes.length; i++) {
+      var opt = document.createElement('option');
+      opt.value = modes[i];
+      opt.textContent = modes[i][0].toUpperCase() + modes[i].slice(1);
+      this.settingsModeSelect.appendChild(opt);
+    }
+    this.settingsPanelEl.appendChild(makeRow('Mode', this.settingsModeSelect));
+
+    // Approval select
+    this.settingsApprovalSelect = document.createElement('select');
+    this.settingsApprovalSelect.className = 'chatgml-settings-input';
+    var gatedOpt = document.createElement('option');
+    gatedOpt.value = 'gated';
+    gatedOpt.textContent = 'gated';
+    var autoOpt = document.createElement('option');
+    autoOpt.value = 'auto';
+    autoOpt.textContent = 'auto';
+    this.settingsApprovalSelect.appendChild(gatedOpt);
+    this.settingsApprovalSelect.appendChild(autoOpt);
+    this.settingsPanelEl.appendChild(makeRow('Approval', this.settingsApprovalSelect));
+
+    // Scope
+    this.settingsScopeInput = document.createElement('input');
+    this.settingsScopeInput.type = 'text';
+    this.settingsScopeInput.className = 'chatgml-settings-input';
+    this.settingsScopeInput.placeholder = 'memory scope';
+    this.settingsPanelEl.appendChild(makeRow('Scope', this.settingsScopeInput));
+
+    // Save & Restart button
+    var saveBtn = document.createElement('button');
+    saveBtn.className = 'run-button chatgml-settings-save';
+    saveBtn.textContent = 'Save & Restart';
+    saveBtn.addEventListener('click', function () {
+      var settings = {
+        model: self.settingsModelInput.value.trim(),
+        baseURL: self.settingsUrlInput.value.trim(),
+        mode: self.settingsModeSelect.value,
+        approval: self.settingsApprovalSelect.value,
+        scope: self.settingsScopeInput.value.trim(),
+      };
+      if (typeof self.opts.onSaveSettings === 'function') {
+        self.opts.onSaveSettings(settings);
+      }
+      self.settingsPanelEl.style.display = 'none';
+    });
+    this.settingsPanelEl.appendChild(saveBtn);
+
+    // Insert after controls, before status line.
+    this.opts.container.insertBefore(this.settingsPanelEl, this.statusEl);
+  };
+
+  /** Populate settings inputs from a config object (from `chatgml config show`). */
+  ChatPanel.prototype.setSettingsValues = function (cfg) {
+    if (!cfg) return;
+    if (cfg.chat && cfg.chat.model && this.settingsModelInput)
+      this.settingsModelInput.value = cfg.chat.model;
+    if (cfg.chat && cfg.chat.baseURL && this.settingsUrlInput)
+      this.settingsUrlInput.value = cfg.chat.baseURL;
+    if (cfg.mode && this.settingsModeSelect) this.settingsModeSelect.value = cfg.mode;
+    if (cfg.approval && this.settingsApprovalSelect)
+      this.settingsApprovalSelect.value = cfg.approval;
+    if (cfg.scope && this.settingsScopeInput) this.settingsScopeInput.value = cfg.scope;
   };
 
   /** Submit the current input: route slash commands; otherwise send a user message + editor ctx + mentions. */
@@ -279,8 +400,13 @@
     if (cleanText === '' && mentionsResult.mentions.length === 0) return;
     const send = this.opts.onSendWithContext || this.opts.onSend;
     send(cleanText, Object.assign({}, context, { mentions: mentionsResult.mentions }));
+    // Show the user message immediately (before the core responds) for instant feedback.
+    this.state.pendingUserText = cleanText;
+    this.state.answer = null;
+    this.state.transcript = '';
     this.inputEl.value = '';
     this._renderMentionChips();
+    this.render();
   };
 
   /**
@@ -468,6 +594,7 @@
       this.selectedCheckpointId = null;
       this.sendBtn.setAttribute('disabled', 'disabled');
       this.reindexBtn.setAttribute('disabled', 'disabled');
+      this.state.pendingUserText = null;
       this.diffView.clear();
       if (error) this.showRestart();
       else this.hideRestart();
@@ -515,6 +642,7 @@
     this.state.error = null;
     this.state.checkpoints = [];
     this.state.turns = [];
+    this.state.pendingUserText = null;
     this.lastWrittenPaths.clear();
     this.selectedCheckpointId = null;
     this.diffView.clear();
@@ -778,6 +906,22 @@
     // transcript text only when no turns and no answer are present (so a stale display survives
     // /clear's transient state).
     this.transcriptEl.innerHTML = '';
+
+    // Pending user message (sent but not yet finalized into a turn) — shows immediately.
+    if (s.pendingUserText && String(s.pendingUserText).trim() !== '') {
+      var pendBubble = document.createElement('div');
+      pendBubble.className = 'chatgml-turn chatgml-turn-user';
+      var pendLabel = document.createElement('div');
+      pendLabel.className = 'chatgml-turn-label';
+      pendLabel.textContent = 'You';
+      pendBubble.appendChild(pendLabel);
+      var pendBody = document.createElement('div');
+      pendBody.className = 'chatgml-turn-body';
+      pendBody.textContent = s.pendingUserText;
+      pendBubble.appendChild(pendBody);
+      this.transcriptEl.appendChild(pendBubble);
+    }
+
     var MarkdownApi =
       typeof root !== 'undefined' && root.ChatGmlMarkdown
         ? root.ChatGmlMarkdown

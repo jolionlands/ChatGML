@@ -319,3 +319,119 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Streaming UX: pendingUserText + token->answer accumulation.
+// These tests pin behavior so the streaming bubble renders mid-turn AND the
+// user's bubble can appear the moment a turn starts. Both reducers (TS + JS)
+// must agree.
+// ---------------------------------------------------------------------------
+describe('streaming UX (pendingUserText + token->answer)', () => {
+  it('initialPluginState: pendingUserText starts as null on both copies', () => {
+    expect(js.initialPluginState().pendingUserText).toBeNull();
+    expect(ts.initialPluginState().pendingUserText).toBeNull();
+    // The two copies must agree on every key, including the new one.
+    expect(Object.keys(js.initialPluginState()).sort()).toEqual(
+      Object.keys(ts.initialPluginState()).sort(),
+    );
+  });
+
+  it('token event accumulates to BOTH transcript and answer (so the streaming bubble updates live)', () => {
+    const ev = { type: 'token' as const, text: 'hello ' };
+    const tsState = ts.reducePluginState(ev, ts.initialPluginState());
+    const jsState = js.reducePluginState(ev, js.initialPluginState());
+    // Before this fix `token` only touched `transcript`; `answer` was left null until the terminal
+    // `answer` event, which made the streaming bubble appear blank during a turn.
+    expect(tsState.transcript).toBe('hello ');
+    expect(tsState.answer).toBe('hello ');
+    expect(jsState.transcript).toBe('hello ');
+    expect(jsState.answer).toBe('hello ');
+    expect(jsState).toEqual(tsState);
+  });
+
+  it('multiple token events accumulate sequentially to answer (no overwrite)', () => {
+    const events: AgentEvent[] = [
+      { type: 'token', text: 'Hi ' },
+      { type: 'token', text: 'there ' },
+      { type: 'token', text: 'friend' },
+    ];
+    let tsState = ts.initialPluginState();
+    let jsState = js.initialPluginState();
+    for (const e of events) {
+      tsState = ts.reducePluginState(e, tsState);
+      jsState = js.reducePluginState(e, jsState);
+    }
+    expect(tsState.transcript).toBe('Hi there friend');
+    expect(tsState.answer).toBe('Hi there friend');
+    expect(jsState.transcript).toBe('Hi there friend');
+    expect(jsState.answer).toBe('Hi there friend');
+    expect(jsState).toEqual(tsState);
+  });
+
+  it('turn_end clears pendingUserText AND answer (the next user turn starts clean)', () => {
+    // Pretend the client set pendingUserText mid-turn (typing -> sent) and streaming has accumulated.
+    let tsState = ts.reducePluginState({ type: 'token', text: 'a' }, ts.initialPluginState());
+    tsState = { ...tsState, pendingUserText: 'user said hi' };
+    let jsState = js.reducePluginState({ type: 'token', text: 'a' }, js.initialPluginState());
+    jsState = { ...jsState, pendingUserText: 'user said hi' };
+
+    const ev: AgentEvent = {
+      type: 'turn_end',
+      userText: 'user said hi',
+      assistantText: 'a',
+      sources: [],
+    };
+    tsState = ts.reducePluginState(ev, tsState);
+    jsState = js.reducePluginState(ev, jsState);
+    expect(tsState.answer).toBeNull();
+    expect(tsState.pendingUserText).toBeNull();
+    expect(jsState.answer).toBeNull();
+    expect(jsState.pendingUserText).toBeNull();
+    expect(jsState).toEqual(tsState);
+  });
+
+  it('answer event replaces the accumulated streaming answer (terminal text wins)', () => {
+    // Build up some streamed tokens, then the terminal `answer` arrives.
+    const events: AgentEvent[] = [
+      { type: 'token', text: 'draft ' },
+      { type: 'token', text: 'one' },
+      { type: 'answer', text: 'final answer', sources: [{ path: 'a.gml', provider: 'local' }] },
+    ];
+    let tsState = ts.initialPluginState();
+    let jsState = js.initialPluginState();
+    for (const e of events) {
+      tsState = ts.reducePluginState(e, tsState);
+      jsState = js.reducePluginState(e, jsState);
+    }
+    // The terminal answer REPLACES the streamed draft — it does not concatenate.
+    expect(tsState.answer).toBe('final answer');
+    expect(jsState.answer).toBe('final answer');
+    // transcript still carries the streamed accumulation (kept for diagnostics).
+    expect(tsState.transcript).toBe('draft one');
+    expect(jsState.transcript).toBe('draft one');
+    // Sources come from the answer event.
+    expect(tsState.sources).toEqual([{ path: 'a.gml', provider: 'local' }]);
+    expect(jsState.sources).toEqual(tsState.sources);
+    expect(jsState).toEqual(tsState);
+  });
+
+  it('other events carry pendingUserText through unchanged (it only mutates on turn_end)', () => {
+    // Cast through PluginState so the literal `'pending'` does not narrow the field type.
+    let tsState: ts.PluginState = { ...ts.initialPluginState(), pendingUserText: 'pending' };
+    // The CJS port uses plain objects with the same shape; keep parity via the same cast pattern.
+    type JsState = ReturnType<typeof js.initialPluginState>;
+    let jsState: JsState = { ...js.initialPluginState(), pendingUserText: 'pending' };
+    const events: AgentEvent[] = [
+      { type: 'status', phase: 'thinking' },
+      { type: 'token', text: 'x' },
+      { type: 'answer', text: 'y', sources: [] },
+    ];
+    for (const e of events) {
+      tsState = ts.reducePluginState(e, tsState);
+      jsState = js.reducePluginState(e, jsState);
+      expect(tsState.pendingUserText).toBe('pending');
+      expect(jsState.pendingUserText).toBe('pending');
+    }
+    expect(jsState).toEqual(tsState);
+  });
+});
