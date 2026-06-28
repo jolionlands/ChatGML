@@ -17,6 +17,10 @@ vector_store/
 /coverage/
 *.tsbuildinfo
 
+# The VS Code extension ships its own dep tree (npm install inside vscode/).
+vscode/node_modules/
+vscode/dist/
+
 # ChatGML local store + project config (never commit secrets)
 /.chatgml/
 /.chatgml.json

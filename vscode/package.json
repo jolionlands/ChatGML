@@ -1,0 +1,131 @@
+{
+  "name": "chatgml",
+  "displayName": "ChatGML — GameMaker coding agent",
+  "description": "GameMaker-aware agentic coding assistant. Spawns the chatgml core (chatgml serve) over NDJSON and renders a chat panel with slash commands, editor-context awareness, quick config, resumable sessions, and inline diff on approve.",
+  "version": "0.1.0",
+  "publisher": "jolionlands",
+  "license": "SEE LICENSE",
+  "engines": {
+    "vscode": "^1.84.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "gamemaker",
+    "gml",
+    "gmedit",
+    "agent",
+    "coding-assistant",
+    "llm"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCommand:chatgml.openChat",
+    "onCommand:chatgml.askSelection",
+    "onCommand:chatgml.reindex",
+    "workspaceContains:**/*.yyp",
+    "workspaceContains:**/*.gml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "chatgml.openChat",
+        "title": "ChatGML: Open Chat",
+        "category": "ChatGML"
+      },
+      {
+        "command": "chatgml.askSelection",
+        "title": "ChatGML: Ask About Selection",
+        "category": "ChatGML"
+      },
+      {
+        "command": "chatgml.reindex",
+        "title": "ChatGML: Reindex Project",
+        "category": "ChatGML"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "chatgml.askSelection",
+          "when": "editorHasSelection || editorLangId == gml",
+          "group": "chatgml@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "chatgml.openChat"
+        },
+        {
+          "command": "chatgml.askSelection"
+        },
+        {
+          "command": "chatgml.reindex",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ChatGML",
+      "properties": {
+        "chatgml.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the chatgml executable. If empty, the extension resolves via CHATGML_BIN, the npm shim (%APPDATA%/npm/chatgml.cmd), or the bundled dist/cli.js next to this extension (dev checkout)."
+        },
+        "chatgml.scope": {
+          "type": "string",
+          "default": "",
+          "description": "Memory scope label (passed as --scope). When empty the core falls back to its config."
+        },
+        "chatgml.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, pass --approval auto to the core (skips per-edit approval prompts). HIGH-RISK destructive edits are still gated by the core even in auto mode."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "chatgml-sidebar",
+          "title": "ChatGML",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "chatgml-sidebar": [
+        {
+          "type": "webview",
+          "id": "chatgml.chatView",
+          "name": "Chat",
+          "icon": "media/icon.svg",
+          "contextualTitle": "ChatGML"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "chatgml.chatView",
+        "contents": "ChatGML is a GameMaker-aware coding agent. Open a workspace folder containing your project (.yyp or .gml), then run ChatGML: Open Chat.\n[Open Chat](command:chatgml.openChat)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.84.0",
+    "typescript": "~5.4.0"
+  }
+}
