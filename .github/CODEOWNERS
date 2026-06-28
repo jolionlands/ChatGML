@@ -1,0 +1,50 @@
+# CODEOWNERS — GitHub auto-assigns reviewers based on paths.
+#
+# Format: <path glob>   @<owner-or-team>
+# Lines starting with `#` are comments. Last match wins; put more specific
+# rules AFTER general ones.
+#
+# Security-critical paths get a required reviewer. See SECURITY.md for the
+# threat model — these are the files where a regression = a CVE.
+
+# --- Core agent + safety --------------------------------------------------------
+
+# The single fs chokepoint (lexical + realpath + atomic rename). All
+# fs-touching tools route through here. A regression = out-of-root writes.
+/src/tools/sandbox.ts                              @jolionlands
+
+# The four-layer config merge + untrusted-project-config guards + secret
+# resolution + literal-secret refusal. The whole security model funnels
+# through here.
+/src/config.ts                                     @jolionlands
+
+# The agent loop + the approval gate (destructive-edit backstop + per-request
+# policy overrides + terminal-event contract).
+/src/agent.ts                                      @jolionlands
+
+# --- Wire protocol --------------------------------------------------------------
+
+# Any change here must update plugin/state.js + docs/agent-api.md +
+# test/fixtures/agent-api-transcript.ndjson in lockstep (see test/README.md).
+/src/protocol.ts                                    @jolionlands
+/src/types.ts                                       @jolionlands
+
+# --- Memory (pluggable backends) -------------------------------------------------
+
+/src/memory/                                        @jolionlands
+/src/index/run-index.ts                             @jolionlands
+
+# --- GMEdit plugins -------------------------------------------------------------
+
+# The hand-written CJS port of src/plugin-runtime.ts — parity-tested.
+/plugin/state.js                                    @jolionlands
+/plugin/child-process.js                            @jolionlands
+
+# --- Default reviewer for everything else ---------------------------------------
+
+# Anyone with write access can review small docs / CI / housekeeping changes.
+/.github/                                           @jolionlands
+/docs/                                              @jolionlands
+/CHANGELOG.md                                       @jolionlands
+/CONTRIBUTING.md                                    @jolionlands
+/SECURITY.md                                        @jolionlands
