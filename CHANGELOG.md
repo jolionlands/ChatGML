@@ -4,9 +4,25 @@ All notable changes to ChatGML are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are scoped to the
 TypeScript rewrite (`0.1.x`).
 
-## [Unreleased]
+## [Unreleased] — Post-`v0.1.0` hardening pass
 
 ### Added
+- **VS Code extension (`vscode/`)** that mounts a ChatGML view in the activity bar and
+  spawns the same `chatgml serve` core over the v2 NDJSON protocol as the GMEdit
+  plugin. Reuses the core's verified `plugin/state.js`. Source-only (run `npm install`
+  + `npm run build` in `vscode/`).
+- **GMEdit companion plugins (`plugin-inline/`, `plugin-explain/`)** — right-click
+  "Edit with AI" and "Explain this". Share `plugin/child-process.js` + `plugin/state.js`
+  with the main plugin.
+- **MCP server (`src/mcp.ts`) + client (`src/mcp-client.ts`) + tool wrapping
+  (`src/tools/mcp.ts`)** — exposes ChatGML's GML-aware tool registry as MCP tools so any
+  MCP-speaking agent IDE (Cline, Cursor, Claude Code, Copilot Chat) can use it.
+- **`execute_command` tool (`src/tools/exec.ts`)** — approval-gated, sandboxed cwd,
+  dangerous-token + shell-metachar blacklist.
+- **`search_replace` tool (`src/tools/search_replace.ts`)** — Cline/Roo-style
+  SEARCH/REPLACE block editor.
+- **`checkpoint` tool (`src/tools/checkpoint.ts`)** — apply_patch writes are
+  checkpointed in `.chatgml/checkpoints/` for the `chatgml mcp`'s `undo` command.
 - **Mode-filtered tool surface.** `serve` `tool_catalog` and MCP `tools/list` now hide
   `apply_patch` / `search_replace` / `execute_command` when `config.mode` is `ask`. The
   agent loop already filtered by mode (so the model never sees them); this aligns the
@@ -103,7 +119,7 @@ TypeScript rewrite (`0.1.x`).
 - **`prettier --check`** is now in `npm run ci`.
 - **`ci.yml` concurrency cancellation** — stale branch pushes don't burn runners.
 
-## [0.1.0] — 2026-06-25 — Initial TypeScript rewrite
+## [0.1.0] — 2026-06-25 — Initial TypeScript rewrite (tagged `v0.1.0`)
 
 The Python `talk-codebase` package is replaced ground-up. Ground-up TypeScript
 ESM rewrite of the agentic coding assistant. New: no Python, no pip, no

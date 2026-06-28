@@ -111,13 +111,18 @@ We do NOT defend against:
 
 ## Reporting a vulnerability
 
-Email **security@…** (TODO: set up an actual security inbox before the first tagged
-release). Please include:
+Open a **GitHub Security Advisory** at
+<https://github.com/jolionlands/ChatGML/security/advisories/new> (private; only the
+maintainer is notified until the advisory is published). Include:
 
 1. The version (`chatgml --version`).
 2. The OS + Node version (`node --version`).
 3. Reproduction steps — minimal `chatgml` command, plus any config or env.
 4. Expected vs actual behavior.
+
+If you cannot use GitHub Security Advisories, file a regular issue marked
+**SECURITY:** in the title and we will convert it to a private advisory. Please do
+**not** include exploit details in the public issue body — coordinate privately first.
 
 We will acknowledge within 2 business days and aim to patch within 7 days for high-severity
 issues. Please do not file public GitHub issues for suspected vulnerabilities — coordinated
@@ -125,11 +130,13 @@ disclosure first.
 
 ## Audit history
 
-- **2026-06-25** — Initial security review (M7 milestone). See
+- **2026-06-25** — Initial security review (M7 milestone). Tag: `v0.1.0`. See
   `docs/superpowers/plans/2026-06-24-chatgml-implementation-plan.md` for the audit
   resolutions captured during the rewrite.
-- **2026-06-28** — Post-rewrite hardening pass (this work). Fixes:
+- **2026-06-28** — Post-rewrite hardening pass (this work). Tag: post-`v0.1.0`. Fixes:
   - MCP `tools/list` now mode-filtered (was advertising `apply_patch` in `ask` mode).
   - MCP `forceGate` warnings now surfaced to the tool result (were silently dropped).
   - Hermetic CLI/config tests (were silently loading the developer's real config).
   - `plugin/legacy/` removed (was a known-insecure Python-era plugin still checked in).
+  - MCP client recovers good lines from `ProtocolError.parsed` instead of dropping the
+    whole response on a single malformed frame.

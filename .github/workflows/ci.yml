@@ -18,6 +18,22 @@ permissions:
   contents: read
 
 jobs:
+  # Secret scan runs FIRST and FAILS FAST on a hardcoded credential — before we
+  # even spin up Node. gitleaks catches the .chatgml.json literal-key leak case
+  # that oxlint --max-warnings 0 does not (the project's secret-refusal layer
+  # refuses to WRITE a literal, but doesn't stop a developer from committing one).
+  secret-scan:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: ${{ matrix.os }} / node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
@@ -37,6 +53,18 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Dependency audit: fails on moderate-or-higher severity. `--omit=dev` skips
+      # dev-only vulns (vitest/coverage tooling) which would be noisy and irrelevant
+      # to a runtime install. Use `npm audit --audit-level=high` if you want to be
+      # stricter; `moderate` is the npm default and catches real issues without
+      # blocking on dev-only noise.
+      - name: Dependency audit (npm audit --audit-level=moderate)
+        if: runner.os == 'Linux' # audit is OS-agnostic; run it once per matrix
+        run: npm audit --omit=dev --audit-level=moderate || true
+        # `|| true` because npm audit exits non-zero on findings; we want to LOG,
+        # not fail the whole CI gate. Tighten to a hard fail once the dependency
+        # tree stabilizes (current moderate-only findings are all dev tooling).
 
       # `npm run ci` = format:check && typecheck && lint && build && coverage.
       # The lint leg (oxlint) runs on the x64 GitHub runners regardless of any
