@@ -1,0 +1,6 @@
+{
+  "name": "chatgml-inline",
+  "description": "Inline AI edits: select code → 'Edit with AI' → type an instruction → ChatGML proposes a unified diff → accept/reject inline. Runs ChatGML as a one-shot child process per edit.",
+  "scripts": ["inline.js"],
+  "stylesheets": ["inline.css"]
+}

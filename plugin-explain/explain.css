@@ -1,0 +1,42 @@
+.chatgml-explain-overlay {
+  position: absolute;
+  z-index: 10000;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 60%;
+  max-height: 70%;
+  overflow-y: auto;
+  background-color: var(--gmedit-theme, #2b2b2b);
+  border: 2px solid #6a7ec0;
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 13px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+.chatgml-explain-header {
+  font-weight: bold;
+  margin-bottom: 6px;
+  color: #6a7ec0;
+}
+.chatgml-explain-body {
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 12px;
+  margin: 6px 0;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.chatgml-explain-close {
+  padding: 4px 12px;
+  cursor: pointer;
+  background-color: #4caf50;
+  border: none;
+  color: white;
+  border-radius: 2px;
+  margin-top: 6px;
+}
+.chatgml-explain-close:hover {
+  background-color: #357a38;
+}

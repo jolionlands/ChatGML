@@ -1,0 +1,6 @@
+{
+  "name": "chatgml-explain",
+  "description": "Context-menu 'Explain this' — sends the current selection (or the whole file) to ChatGML and shows an explanation overlay. One-shot chatgml serve child process.",
+  "scripts": ["explain.js"],
+  "stylesheets": ["explain.css"]
+}

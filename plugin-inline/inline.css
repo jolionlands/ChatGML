@@ -1,0 +1,102 @@
+.chatgml-inline-overlay {
+  position: absolute;
+  z-index: 10000;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 70%;
+  max-height: 60%;
+  overflow-y: auto;
+  background-color: var(--gmedit-theme, #2b2b2b);
+  border: 2px solid #6a7ec0;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+.chatgml-inline-header {
+  font-weight: bold;
+  margin-bottom: 4px;
+  color: #6a7ec0;
+}
+.chatgml-inline-diff {
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 12px;
+  margin: 4px 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.chatgml-inline-diff-add {
+  background-color: rgba(80, 200, 80, 0.18);
+  display: block;
+}
+.chatgml-inline-diff-del {
+  background-color: rgba(200, 80, 80, 0.18);
+  display: block;
+}
+.chatgml-inline-diff-hunk {
+  color: #6a7ec0;
+  display: block;
+}
+.chatgml-inline-diff-ctx {
+  display: block;
+}
+.chatgml-inline-status {
+  font-style: italic;
+  opacity: 0.7;
+  margin: 4px 0;
+}
+.chatgml-inline-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.chatgml-inline-actions .run-button {
+  padding: 4px 12px;
+  cursor: pointer;
+  background-color: #4caf50;
+  border: none;
+  color: white;
+  border-radius: 2px;
+}
+.chatgml-inline-actions .run-button:hover:not([disabled]) {
+  background-color: #357a38;
+}
+.chatgml-inline-actions .chatgml-reject {
+  background-color: #b23b3b;
+}
+.chatgml-inline-actions .chatgml-reject:hover:not([disabled]) {
+  background-color: #7d2929;
+}
+.chatgml-inline-actions button[disabled] {
+  background-color: #ccc;
+  cursor: default;
+}
+.chatgml-inline-applied {
+  font-style: italic;
+  color: #4caf50;
+  margin-top: 4px;
+}
+.chatgml-inline-text {
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 12px;
+  margin: 4px 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.chatgml-inline-toast {
+  position: absolute;
+  z-index: 10001;
+  bottom: 8px;
+  right: 8px;
+  background-color: #b23b3b;
+  color: white;
+  padding: 6px 12px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: monospace;
+  max-width: 400px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
