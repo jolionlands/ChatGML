@@ -330,14 +330,18 @@
     c.appendChild(inputRow);
   };
 
-  /** Toggle the settings dropdown panel (lazy-builds on first open). */
+  /** Toggle the settings dropdown panel (lazy-builds on first open). Visibility is determined
+   * from the COMPUTED display value, not just the inline style: CSS sets the default to
+   * `display: none`, so a freshly-built panel has empty inline style but is still visually hidden
+   * — checking inline alone would make the toggle wrong on the very first click. */
   ChatPanel.prototype._toggleSettings = function () {
-    if (this.settingsPanelEl) {
-      this.settingsPanelEl.style.display =
-        this.settingsPanelEl.style.display === 'none' ? '' : 'none';
-      return;
-    }
-    this._buildSettingsPanel();
+    if (!this.settingsPanelEl) this._buildSettingsPanel();
+    var el = this.settingsPanelEl;
+    var computed =
+      typeof getComputedStyle === 'function'
+        ? getComputedStyle(el).display
+        : el.style.display;
+    el.style.display = computed === 'none' ? 'flex' : 'none';
   };
 
   /** Build the inline settings dropdown (model, base URL, api key, embed model, embed base URL,
@@ -346,6 +350,9 @@
     var self = this;
     this.settingsPanelEl = document.createElement('div');
     this.settingsPanelEl.className = 'chatgml-settings-panel';
+    // Explicitly hidden at build time so the computed-style read in `_toggleSettings` returns
+    // 'none' on the first click. (CSS `display: none` alone isn't visible to inline-style checks.)
+    this.settingsPanelEl.style.display = 'none';
 
     function makeRow(labelText, el) {
       var row = document.createElement('div');
