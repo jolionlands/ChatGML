@@ -269,6 +269,56 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
     expect(jsState.answer).toBeNull();
   });
 
+  it('reducePluginState: turn_end with tier stamps the per-turn tier on both copies (parity: audit gap #22)', () => {
+    // The Cline-style tier UI needs turn_end.tier to land on the stored turn record so the panel
+    // can render the per-bubble badge. Both reducer copies MUST agree on the stored value field-
+    // for-field (additive — does not change the existing assertions above).
+    const cases: Array<{ tier: unknown; expected: 'planner' | 'implementer' | 'reviewer' | null }> = [
+      { tier: 'planner', expected: 'planner' },
+      { tier: 'implementer', expected: 'implementer' },
+      { tier: 'reviewer', expected: 'reviewer' },
+      { tier: null, expected: null },
+      { tier: undefined, expected: null },
+      { tier: 'bogus', expected: null }, // defensive normalization
+    ];
+    for (const c of cases) {
+      const ev = {
+        type: 'turn_end' as const,
+        userText: 'q',
+        assistantText: 'a',
+        sources: [],
+        // Cast to silence the TS union: we're testing the reducer's defensive normalization
+        // across values the schema would already have rejected.
+        tier: c.tier as 'planner' | 'implementer' | 'reviewer' | null | undefined,
+      };
+      const tsState = ts.reducePluginState(ev, ts.initialPluginState());
+      const jsState = js.reducePluginState(ev, js.initialPluginState());
+      // The latest turn record (index 0; the reducer appends) must carry the normalized tier.
+      expect(jsState.turns.length).toBe(tsState.turns.length);
+      expect(jsState.turns[0]?.tier ?? null).toBe(c.expected);
+      expect(tsState.turns[0]?.tier ?? null).toBe(c.expected);
+      // Both copies must agree field-for-field on the new tier stamp.
+      expect(jsState.turns[0]?.tier).toBe(tsState.turns[0]?.tier);
+    }
+  });
+
+  it('parseSlashCommand: /tier is parsed identically on both copies (parity: audit gap #22)', () => {
+    // The new /tier slash command is dispatched by both the CJS plugin and the ESM runtime's
+    // copy of parseSlashCommand. Their outputs MUST agree on the four cases (one canonical name
+    // per tier + the "off" sentinel) so the panel and the test runtime see the same shape.
+    const cases = [
+      '/tier',
+      '/tier planner',
+      '/tier implementer',
+      '/tier reviewer',
+      '/tier off',
+      '/tier nonsense',
+    ];
+    for (const c of cases) {
+      expect(js.parseSlashCommand(c)).toEqual(ts.parseSlashCommand(c));
+    }
+  });
+
   it('reducePluginState: tool_catalog is stored identically on both copies', () => {
     const tools = [{ name: 'read_file', description: 'Read a file', kind: 'read' as const }];
     const ev = { type: 'tool_catalog' as const, tools };

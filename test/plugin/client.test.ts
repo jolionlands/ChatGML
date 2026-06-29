@@ -188,6 +188,35 @@ describe('NdjsonClient', () => {
     ]);
   });
 
+  it('sendUser forwards per-turn tier override onto the wire (planner|implementer|reviewer)', () => {
+    // The /tier slash command (and the picker chip) produce a per-turn tier override; the client
+    // must include it on the UserCommand wire message. Unknown / null / absent values are dropped
+    // (the core falls back to mode-based auto-dispatch).
+    const sent: unknown[] = [];
+    const client = new NdjsonClient({ projectDir: '/p', onEvent: () => {} });
+    (client as ClientLike & { send(cmd: unknown): boolean }).send = function (cmd: unknown) {
+      sent.push(cmd);
+      return true;
+    };
+    // Per-turn override set.
+    client.sendUser('hi', undefined, { tier: 'planner' });
+    client.sendUser('hi', { openFile: 'a.gml' }, { tier: 'implementer', taskId: 'feat-1' });
+    // Off (null) -> no `tier` field on the wire.
+    client.sendUser('hi', undefined, { tier: null });
+    // Unknown name -> dropped (defensive — should never happen since the panel only emits the
+    // three canonical names, but a future caller must not be able to push an arbitrary value).
+    client.sendUser('hi', undefined, { tier: 'bogus' as unknown as 'planner' });
+    // No opts at all -> no `tier` field.
+    client.sendUser('hi');
+    expect(sent).toEqual([
+      { type: 'user', text: 'hi', tier: 'planner' },
+      { type: 'user', text: 'hi', context: { openFile: 'a.gml' }, taskId: 'feat-1', tier: 'implementer' },
+      { type: 'user', text: 'hi' },
+      { type: 'user', text: 'hi' },
+      { type: 'user', text: 'hi' },
+    ]);
+  });
+
   it('surfaces a clear error (no silent ENOENT) when the binary cannot be resolved', async () => {
     // No configured path, no CHATGML_BIN, and a pluginDir with NO dist/cli.js -> resolver throws.
     tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'plugin-noresolve-'));

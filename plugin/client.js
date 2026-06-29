@@ -76,9 +76,22 @@
   NdjsonClient.prototype.send = function (command) {
     return this.session ? this.session.sendJson(command) : false;
   };
-  NdjsonClient.prototype.sendUser = function (text, context) {
+  NdjsonClient.prototype.sendUser = function (text, context, opts) {
+    // opts: { taskId?, tier? } - forwarded onto the wire command. `tier` is the per-turn override
+    // (`planner` | `implementer` | `reviewer`); null/absent/'' means "no override, fall back to
+    // mode-based auto-dispatch". Mirrors UserCommand.tier in src/types.ts.
     const cmd = { type: 'user', text: text };
     if (context !== undefined && context !== null) cmd.context = Object.assign({}, context);
+    if (opts) {
+      if (opts.taskId !== undefined && opts.taskId !== null) cmd.taskId = opts.taskId;
+      if (
+        opts.tier === 'planner' ||
+        opts.tier === 'implementer' ||
+        opts.tier === 'reviewer'
+      ) {
+        cmd.tier = opts.tier;
+      }
+    }
     return this.send(cmd);
   };
   NdjsonClient.prototype.reindex = function () {

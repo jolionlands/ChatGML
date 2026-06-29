@@ -32,6 +32,8 @@
    * @param {string} [settings.mode]          mode (non-empty => mode)
    * @param {string} [settings.approval]      approval policy (non-empty => approval)
    * @param {string} [settings.scope]         memory scope (plugin pref, not a config field)
+   * @param {object} [settings.tiers]         per-tier overrides: { planner?: {model?,baseURL?}, implementer?: {...}, reviewer?: {...} }
+   *                                          Each non-empty leaf becomes a `tiers.X.<field>` config command.
    * @returns {{ commands: Array<[string,string]>, scope: string|null }}
    */
   function buildSettingsCommands(settings) {
@@ -54,6 +56,25 @@
     pushIfNonEmpty('chat.apiKey', s.apiKey);
     pushIfNonEmpty('mode', s.mode);
     pushIfNonEmpty('approval', s.approval);
+
+    // Per-tier overrides: each tier slot (planner / implementer / reviewer) is a partial
+    // override of the global chat lane. Each non-empty leaf becomes a `tiers.<name>.<field>`
+    // dotted-path config command (the core's SETTABLE_FIELDS in src/config.ts already accepts
+    // these paths). We whitelist the tier names AND the leaf fields defensively so a future
+    // caller can't smuggle in an arbitrary nested write.
+    if (s.tiers && typeof s.tiers === 'object') {
+      var tierNames = ['planner', 'implementer', 'reviewer'];
+      var leafFields = ['model', 'baseURL'];
+      for (var ti = 0; ti < tierNames.length; ti++) {
+        var tname = tierNames[ti];
+        var slot = s.tiers[tname];
+        if (!slot || typeof slot !== 'object') continue;
+        for (var fi = 0; fi < leafFields.length; fi++) {
+          var lf = leafFields[fi];
+          pushIfNonEmpty('tiers.' + tname + '.' + lf, slot[lf]);
+        }
+      }
+    }
 
     const scope = typeof s.scope === 'string' ? s.scope.trim() : '';
     return { commands: commands, scope: scope === '' ? null : scope };

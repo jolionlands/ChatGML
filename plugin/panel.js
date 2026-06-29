@@ -29,6 +29,7 @@
    * @param {(record:object)=>void=} opts.onAppliedEdit - after an edit is approved&written (inline diff)
    * @param {(ev:PopStateEvent|Event)=>void=} opts.onEditorContext - supply openFile/selection/cursor
    * @param {()=>void=} opts.onUndo                    - undo the most recent checkpoint
+   * @param {(name:('planner'|'implementer'|'reviewer'|null))=>void=} opts.onTierOverride - set/clear the per-turn tier override (Cline-style Plan/Act)
    */
   function ChatPanel(opts) {
     this.opts = opts;
@@ -39,6 +40,12 @@
     // The last turn_end record for the in-flight turn (so onAppliedEdit and the inline-diff jump can
     // map a proposal id back to the path that was actually written). Keyed by proposal id -> path.
     this.lastWrittenPaths = new Map();
+    // Active per-turn tier override ('planner' | 'implementer' | 'reviewer' | null). When set,
+    // the next user message is sent with UserCommand.tier=<name> so the core dispatches to the
+    // configured tier lane (Cline-style Plan/Act). null means mode-based auto-dispatch.
+    this.tierOverride = null;
+    // The user-typed text after `/tier <name>` — flashed once in the transcript and remembered
+    // only for the lifetime of the panel (we don't persist this; the slash command is per-turn).
     this._build();
     this._detectTheme();
     this.setTask('default');
@@ -435,6 +442,49 @@
     this.settingsScopeInput.placeholder = 'memory scope';
     this.settingsPanelEl.appendChild(makeRow('Scope', this.settingsScopeInput));
 
+    // Tier overrides subsection (Cline-style Plan/Act). Three collapsible groups — one per tier
+    // (planner/implementer/reviewer) — each with `Model` + `Base URL` fields. Empty fields are
+    // dropped on save (SettingsTasks drops them when building the config commands), so a user can
+    // partially populate a tier and only those two leaves are persisted.
+    var tierHeader = document.createElement('div');
+    tierHeader.className = 'chatgml-settings-section-header';
+    tierHeader.textContent = 'Tiers (per-role lane overrides)';
+    this.settingsPanelEl.appendChild(tierHeader);
+
+    this.settingsTierInputs = { planner: {}, implementer: {}, reviewer: {} };
+    var tierNames = ['planner', 'implementer', 'reviewer'];
+    var tierLabels = { planner: '🧠 Planner', implementer: '⚙ Implementer', reviewer: '🔍 Reviewer' };
+    for (var tni = 0; tni < tierNames.length; tni++) {
+      (function (name) {
+        var group = document.createElement('details');
+        group.className = 'chatgml-settings-tier-group';
+        var sum = document.createElement('summary');
+        sum.textContent = tierLabels[name];
+        group.appendChild(sum);
+
+        var modelInput = document.createElement('input');
+        modelInput.type = 'text';
+        modelInput.className = 'chatgml-settings-input';
+        modelInput.placeholder = name + ' model id';
+        group.appendChild(makeRow('Model', modelInput));
+
+        var urlInput = document.createElement('input');
+        urlInput.type = 'text';
+        urlInput.className = 'chatgml-settings-input';
+        urlInput.placeholder = name + ' endpoint URL';
+        group.appendChild(makeRow('Base URL', urlInput));
+
+        self.settingsTierInputs[name] = { model: modelInput, baseURL: urlInput };
+        self.settingsPanelEl.appendChild(group);
+      })(tierNames[tni]);
+    }
+    this.settingsPanelEl.appendChild(
+      makeHelpRow(
+        'Empty fields are dropped (existing values are preserved). Each tier is a partial ' +
+          'override of the global chat lane; unset leaves fall back to the global model/URL.',
+      ),
+    );
+
     // Save & Restart button
     var saveBtn = document.createElement('button');
     saveBtn.className = 'run-button chatgml-settings-save';
@@ -452,6 +502,20 @@
         mode: self.settingsModeSelect.value,
         approval: self.settingsApprovalSelect.value,
         scope: self.settingsScopeInput.value.trim(),
+        tiers: {
+          planner: {
+            model: self.settingsTierInputs.planner.model.value.trim(),
+            baseURL: self.settingsTierInputs.planner.baseURL.value.trim(),
+          },
+          implementer: {
+            model: self.settingsTierInputs.implementer.model.value.trim(),
+            baseURL: self.settingsTierInputs.implementer.baseURL.value.trim(),
+          },
+          reviewer: {
+            model: self.settingsTierInputs.reviewer.model.value.trim(),
+            baseURL: self.settingsTierInputs.reviewer.baseURL.value.trim(),
+          },
+        },
       };
       if (typeof self.opts.onSaveSettings === 'function') {
         self.opts.onSaveSettings(settings);
@@ -491,6 +555,19 @@
     if (cfg.approval && this.settingsApprovalSelect)
       this.settingsApprovalSelect.value = cfg.approval;
     if (cfg.scope && this.settingsScopeInput) this.settingsScopeInput.value = cfg.scope;
+    if (cfg.tiers && this.settingsTierInputs) {
+      // Mirror the parsed `cfg.tiers` partial overrides into the form. We never echo the api key
+      // back (the spec only exposes model + baseURL in the UI). Undefined tier slots are left at
+      // their default empty value so the user can re-set them.
+      var names = ['planner', 'implementer', 'reviewer'];
+      for (var ti2 = 0; ti2 < names.length; ti2++) {
+        var tn = names[ti2];
+        var tierSlot = cfg.tiers[tn];
+        if (!tierSlot || !this.settingsTierInputs[tn]) continue;
+        if (tierSlot.model) this.settingsTierInputs[tn].model.value = tierSlot.model;
+        if (tierSlot.baseURL) this.settingsTierInputs[tn].baseURL.value = tierSlot.baseURL;
+      }
+    }
   };
 
   /** Submit the current input: route slash commands; otherwise send a user message + editor ctx + mentions. */
@@ -549,6 +626,22 @@
       case 'unknown':
       case 'empty':
         this.flash('/' + (cmd.name || '') + ' — unknown command (try /help)', true);
+        return;
+      case 'tier':
+        // arg === null => cleared (auto). Any of the three canonical names sets the override.
+        this.setTierOverride(cmd.arg);
+        if (cmd.arg) {
+          this.flash('tier set to ' + cmd.arg + ' — next turn uses this lane');
+        } else {
+          this.flash('tier override cleared — back to mode-based dispatch');
+        }
+        if (typeof this.opts.onTierOverride === 'function') {
+          try {
+            this.opts.onTierOverride(cmd.arg);
+          } catch (e) {
+            /* glue should never throw, but the panel must survive */
+          }
+        }
         return;
       default:
         if (typeof this.opts.onSlash === 'function') {
@@ -731,6 +824,62 @@
     if (!this._mentionItems || this._mentionItems.length === 0) return;
     this._insertMention(this._mentionItems[this._mentionActiveIndex].insert);
     this._hideMentionDropdown();
+  };
+
+  /** Build the inline tier picker on first open; toggling the chip re-uses the same node. */
+  ChatPanel.prototype._toggleTierPicker = function () {
+    if (this.tierPickerEl && this.tierPickerEl.parentNode) {
+      this._hideTierPicker();
+      return;
+    }
+    this._showTierPicker();
+  };
+
+  ChatPanel.prototype._showTierPicker = function () {
+    if (!this.tierPickerEl) {
+      this.tierPickerEl = document.createElement('div');
+      this.tierPickerEl.className = 'chatgml-tier-picker';
+      this.opts.container.appendChild(this.tierPickerEl);
+    }
+    this.tierPickerEl.innerHTML = '';
+    var opts = [
+      { name: 'auto', label: 'Auto', cls: 'chatgml-tier-picker-auto' },
+      { name: 'planner', label: '🧠 Planner', cls: 'chatgml-tier-picker-planner' },
+      { name: 'implementer', label: '⚙ Implementer', cls: 'chatgml-tier-picker-implementer' },
+      { name: 'reviewer', label: '🔍 Reviewer', cls: 'chatgml-tier-picker-reviewer' },
+    ];
+    var selfRef = this;
+    for (var i = 0; i < opts.length; i++) {
+      (function (entry) {
+        var btn = document.createElement('button');
+        btn.className = 'chatgml-tier-picker-btn ' + entry.cls;
+        btn.textContent = entry.label;
+        if (entry.name === selfRef.tierOverride || (entry.name === 'auto' && selfRef.tierOverride === null)) {
+          btn.classList.add('active');
+        }
+        btn.addEventListener('click', function () {
+          var chosen =
+            entry.name === 'auto' ? null : entry.name;
+          selfRef.setTierOverride(chosen);
+          if (chosen) selfRef.flash('tier set to ' + chosen + ' — next turn uses this lane');
+          else selfRef.flash('tier override cleared — back to mode-based dispatch');
+          if (typeof selfRef.opts.onTierOverride === 'function') {
+            try {
+              selfRef.opts.onTierOverride(chosen);
+            } catch (e) {
+              /* ignore — chip click must never break the panel */
+            }
+          }
+          selfRef._hideTierPicker();
+        });
+        selfRef.tierPickerEl.appendChild(btn);
+      })(opts[i]);
+    }
+    this.tierPickerEl.style.display = 'flex';
+  };
+
+  ChatPanel.prototype._hideTierPicker = function () {
+    if (this.tierPickerEl) this.tierPickerEl.style.display = 'none';
   };
 
   /** Hide the @mention autocomplete dropdown. */
@@ -925,6 +1074,11 @@
       this._renderedTurnsCount = 0;
       this._streamingBubbleEl = null;
       this._pendingBubbleEl = null;
+      // Stop+Launch returns the panel to a clean state: drop any in-flight tier override so the
+      // next turn dispatches via the freshly-loaded mode (avoids a stale override carrying over
+      // from a previous session).
+      this.tierOverride = null;
+      this._hideTierPicker();
       this.diffView.clear();
       if (this.stopGenBtn) this.stopGenBtn.style.display = 'none';
       if (error) this.showRestart();
@@ -951,6 +1105,16 @@
   ChatPanel.prototype.setReady = function () {
     this.sendBtn.removeAttribute('disabled');
     this.reindexBtn.removeAttribute('disabled');
+  };
+
+  /** Set the per-turn tier override ('planner' | 'implementer' | 'reviewer' | null). null clears
+   * the override and falls back to mode-based auto-dispatch. The picker chip and /tier slash
+   * command both route through here. */
+  ChatPanel.prototype.setTierOverride = function (name) {
+    var normalized =
+      name === 'planner' || name === 'implementer' || name === 'reviewer' ? name : null;
+    this.tierOverride = normalized;
+    this.render();
   };
 
   /** Update the active mode (from the ready handshake or user interaction). */
@@ -987,6 +1151,9 @@
     this.state.turnsEvicted = 0;
     this.state.activityEvicted = 0;
     this.state.pendingUserText = null;
+    // /clear also clears the tier override: the user explicitly asked for a clean slate.
+    this.tierOverride = null;
+    this._hideTierPicker();
     this.lastWrittenPaths.clear();
     this.selectedCheckpointId = null;
     this.diffView.clear();
@@ -1091,6 +1258,25 @@
     taskBadge.className = 'chatgml-task-badge';
     taskBadge.textContent = this.taskId || 'default';
     this.configRowEl.appendChild(taskBadge);
+    // Tier override chip: shows the active per-turn override ("Tier: planner" etc.) and opens an
+    // inline picker on click. When no override is set, the label reads "Tier: auto" so the user
+    // can see at a glance whether the next turn is dispatch-bound or mode-bound.
+    const tierChip = document.createElement('span');
+    const activeTier = this.tierOverride;
+    if (activeTier) {
+      tierChip.className = 'chatgml-tier-chip chatgml-tier-chip-' + activeTier;
+      tierChip.textContent = 'Tier: ' + activeTier;
+    } else {
+      tierChip.className = 'chatgml-tier-chip chatgml-tier-chip-auto';
+      tierChip.textContent = 'Tier: auto';
+    }
+    tierChip.title = 'Click to set the per-turn tier override';
+    const selfRef = this;
+    tierChip.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      selfRef._toggleTierPicker();
+    });
+    this.configRowEl.appendChild(tierChip);
     const cfg = this._config;
     if (cfg) {
       const chips = [];
@@ -1368,8 +1554,20 @@
           asstBubble.className = 'chatgml-turn chatgml-turn-assistant';
           var asstLabel = document.createElement('div');
           asstLabel.className = 'chatgml-turn-label';
+          var tierBadge = null;
+          if (turn.tier === 'planner' || turn.tier === 'implementer' || turn.tier === 'reviewer') {
+            // Three short labels mirror the Cline Plan/Act affordance: "planner" reads as a
+            // think-first role, "implementer" as code-action, "reviewer" as a self-check pass.
+            // The emoji prefix + the per-tier class is the visual hook; see style.css.
+            var tierGlyph = turn.tier === 'planner' ? '🧠' : turn.tier === 'implementer' ? '⚙' : '🔍';
+            tierBadge = document.createElement('span');
+            tierBadge.className = 'chatgml-turn-tier chatgml-turn-tier-' + turn.tier;
+            tierBadge.textContent = tierGlyph + ' ' + turn.tier;
+            tierBadge.title = 'This turn used the ' + turn.tier + ' tier lane';
+          }
           asstLabel.textContent = 'Assistant';
           asstBubble.appendChild(asstLabel);
+          if (tierBadge) asstBubble.appendChild(tierBadge);
           var asstBody = document.createElement('div');
           asstBody.className = 'chatgml-turn-body chatgml-md-body';
           if (MarkdownApi && typeof MarkdownApi.renderMarkdown === 'function') {
@@ -1397,6 +1595,26 @@
         streamLabel.className = 'chatgml-turn-label';
         streamLabel.textContent = 'Assistant';
         streamBubble.appendChild(streamLabel);
+        // Mirror the active tier on the streaming bubble so the user can see which lane is
+        // producing the tokens. When the override is null we render NO badge (auto-dispatch).
+        if (
+          this.tierOverride === 'planner' ||
+          this.tierOverride === 'implementer' ||
+          this.tierOverride === 'reviewer'
+        ) {
+          var sGlyph =
+            this.tierOverride === 'planner'
+              ? '🧠'
+              : this.tierOverride === 'implementer'
+                ? '⚙'
+                : '🔍';
+          var sBadge = document.createElement('span');
+          sBadge.className =
+            'chatgml-turn-tier chatgml-turn-tier-' + this.tierOverride;
+          sBadge.textContent = sGlyph + ' ' + this.tierOverride;
+          sBadge.title = 'This turn is using the ' + this.tierOverride + ' tier lane';
+          streamBubble.appendChild(sBadge);
+        }
         var streamBody = document.createElement('div');
         streamBody.className = 'chatgml-turn-body chatgml-md-body';
         streamBubble.appendChild(streamBody);

@@ -46,6 +46,11 @@
   let panel = null;
   let terminalOutput = '';
   let currentTaskId = 'default';
+  // Active per-turn tier override ('planner' | 'implementer' | 'reviewer' | null). Set via the
+  // panel's `/tier <name>` slash command or the inline picker chip; included on the next user
+  // message as UserCommand.tier (the core's UserCommand schema accepts it; the resulting turn is
+  // stamped with the tier that produced it and the panel renders a badge).
+  let activeTierOverride = null;
   const configBridge = new ConfigBridgeApi.ConfigBridge(__dirname);
 
   // File index for @file autocomplete: cached list of project files, lazily scanned, invalidated
@@ -705,6 +710,13 @@
       case 'undo':
         if (client) client.sendUndo(cmd.checkpointId);
         return;
+      case 'tier':
+        // /tier <planner|implementer|reviewer|off> — set/clear the per-turn tier override.
+        // arg === null means "off" (or any unknown name). The panel has already updated its
+        // own chip + flashed a notice; we only mirror into the glue's let-bind so the next
+        // sendUser() includes UserCommand.tier.
+        activeTierOverride = cmd.arg;
+        return;
     }
   }
 
@@ -904,7 +916,19 @@
       getMentions: getMentions,
       getProjectFiles: function () { return scanProjectFiles(projectDirectory); },
       onSendWithContext: function (text, context) {
-        if (client) client.sendUser(text, Object.assign({}, context, { taskId: currentTaskId }));
+        if (!client) return;
+        // UserCommand wire shape (src/types.ts): { type:'user', text, context?, taskId?, tier? }.
+        // taskId + tier are TOP-LEVEL fields (not under `context`); the core's UserCommand
+        // schema in src/protocol.ts validates them there. The per-turn tier override is null
+        // when the user has not set one (mode-based auto-dispatch).
+        var sendOpts = { taskId: currentTaskId, tier: activeTierOverride };
+        client.sendUser(text, context, sendOpts);
+      },
+      onTierOverride: function (name) {
+        // Mirror the panel-side chip click + /tier slash command. The panel has already
+        // re-rendered; the glue just keeps the wire-side let-bind in sync.
+        activeTierOverride =
+          name === 'planner' || name === 'implementer' || name === 'reviewer' ? name : null;
       },
       onSend: function (text) {
         if (client) client.sendUser(text);

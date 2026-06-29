@@ -145,6 +145,91 @@ describe('plugin/settings-tasks.js — settings save plan (audit gaps #12 + #13)
       ['embed.baseURL', 'https://y/v1'],
     ]);
   });
+
+  // ---- Per-tier overrides (Cline-style Plan/Act, audit gap #22) ----
+  // The settings panel's "Tiers" subsection collects three slots (planner/implementer/reviewer)
+  // each with a Model + Base URL input. The Save & Restart button must convert each non-empty
+  // leaf into a `tiers.<name>.<field>` config command (the core's SETTABLE_FIELDS in src/config.ts
+  // already accepts these paths). Empty / whitespace-only fields stay dropped, matching the
+  // existing drop-empty behavior for the global lane.
+  it('buildSettingsCommands: queues tiers.X.model field paths when set', () => {
+    const plan = SettingsTasks.buildSettingsCommands({
+      tiers: {
+        planner: { model: 'o3-mini' },
+        implementer: { model: 'qwen2.5-coder' },
+        reviewer: { model: 'gpt-4o-mini' },
+      },
+    });
+    expect(plan.commands).toEqual([
+      ['tiers.planner.model', 'o3-mini'],
+      ['tiers.implementer.model', 'qwen2.5-coder'],
+      ['tiers.reviewer.model', 'gpt-4o-mini'],
+    ]);
+  });
+
+  it('buildSettingsCommands: queues tiers.X.baseURL field paths when set', () => {
+    const plan = SettingsTasks.buildSettingsCommands({
+      tiers: {
+        planner: { baseURL: 'https://planner.example.com/v1' },
+        implementer: { baseURL: 'https://code.example.com/v1' },
+      },
+    });
+    expect(plan.commands).toEqual([
+      ['tiers.planner.baseURL', 'https://planner.example.com/v1'],
+      ['tiers.implementer.baseURL', 'https://code.example.com/v1'],
+    ]);
+  });
+  it('buildSettingsCommands: drops empty / whitespace-only tier leaves (no accidental blanks)', () => {
+    // Per-leaf drop behavior, mirroring the global-lane rule. A user editing the panel and
+    // clearing one field must NOT have the existing saved value overwritten with ''.
+    const plan = SettingsTasks.buildSettingsCommands({
+      tiers: {
+        planner: { model: 'o3-mini', baseURL: '   ' },
+        implementer: { model: '', baseURL: 'https://x/v1' },
+        reviewer: { model: '\t\n', baseURL: '' },
+      },
+    });
+    expect(plan.commands).toEqual([
+      ['tiers.planner.model', 'o3-mini'],
+      ['tiers.implementer.baseURL', 'https://x/v1'],
+    ]);
+  });
+
+  it('buildSettingsCommands: a tier with no slots produces no tier commands', () => {
+    // The `tiers` object present but empty (e.g. the panel was rendered but the user never
+    // expanded any of the three <details>) must not produce any tier commands — the helper
+    // skips empty/missing slots silently.
+    const plan = SettingsTasks.buildSettingsCommands({
+      model: 'gpt-4o',
+      tiers: {},
+    });
+    expect(plan.commands).toEqual([['chat.model', 'gpt-4o']]);
+  });
+
+  it('buildSettingsCommands: tier commands interleave with global commands in stable order', () => {
+    // Order: the existing global fields first (chat.model -> ... -> approval), then the tier
+    // leaves in (planner -> implementer -> reviewer) x (model -> baseURL) order. The save
+    // handler in chatgml.js writes them sequentially so a partial failure still leaves the
+    // earlier writes persisted.
+    const plan = SettingsTasks.buildSettingsCommands({
+      model: 'gpt-4o',
+      apiKey: 'env:CHATGML_CHAT_KEY',
+      mode: 'code',
+      tiers: {
+        planner: { model: 'o3-mini' },
+        implementer: { model: 'qwen2.5-coder', baseURL: 'https://code/v1' },
+        reviewer: {},
+      },
+    });
+    expect(plan.commands).toEqual([
+      ['chat.model', 'gpt-4o'],
+      ['chat.apiKey', 'env:CHATGML_CHAT_KEY'],
+      ['mode', 'code'],
+      ['tiers.planner.model', 'o3-mini'],
+      ['tiers.implementer.model', 'qwen2.5-coder'],
+      ['tiers.implementer.baseURL', 'https://code/v1'],
+    ]);
+  });
 });
 
 describe('plugin/settings-tasks.js — api key redaction (audit gap #12)', () => {

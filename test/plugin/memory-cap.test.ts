@@ -136,8 +136,8 @@ describe('state.turns cap (TURN_CAP)', () => {
     expect(state.turns.length).toBe(n);
     expect(state.turnsEvicted).toBe(0);
     // The earliest turn is still the first one we appended (no FIFO drop yet).
-    expect(state.turns[0]).toEqual({ userText: 'u0', assistantText: 'a0' });
-    expect(state.turns[n - 1]).toEqual({
+    expect(state.turns[0]).toMatchObject({ userText: 'u0', assistantText: 'a0' });
+    expect(state.turns[n - 1]).toMatchObject({
       userText: 'u' + (n - 1),
       assistantText: 'a' + (n - 1),
     });
@@ -164,8 +164,8 @@ describe('state.turns cap (TURN_CAP)', () => {
     expect(state.turns.length).toBe(TURN_CAP);
     expect(state.turnsEvicted).toBe(1);
     // u0 was the oldest; it should have been dropped. u1 is now the oldest survivor.
-    expect(state.turns[0]).toEqual({ userText: 'u1', assistantText: 'a1' });
-    expect(state.turns[state.turns.length - 1]).toEqual({
+    expect(state.turns[0]).toMatchObject({ userText: 'u1', assistantText: 'a1' });
+    expect(state.turns[state.turns.length - 1]).toMatchObject({
       userText: 'u' + TURN_CAP,
       assistantText: 'a' + TURN_CAP,
     });
@@ -180,8 +180,8 @@ describe('state.turns cap (TURN_CAP)', () => {
     expect(state.turns.length).toBe(TURN_CAP);
     expect(state.turnsEvicted).toBe(total - TURN_CAP);
     // First survivor should be u50 (everything u0..u49 was evicted).
-    expect(state.turns[0]).toEqual({ userText: 'u50', assistantText: 'a50' });
-    expect(state.turns[state.turns.length - 1]).toEqual({
+    expect(state.turns[0]).toMatchObject({ userText: 'u50', assistantText: 'a50' });
+    expect(state.turns[state.turns.length - 1]).toMatchObject({
       userText: 'u' + (total - 1),
       assistantText: 'a' + (total - 1),
     });
@@ -209,8 +209,8 @@ describe('state.activity cap (ACTIVITY_CAP)', () => {
     expect(state.activity.length).toBe(ACTIVITY_CAP);
     expect(state.activityEvicted).toBe(1);
     // Oldest survivor is now t1; t0 is gone.
-    expect(state.activity[0].id).toBe('t1');
-    expect(state.activity[state.activity.length - 1].id).toBe('t' + ACTIVITY_CAP);
+    expect(state.activity[0]!.id).toBe('t1');
+    expect(state.activity[state.activity.length - 1]!.id).toBe('t' + ACTIVITY_CAP);
   });
 
   it('the cap applies to ALL four activity-adding reducers (tool_call, command_request, mcp_tool_call, mcp_resource)', () => {

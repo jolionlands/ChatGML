@@ -8,7 +8,7 @@
 //
 // Nothing here touches the DOM, the filesystem, or `process` — every dependency (env, platform,
 // existence probe) is passed in, so the whole surface is deterministic under vitest.
-import type { AgentEvent, Citation, EditorContext, Mode, ToolCatalogEntry } from './types.js';
+import type { AgentEvent, Citation, EditorContext, Mode, TierName, ToolCatalogEntry } from './types.js';
 
 // ---------------------------------------------------------------------------
 // 1. NDJSON line buffer (raw-chunk, streaming-UTF-8, tolerant of a malformed line).
@@ -228,6 +228,12 @@ export interface PluginCheckpoint {
 export interface TurnRecord {
   userText: string;
   assistantText: string;
+  /**
+   * Which dispatch tier (planner/implementer/reviewer) produced the turn. null/absent means
+   * the global chat lane was used (mode-based auto-dispatch, no per-tier override). Mirrors
+   * `turn_end.tier` from the core wire; the panel renders this as a tier badge on the bubble.
+   */
+  tier?: TierName | null;
 }
 
 /** Cap on `turns` — only the most recent TURN_CAP user/assistant bubble pairs are kept in state. */
@@ -272,6 +278,12 @@ export interface PluginState {
    * the next turn starts clean.
    */
   pendingUserText: string | null;
+  /**
+   * Thinking text emitted by the model for the most recent `thinking` event. Cleared by
+   * `answer` so the streaming answer bubble isn't shown a stale block. Plugin reads this
+   * during the assistant bubble render to show the collapsible "model thinking..." block.
+   */
+  lastThinking: string | null;
 }
 
 /**
@@ -313,6 +325,7 @@ export function initialPluginState(): PluginState {
     turnsEvicted: 0,
     activityEvicted: 0,
     pendingUserText: null,
+    lastThinking: null,
   };
 }
 
@@ -331,6 +344,7 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     turnsEvicted: state.turnsEvicted,
     activityEvicted: state.activityEvicted,
     pendingUserText: state.pendingUserText,
+    lastThinking: state.lastThinking,
   };
   switch (event.type) {
     case 'status': {
@@ -508,6 +522,9 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     case 'answer': {
       next.answer = event.text;
       next.sources = event.sources;
+      // Clear pending thinking so the next user prompt renders a fresh (empty) block; the
+      // thinking block for THIS turn was already emitted by the prior `thinking` event.
+      next.lastThinking = null;
       return next;
     }
     case 'turn_end': {
@@ -516,11 +533,20 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       // streaming `answer` text is also cleared so the next user turn starts clean.
       // Cap: a long session would otherwise grow `turns` unbounded and inflate the resume payload.
       if (event.userText != null || event.assistantText != null) {
+        // Defensive tier normalization: the wire schema (src/protocol.ts) already validates the
+        // tier name, but the reducer is also reachable from tests that hand-build events without
+        // going through the schema. Whitelist the three known values; anything else falls back to
+        // null (panel renders no badge). Mirrors plugin/state.js's CJS port byte-for-byte.
+        const tier: TierName | null =
+          event.tier === 'planner' || event.tier === 'implementer' || event.tier === 'reviewer'
+            ? event.tier
+            : null;
         const capped = pushCapped(
           state.turns,
           {
             userText: event.userText ?? '',
             assistantText: event.assistantText != null ? event.assistantText : (state.answer ?? ''),
+            tier,
           },
           TURN_CAP,
           state.turnsEvicted,
@@ -549,6 +575,17 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       return next;
     }
     case 'pong': {
+      return next;
+    }
+    case 'thinking': {
+      // THINKING PROPAGATION (Cline/Cursor-style model-thinking block). The agent emits a
+      // `thinking{final}` event right before `turn_end` for every turn where the model
+      // produced reasoning text. The reducer accumulates it into `state.lastThinking` so the
+      // plugin can render the collapsible block alongside the corresponding assistant bubble.
+      // The string is allowed to be empty (defensive); empty text is treated as no-op
+      // downstream. The AgentEvent union still expects 'mode' (streamed|final) but we don't
+      // track it separately - both modes fold into `lastThinking`.
+      next.lastThinking = event.text;
       return next;
     }
     default: {
@@ -605,6 +642,11 @@ export type SlashCommand =
   | { kind: 'list_tasks' }
   | { kind: 'switch_task'; value: string }
   | { kind: 'delete_task'; value: string }
+  // /tier <planner|implementer|reviewer|off>: override the dispatch tier for the next turn.
+  // arg === null means "off" (or any unknown value) -- the agent falls back to mode-based
+  // auto-dispatch. The panel reads this and forwards the override via the UserCommand.tier wire
+  // field; the resulting turn_end.tier stamp is rendered as a tier badge on the bubble.
+  | { kind: 'tier'; arg: TierName | null }
   | { kind: 'help' }
   | { kind: 'unknown'; name: string }
   | { kind: 'empty'; name: string };
@@ -653,6 +695,14 @@ export function parseSlashCommand(line: string): SlashCommand | null {
       return value === '' ? { kind: 'empty', name } : { kind: 'switch_task', value };
     case 'delete-task':
       return value === '' ? { kind: 'empty', name } : { kind: 'delete_task', value };
+    case 'tier': {
+      // /tier <planner|implementer|reviewer|off> -- override the mode-based dispatch for the
+      // next turn. "off" (or any unknown name) means fall back to mode-based auto-dispatch.
+      if (value === 'planner' || value === 'implementer' || value === 'reviewer') {
+        return { kind: 'tier', arg: value };
+      }
+      return { kind: 'tier', arg: null };
+    }
     default:
       return { kind: 'unknown', name };
   }
@@ -675,6 +725,7 @@ export const SLASH_HELP: readonly string[] = [
   '  /approval gated|auto   set edit approval mode and restart the core',
   '  /mcp            list configured MCP servers and tool counts',
   '  /undo [id]      undo the most recent checkpoint (or the specified checkpoint id)',
+  '  /tier planner|implementer|reviewer|off  override the dispatch tier for the next turn',
   '  /help           show this help',
 ];
 

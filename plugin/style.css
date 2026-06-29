@@ -1743,3 +1743,156 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   background: var(--chatgml-surface-hover);
   border-left-color: var(--chatgml-accent);
 }
+
+/* =========================================================================
+ * Tier UI (Cline-style Plan/Act affordances)
+ *
+ * Three visual surfaces:
+ *   1. The tier chip in the controls/config row ("Tier: planner" / "Tier: auto") that opens the
+ *      inline picker on click.
+ *   2. The tier badge inside each assistant bubble, showing which lane produced the turn.
+ *   3. The collapsible tier groups in the settings panel (Model + Base URL per tier).
+ * Each tier (planner/implementer/reviewer) gets a distinct accent color so the user can scan the
+ * transcript and see at a glance which lane produced which turn.
+ * ========================================================================= */
+
+/* Tier chip in the controls row. Mirrors the visual weight of modeBadge / taskBadge so it sits
+ * comfortably in the row without dominating. When the override is null the label reads "auto"
+ * (mode-based dispatch) so the user always sees the dispatch state. */
+.chatgml-tier-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  margin-left: 6px;
+  border: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+  user-select: none;
+}
+.chatgml-tier-chip:hover {
+  border-color: var(--chatgml-accent);
+  background: var(--chatgml-surface-hover);
+}
+.chatgml-tier-chip-auto {
+  /* "Auto" (no override) is the default; rendered with the muted badge to distinguish from a real
+   * tier assignment. The hover affordance is identical so the user can always click to open the
+   * picker. */
+  color: var(--chatgml-muted);
+}
+.chatgml-tier-chip-planner {
+  background: rgba(137, 180, 250, 0.16);
+  color: #89b4fa;
+  border-color: rgba(137, 180, 250, 0.32);
+}
+.chatgml-tier-chip-implementer {
+  background: rgba(166, 227, 161, 0.16);
+  color: #a6e3a1;
+  border-color: rgba(166, 227, 161, 0.32);
+}
+.chatgml-tier-chip-reviewer {
+  background: rgba(250, 179, 135, 0.16);
+  color: #fab987;
+  border-color: rgba(250, 179, 135, 0.32);
+}
+
+/* Inline tier picker (4 buttons: auto, planner, implementer, reviewer). Same visual idiom as the
+ * @mention dropdown but persistent until a button is clicked (or the chip is re-clicked). */
+.chatgml-tier-picker {
+  display: none;
+  flex-direction: row;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--chatgml-card-bg);
+  border: 1px solid var(--chatgml-card-border);
+  border-radius: var(--chatgml-radius);
+  margin: 2px 0;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.chatgml-tier-picker-btn {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.chatgml-tier-picker-btn:hover {
+  border-color: var(--chatgml-accent);
+}
+.chatgml-tier-picker-btn.active {
+  border-color: var(--chatgml-accent);
+  background: var(--chatgml-surface-active);
+  color: var(--chatgml-accent-hover);
+}
+
+/* Tier badge inside the assistant bubble. The label sits NEXT TO the existing role label (which
+ * still reads "Assistant"); the badge is the smaller, accent-tinted tag for the lane. */
+.chatgml-turn-tier {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  border: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+.chatgml-turn-tier-planner {
+  background: rgba(137, 180, 250, 0.16);
+  color: #89b4fa;
+  border-color: rgba(137, 180, 250, 0.32);
+}
+.chatgml-turn-tier-implementer {
+  background: rgba(166, 227, 161, 0.16);
+  color: #a6e3a1;
+  border-color: rgba(166, 227, 161, 0.32);
+}
+.chatgml-turn-tier-reviewer {
+  background: rgba(250, 179, 135, 0.16);
+  color: #fab987;
+  border-color: rgba(250, 179, 135, 0.32);
+}
+
+/* Settings panel: collapsible tier groups. Native <details>/<summary> styling tuned to the
+ * plugin's chrome. */
+.chatgml-settings-section-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--chatgml-muted);
+  font-weight: 600;
+  margin-top: 6px;
+  margin-bottom: 2px;
+}
+.chatgml-settings-tier-group {
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  background: var(--chatgml-surface-1);
+  margin-bottom: 2px;
+}
+.chatgml-settings-tier-group > summary {
+  font-size: 12px;
+  color: var(--chatgml-fg);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-weight: 500;
+  user-select: none;
+  outline: none;
+}
+.chatgml-settings-tier-group > summary:hover {
+  background: var(--chatgml-surface-hover);
+}
+.chatgml-settings-tier-group[open] > summary {
+  border-bottom: 1px solid var(--chatgml-border);
+  margin-bottom: 2px;
+}
+

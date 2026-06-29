@@ -139,6 +139,11 @@
       turnsEvicted: 0,
       activityEvicted: 0,
       pendingUserText: null,
+      // THINKING PROPAGATION (mirror of src/plugin-runtime.ts): accumulated thinking text for
+      // the most recent `thinking` event. Cleared on 'answer' so the streaming answer bubble
+      // isn't shown a stale block. Plugin reads this during the assistant bubble render to show
+      // the collapsible "model thinking..." block.
+      lastThinking: null,
     };
   }
 
@@ -159,6 +164,7 @@
       turnsEvicted: state.turnsEvicted,
       activityEvicted: state.activityEvicted,
       pendingUserText: state.pendingUserText,
+      lastThinking: state.lastThinking,
     };
     switch (event.type) {
       case 'status':
@@ -316,13 +322,23 @@
         next.activityEvicted = capped[1];
         return next;
       }
-      case 'turn_end':
+      case 'turn_end': {
         if (event.userText != null || event.assistantText != null) {
+          // Defensive tier normalization: src/protocol.ts already validates the tier name on the
+          // wire, but the CJS port is duck-typed (the parity test feeds it untyped objects), so
+          // we whitelist the three known values and fall back to null for anything else. Storing
+          // a non-TierName value would make the panel badge lookups silently
+          // miss-render.
+          const tier =
+            event.tier === 'planner' || event.tier === 'implementer' || event.tier === 'reviewer'
+              ? event.tier
+              : null;
           const capped = pushCapped(
             state.turns || [],
             {
               userText: event.userText || '',
               assistantText: event.assistantText != null ? event.assistantText : state.answer || '',
+              tier: tier,
             },
             TURN_CAP,
             state.turnsEvicted,
@@ -333,8 +349,17 @@
         next.answer = null; // the streaming answer is now captured in the turn
         next.pendingUserText = null;
         return next;
+      }
       case 'tool_catalog':
         next.catalog = event.tools ? event.tools.slice() : event.tools;
+        return next;
+      case 'thinking':
+        // THINKING PROPAGATION (Cline/Cursor-style model-thinking block). The agent emits a
+        // `thinking{final}` event right before `turn_end` for every turn where the model
+        // produced reasoning text. The reducer accumulates it into `state.lastThinking` so the
+        // plugin can render the collapsible block alongside the corresponding assistant bubble.
+        // The string is allowed to be empty (defensive); empty text is treated as no-op.
+        next.lastThinking = event.text;
         return next;
       case 'checkpoint':
         next.checkpoints = state.checkpoints.concat([
@@ -357,6 +382,9 @@
       case 'answer':
         next.answer = event.text;
         next.sources = event.sources;
+        // Clear pending thinking so the next user prompt renders a fresh (empty) block; the
+        // thinking block for THIS turn was already emitted by the prior `thinking` event.
+        next.lastThinking = null;
         return next;
       case 'error':
         next.error = event.message;
@@ -423,6 +451,13 @@
         return value === '' ? { kind: 'empty', name: name } : { kind: 'switch_task', value: value };
       case 'delete-task':
         return value === '' ? { kind: 'empty', name: name } : { kind: 'delete_task', value: value };
+      case 'tier':
+        // /tier <planner|implementer|reviewer|off> -- override the mode-based dispatch for the
+        // next turn. "off" (or any unknown name) means fall back to mode-based auto-dispatch.
+        if (value === 'planner' || value === 'implementer' || value === 'reviewer') {
+          return { kind: 'tier', arg: value };
+        }
+        return { kind: 'tier', arg: null };
       default:
         return { kind: 'unknown', name: name };
     }
@@ -443,6 +478,7 @@
     '  /approval gated|auto   set edit approval mode and restart the core',
     '  /mcp            list configured MCP servers and tool counts',
     '  /undo [id]      undo the most recent checkpoint (or the specified checkpoint id)',
+    '  /tier planner|implementer|reviewer|off  override the dispatch tier for the next turn',
     '  /help           show this help',
   ];
 
