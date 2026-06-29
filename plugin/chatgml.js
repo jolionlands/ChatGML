@@ -36,9 +36,22 @@
   const MarkdownApi = globalThis.ChatGmlMarkdown || _abs('markdown.js');
   void MarkdownApi;
   const FuzzyApi = globalThis.ChatGmlFuzzy || _abs('fuzzy.js');
+  // SESSIONS module (plugin/sessions.js): multi-session history sidebar. Required the same way
+  // as the other modules above — `globalThis.ChatGmlSessions` first (the normal config.json
+  // load path), `require(path.join(__dirname, 'sessions.js'))` as the test/renderer fallback.
+  const Sessions = globalThis.ChatGmlSessions || _abs('sessions.js');
 
   const PLUGIN_NAME = 'chatgml';
-  const SESSION_DIR = join(__dirname, 'chatgml-sessions');
+  // SESSION_DIR is the per-project NDJSON store. Per spec, files live at
+  // `~/.config/chatgml/sessions/<projectHash>-<taskId>.ndjson` (one NDJSON line per turn). The
+  // SESSIONS module (plugin/sessions.js) owns all session I/O; this constant is retained as the
+  // legacy fallback for the few sync paths that pre-date sessions.js (e.g. `listTasks`'s
+  // readdirSync scan). sessions.js and chatgml.js agree on the same path so a legacy readdir
+  // and the new metadata scan see the same files.
+  const SESSION_DIR = (function () {
+    const home = process.env.USERPROFILE || process.env.HOME || '';
+    return join(home.replace(/[\\/]+$/, ''), '.config', 'chatgml', 'sessions');
+  })();
   const SESSION_MAX_TURNS = 50;
 
   let ready = false; // side-panel DOM prepared
@@ -327,19 +340,29 @@
   // Per-project session persistence (resumable conversations). One NDJSON file per project,
   // keyed by a short hash of the project dir; each line is a turn_end record. Capped to the last
   // SESSION_MAX_TURNS turns to bound size. Append is best-effort (never breaks the live panel).
+  //
+  // The SESSIONS module (plugin/sessions.js) is now the SSOT for session I/O — `listTasks`,
+  // `switchTask`, `createTask`, `deleteTask`, `appendTurn`, `loadSessionTurns`, `clearSessionFile`
+  // all delegate to `Sessions.*` so the sidebar (panel.setSessions/setActiveSession) sees the
+  // same data as the slash commands and the legacy onTurnEnd path. The `setTasks` legacy
+  // callback still drives the OLD `<select>`-based task picker for backwards compatibility, but
+  // it now reads from `Sessions.list(projectDir)` so the two surfaces agree on the task set.
   // -------------------------------------------------------------------------
   function projectHash() {
-    return crypto
-      .createHash('sha1')
-      .update(projectDirectory || 'default')
-      .digest('hex')
-      .slice(0, 12);
+    // The SESSIONS module owns the canonical project-hash computation (SHA-1 of the project
+    // dir, hex, first 12 chars). This thin wrapper keeps the legacy `sessionFile(taskId)` helper
+    // working without duplicating the hash logic in two places.
+    return Sessions.projectHash(projectDirectory);
   }
 
   function sessionFile(taskId) {
-    return join(SESSION_DIR, projectHash() + '-' + (taskId || currentTaskId) + '.ndjson');
+    return Sessions.sessionFile(projectDirectory, taskId || currentTaskId);
   }
 
+  // Legacy sync scan over the session dir — used only as a fast in-process fallback for the
+  // `<select>`-based task picker if the SESSIONS module has not yet been wired (shouldn't
+  // happen in normal flow because chatgml.js awaits Sessions.list before calling panel.setTasks,
+  // but we keep this synchronous helper so a fire-and-forget path can still get a task id set).
   function listTasks() {
     const h = projectHash();
     const prefix = h + '-';
@@ -358,9 +381,68 @@
     return Array.from(tasks).sort();
   }
 
+  async function refreshSessionsPanel() {
+    // Re-scan the session list on disk and push it to BOTH the new sessions sidebar (preferred
+    // surface) AND the legacy `<select>`-based task picker (kept for backwards compatibility).
+    // Best-effort: a failure to read disk never breaks the panel — we just keep the existing
+    // visible state and flash a notice.
+    try {
+      const list = await Sessions.list(projectDirectory);
+      if (panel) {
+        if (typeof panel.setSessions === 'function') {
+          panel.setSessions(list);
+          const active = list.find(function (e) {
+            return e.isActive;
+          });
+          if (active && typeof panel.setActiveSession === 'function') {
+            panel.setActiveSession(active.id);
+          }
+        }
+        if (typeof panel.setTasks === 'function') {
+          // Legacy task picker takes just ids, in stable order (old code sorted alphabetically).
+          panel.setTasks(list.map(function (e) {
+            return e.id;
+          }).sort());
+        }
+      }
+    } catch (e) {
+      console.warn('chatgml: refreshSessionsPanel failed', e);
+    }
+  }
+
   async function switchTask(taskId) {
-    if (!taskId || taskId === currentTaskId) return;
+    if (!taskId) return;
+    if (taskId === currentTaskId && (await Sessions.getActive(projectDirectory)) === taskId) {
+      // Already on this task and disk agrees; nothing to do.
+      return;
+    }
+    // Mid-stream guard: switching sessions while a turn is in flight would misroute the
+    // in-flight turn_end record to the NEW session (because appendTurn snapshots
+    // `currentTaskId` at append time, after we just changed it). Block the switch and ask
+    // the user to wait for the in-flight turn to finish — matches the same send-disable
+    // semantics on the input row.
+    if (
+      panel &&
+      panel.state &&
+      panel.state.busy &&
+      Array.isArray(panel.state.outbox) &&
+      panel.state.outbox.length > 0
+    ) {
+      if (panel) {
+        panel.flash(
+          'cannot switch sessions while a turn is in flight — wait for the response',
+          true,
+        );
+      }
+      return;
+    }
     currentTaskId = taskId;
+    // Update the active pointer on disk FIRST so a /resume after a crash lands on the same task.
+    try {
+      await Sessions.switchTo(projectDirectory, taskId);
+    } catch (e) {
+      console.warn('chatgml: could not switch session', e);
+    }
     if (panel) {
       panel.setTask(currentTaskId);
       panel.clear();
@@ -370,6 +452,7 @@
       client.sendResume(State.turnEndToMessages(turns), currentTaskId);
     }
     if (panel) panel.flash('switched to task: ' + currentTaskId);
+    void refreshSessionsPanel();
   }
 
   const TASK_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -379,8 +462,13 @@
       if (panel) panel.flash('invalid task id (alphanumeric/hyphen/underscore, max 64)', true);
       return;
     }
-    await switchTask(taskId);
-    if (panel) panel.setTasks(listTasks());
+    // Delegate to Sessions.create so the new task is persisted on disk before we switch to it.
+    // If the id is already in use, Sessions.create is idempotent — it just sets the active
+    // pointer to the existing task and returns the id unchanged.
+    const id = await Sessions.create(projectDirectory, taskId);
+    await switchTask(id);
+    void refreshSessionsPanel();
+    return id;
   }
 
   async function deleteTask(taskId) {
@@ -390,45 +478,48 @@
     }
     if (!window.confirm('Delete task "' + taskId + '"?')) return;
     try {
-      await fsp.unlink(sessionFile(taskId));
+      await Sessions.delete(projectDirectory, taskId);
     } catch (e) {
       if (panel) panel.flash('could not delete task: ' + (e.message || e), true);
       return;
     }
-    if (panel) panel.setTasks(listTasks());
     if (taskId === currentTaskId) {
+      // switchTask falls back to 'default' (which Sessions.delete has already wired on disk).
       await switchTask('default');
     }
+    void refreshSessionsPanel();
   }
 
   async function appendTurn(record) {
     if (!projectDirectory) return;
+    // Delegate to Sessions.appendTurn so the per-session metadata (title, messageCount,
+    // updatedAt) stays in lock-step with the NDJSON. We still keep the legacy `taskId` field on
+    // the record for back-compat with older resume payloads, but the SSOT for "which session is
+    // this turn for" is the active pointer (Sessions.getActive), not `record.taskId`.
     record.taskId = currentTaskId;
     try {
-      await fsp.mkdir(SESSION_DIR, { recursive: true });
-      await fsp.appendFile(sessionFile(), JSON.stringify(record) + '\n', 'utf8');
+      await Sessions.appendTurn(projectDirectory, record);
     } catch (e) {
       console.warn('chatgml: could not append session turn', e);
     }
   }
 
   async function loadSessionTurns() {
+    // Read turns for the CURRENT task (which is the active session on disk). Falls back to [] on
+    // any error so a corrupt NDJSON never breaks the panel.
     try {
-      const text = await fsp.readFile(sessionFile(), 'utf8');
-      const lines = text.split('\n').filter((l) => l.trim() !== '');
-      // Cap to the most recent N turns (file is append-only, newest at the bottom).
-      return lines
-        .slice(-SESSION_MAX_TURNS * 2) // each turn is ~1 line; keep a wide margin
-        .map((l) => JSON.parse(l))
-        .filter((t) => t && typeof t.userText === 'string' && typeof t.assistantText === 'string');
+      return await Sessions.loadTurns(projectDirectory, currentTaskId);
     } catch (e) {
       return [];
     }
   }
 
   async function clearSessionFile() {
+    // /clear drops the turns for the CURRENT task by truncating its NDJSON. The metadata
+    // sidecar keeps its title (it's still the same session) but the next appendTurn will bump
+    // messageCount from 0 again.
     try {
-      await fsp.writeFile(sessionFile(), '', 'utf8');
+      await fsp.writeFile(sessionFile(currentTaskId), '', 'utf8');
     } catch (e) {
       /* ignore */
     }
@@ -955,12 +1046,45 @@
       onDeleteTask: function (name) {
         void deleteTask(name);
       },
+      // SESSIONS sidebar callbacks: the new sessions sidebar surfaces these directly. Each
+      // callback delegates to the matching legacy session function so the slash-command
+      // surface and the sidebar surface share the same code path. After each mutation we
+      // re-scan the list from disk so the sidebar reflects the new state without a manual
+      // refresh.
+      onNewSession: async function () {
+        // Mint a fresh session id and switch to it. We do NOT pop a `prompt()` — the sidebar's
+        // "+" button is a deliberate "start a new chat" affordance, so the user already opted in.
+        const id = await Sessions.create(projectDirectory);
+        await switchTask(id);
+        void refreshSessionsPanel();
+      },
+      onSwitchSession: function (id) {
+        void switchTask(id);
+      },
+      onDeleteSession: async function (id) {
+        await deleteTask(id);
+        void refreshSessionsPanel();
+      },
       getMentions: getMentions,
       getProjectFiles: function () {
         return scanProjectFiles(projectDirectory);
       },
       onSendWithContext: function (text, context) {
         if (!client) return;
+        // OUTBOX / busy safety-net: the panel already disables Send + marks the input
+        // readOnly via _setBusy(true) when a turn is in flight (see panel.js _submit /
+        // _setBusy). This belt-and-suspenders check drops an enqueue if the panel somehow
+        // didn't yet gate the click (e.g. an Enter keydown that fires before the next
+        // render paints). The server-side `await prior.catch(() => {})` in src/serve.ts is
+        // the authoritative serializer — the worst case here is a duplicate user message
+        // being sent, not a corrupt state.
+        if (panel && panel.state && panel.state.outbox && panel.state.outbox.length > 0) {
+          // Already have at least one in-flight message; allow up to two queued so a fast
+          // double-tap still surfaces both bubbles (cap matches the spirit of "user can
+          // see what they typed even if A's response lags"). Three or more enqueues likely
+          // means a runaway key repeat — drop those silently.
+          if (panel.state.outbox.length > 2) return;
+        }
         // UserCommand wire shape (src/types.ts): { type:'user', text, context?, taskId?, tier? }.
         // taskId + tier are TOP-LEVEL fields (not under `context`); the core's UserCommand
         // schema in src/protocol.ts validates them there. The per-turn tier override is null
@@ -975,12 +1099,24 @@
           name === 'planner' || name === 'implementer' || name === 'reviewer' ? name : null;
       },
       onSend: function (text) {
-        if (client) client.sendUser(text);
+        if (!client) return;
+        // Belt-and-suspenders busy check (same rationale as onSendWithContext above). The
+        // panel normally gates Send via _setBusy(true), so this only fires on a keydown
+        // race during a re-render.
+        if (panel && panel.state && panel.state.outbox && panel.state.outbox.length > 2) return;
+        client.sendUser(text);
       },
       getEditorContext: currentEditorContext,
       onSlash: handleSlash,
       onTurnEnd: function (record) {
-        if (record && record.userText != null) void appendTurn(record);
+        if (record && record.userText != null) {
+          void appendTurn(record);
+          // After a turn lands the session's metadata (title, messageCount, updatedAt) may
+          // have changed (Sessions.appendTurn bumps the counter + re-derives the title). Push
+          // the refreshed list to the sidebar so the visible badge stays in lock-step with
+          // disk. Best-effort — never breaks the panel.
+          void refreshSessionsPanel();
+        }
       },
       onReindex: function () {
         if (client) client.reindex();
@@ -993,6 +1129,10 @@
       onClear: function () {
         if (client) client.sendClear();
         void clearSessionFile();
+        // After clearing, the session's messageCount drops to 0 in the NDJSON but the
+        // metadata sidecar may still claim >0 turns until the next appendTurn runs. Push a
+        // refreshed list so the sidebar's "12 msg" badge updates immediately.
+        void refreshSessionsPanel();
       },
       onOpenSource: function (src) {
         try {
@@ -1169,10 +1309,20 @@
       invalidateFileIndex(); // new project -> rescan file list for @file autocomplete
       projectDirectory = e.project.dir; // the on-disk directory (NOT e.project.path / the .yyp)
       console.info('chatgml: project opened', projectDirectory);
-      if (panel) {
-        panel.setTasks(listTasks());
-        panel.setTask(currentTaskId);
-      }
+      // Read the disk-side active pointer so the panel resumes the last-active session for
+      // this project on relaunch. Falls back to 'default' when no active file exists yet
+      // (first launch on this project). We then push the list to the sidebar + legacy task
+      // picker via refreshSessionsPanel, which also flips `currentTaskId` in memory.
+      void (async function () {
+        const activeId = await Sessions.getActive(projectDirectory);
+        if (activeId) {
+          currentTaskId = activeId;
+        }
+        if (panel) {
+          panel.setTask(currentTaskId);
+        }
+        await refreshSessionsPanel();
+      })();
     });
 
     GMEdit.on('activeFileChange', function (e) {

@@ -44,17 +44,47 @@
     // the next user message is sent with UserCommand.tier=<name> so the core dispatches to the
     // configured tier lane (Cline-style Plan/Act). null means mode-based auto-dispatch.
     this.tierOverride = null;
-    // The user-typed text after `/tier <name>` — flashed once in the transcript and remembered
-    // only for the lifetime of the panel (we don't persist this; the slash command is per-turn).
+    // OUTBOX / busy mirror (see plugin/state.js for the SSOT): the panel owns the primary
+    // sequence counter and the "is a turn in flight?" flag. state.outbox is the canonical
+    // source of truth pushed by the reducer; this._busy is the panel-local cache that
+    // _setBusy reads/writes so the send button / input read-only state stays in lock-step
+    // with the reducer on every render (avoiding a stale enabled Send during a streaming
+    // turn). _queueSeq keeps id collisions impossible across the lifetime of the panel.
+    this._busy = false;
+    this._queueSeq = 0;
+    // _outboxBubbleEl / _outboxRenderedIds are the panel's lazy-init DOM cache for the
+    // outbox wrapper. They are created on first render that actually has outbox entries and
+    // torn down on `/clear`; we initialize to null/[] here so the lazy-init branch in
+    // render() doesn't have to special-case undefined.
+    this._outboxBubbleEl = null;
+    this._outboxRenderedIds = [];
+    // OUTBOX cap: defensive bound on a runaway key-repeat or pathological sync test. The
+    // panel drops the OLDEST entries past this cap; the server in src/serve.ts serializes
+    // runs so dropping is purely cosmetic at this cap (the dropped messages would otherwise
+    // hang around as queued bubbles that the user has no way to clear). Matches the spirit
+    // of the existing TURN_CAP / ACTIVITY_CAP in state.js.
+    this._outboxCap = 20;
     this._build();
     this._detectTheme();
     this.setTask('default');
+    // Initialize the sessions sidebar to its empty state so the "No sessions yet"
+    // placeholder is visible until the first project-open event fires `setSessions(...)`
+    // with a real list. Without this, a fresh GMEdit launch shows a permanently-empty
+    // sidebar with no affordance for the user.
+    this.setSessions([]);
   }
 
   ChatPanel.prototype._build = function () {
     const self = this;
     const c = this.opts.container;
     c.classList.add('chatgml-panel');
+
+    // SESSIONS SIDEBAR: built FIRST so it sits at the very top of the panel container (above the
+    // controls row), per spec — the sidebar must be visible at all times while the user is
+    // reviewing the chat transcript below it. Collapsible via the header toggle. See
+    // `_buildSessionsSidebar` for the DOM structure and `setSessions` for the data path.
+    this._buildSessionsSidebar();
+    c.appendChild(this.sessionsEl);
 
     // Controls row.
     const controls = document.createElement('div');
@@ -344,6 +374,256 @@
     el.style.display = computed === 'none' ? 'flex' : 'none';
   };
 
+  // -------------------------------------------------------------------------
+  // SESSIONS SIDEBAR (multi-session history). The sidebar lives at the very top of the panel
+  // container, above the controls row, so it's visible while the user reviews the chat
+  // transcript below. It is collapsible via the header toggle. Each row shows title, message
+  // count, last-updated relative time, and a trash icon. Active session is highlighted.
+  //
+  // The data path is: chatgml.js calls Sessions.list(projectDir), then panel.setSessions(list)
+  // and panel.setActiveSession(activeId). This file only renders; it never reads disk.
+  // -------------------------------------------------------------------------
+  ChatPanel.prototype._buildSessionsSidebar = function () {
+    const self = this;
+    const root = document.createElement('div');
+    root.className = 'chatgml-session-root';
+
+    // Header row (always visible). Holds the toggle chevron + title + count + "+ New session".
+    const header = document.createElement('div');
+    header.className = 'chatgml-session-header';
+    const toggle = document.createElement('button');
+    toggle.className = 'chatgml-session-toggle';
+    toggle.type = 'button';
+    toggle.title = 'Toggle sessions list';
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.textContent = '\u25BE'; // ▾ — small downward chevron
+    toggle.addEventListener('click', function () {
+      self._toggleSessionsSidebar();
+    });
+    const title = document.createElement('span');
+    title.className = 'chatgml-session-header-title';
+    title.textContent = 'Sessions';
+    const count = document.createElement('span');
+    count.className = 'chatgml-session-header-count';
+    count.textContent = '0';
+    const newBtn = document.createElement('button');
+    newBtn.className = 'chatgml-session-new';
+    newBtn.type = 'button';
+    newBtn.textContent = '+';
+    newBtn.title = 'New session';
+    newBtn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      if (typeof self.opts.onNewSession === 'function') {
+        void self.opts.onNewSession();
+      }
+    });
+    header.appendChild(toggle);
+    header.appendChild(title);
+    header.appendChild(count);
+    header.appendChild(newBtn);
+    // Click anywhere on the header (except the new-button) toggles the sidebar so the user can
+    // collapse without hunting for the chevron.
+    header.addEventListener('click', function (ev) {
+      if (ev.target === newBtn) return;
+      self._toggleSessionsSidebar();
+    });
+    root.appendChild(header);
+
+    // Collapsible body (the actual list). start collapsed = false; expanded by default so a fresh
+    // panel shows the sidebar immediately.
+    const body = document.createElement('div');
+    body.className = 'chatgml-session-body';
+    const list = document.createElement('div');
+    list.className = 'chatgml-session-list';
+    body.appendChild(list);
+    root.appendChild(body);
+
+    // Empty-state placeholder so an unconfigured sidebar doesn't look broken.
+    const empty = document.createElement('div');
+    empty.className = 'chatgml-session-empty';
+    empty.textContent = 'No sessions yet';
+    empty.style.display = 'none';
+    body.appendChild(empty);
+
+    // Persist on the panel for setSessions/setActiveSession. The full state lives here; chatgml.js
+    // is the source of truth for the data, this file is the renderer.
+    this.sessionsEl = root;
+    this.sessionsHeaderEl = header;
+    this.sessionsToggleEl = toggle;
+    this.sessionsCountEl = count;
+    this.sessionsBodyEl = body;
+    this.sessionsListEl = list;
+    this.sessionsEmptyEl = empty;
+    this.sessionsCollapsed = false;
+    this._sessionsData = [];
+    this._sessionsActiveId = 'default';
+  };
+
+  ChatPanel.prototype._toggleSessionsSidebar = function () {
+    const self = this;
+    if (!this.sessionsEl) return;
+    this.sessionsCollapsed = !this.sessionsCollapsed;
+    if (this.sessionsCollapsed) {
+      this.sessionsEl.classList.add('chatgml-session-root--collapsed');
+      if (this.sessionsToggleEl) {
+        this.sessionsToggleEl.textContent = '\u25B8'; // ▸
+        this.sessionsToggleEl.setAttribute('aria-expanded', 'false');
+      }
+    } else {
+      this.sessionsEl.classList.remove('chatgml-session-root--collapsed');
+      if (this.sessionsToggleEl) {
+        this.sessionsToggleEl.textContent = '\u25BE'; // ▾
+        this.sessionsToggleEl.setAttribute('aria-expanded', 'true');
+      }
+    }
+    void self;
+  };
+
+  /** Replace the sessions list with a fresh snapshot from disk. Pure renderer — does not
+   * mutate state. The data shape mirrors `Sessions.list(projectDir)` output:
+   *   [{id, title, messageCount, createdAt, updatedAt, isActive}] */
+  ChatPanel.prototype.setSessions = function (list) {
+    const self = this;
+    this._sessionsData = Array.isArray(list) ? list.slice() : [];
+    if (!this.sessionsListEl) return;
+    // Drop all existing rows.
+    while (this.sessionsListEl.firstChild) {
+      this.sessionsListEl.removeChild(this.sessionsListEl.firstChild);
+    }
+    const total = this._sessionsData.length;
+    if (this.sessionsCountEl) this.sessionsCountEl.textContent = String(total);
+    if (this.sessionsEmptyEl) {
+      this.sessionsEmptyEl.style.display = total === 0 ? '' : 'none';
+    }
+    for (let i = 0; i < this._sessionsData.length; i++) {
+      const entry = this._sessionsData[i];
+      const row = this._buildSessionRow(entry);
+      this.sessionsListEl.appendChild(row);
+    }
+    void self;
+  };
+
+  /** Build one row in the sessions list. Pure DOM construction; click handlers call back into
+   * the panel opts (`onSwitchSession` / `onDeleteSession`) so chatgml.js stays the source of
+   * truth for what happens when the user picks a session. */
+  ChatPanel.prototype._buildSessionRow = function (entry) {
+    const self = this;
+    const row = document.createElement('div');
+    row.className = 'chatgml-session-list-item';
+    if (entry.isActive) row.classList.add('chatgml-session-list-item--active');
+    row.dataset.sessionId = entry.id;
+
+    // Indicator dot (filled for active, outline otherwise).
+    const dot = document.createElement('span');
+    dot.className = entry.isActive
+      ? 'chatgml-session-dot chatgml-session-dot--active'
+      : 'chatgml-session-dot';
+    row.appendChild(dot);
+
+    // Body wrapper for title + meta line.
+    const body = document.createElement('div');
+    body.className = 'chatgml-session-row-body';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'chatgml-session-title';
+    const rawTitle = entry.title || 'untitled';
+    titleEl.textContent = rawTitle.length > 32 ? rawTitle.slice(0, 31).trimEnd() + '…' : rawTitle;
+    titleEl.title = rawTitle; // tooltip shows full title
+    body.appendChild(titleEl);
+
+    const meta = document.createElement('div');
+    meta.className = 'chatgml-session-meta';
+    const msgs = entry.messageCount || 0;
+    const msgsSpan = document.createElement('span');
+    msgsSpan.className = 'chatgml-session-msgs';
+    msgsSpan.textContent = msgs + (msgs === 1 ? ' msg' : ' msgs');
+    meta.appendChild(msgsSpan);
+    const sep = document.createElement('span');
+    sep.className = 'chatgml-session-sep';
+    sep.textContent = ' · ';
+    meta.appendChild(sep);
+    const time = document.createElement('span');
+    time.className = 'chatgml-session-time';
+    time.textContent = formatRelativeTime(entry.updatedAt);
+    if (entry.updatedAt) time.title = new Date(entry.updatedAt).toLocaleString();
+    meta.appendChild(time);
+    body.appendChild(meta);
+
+    row.appendChild(body);
+
+    // Trash button — separate from the row click so clicking it doesn't also switch.
+    const trash = document.createElement('button');
+    trash.className = 'chatgml-session-trash';
+    trash.type = 'button';
+    trash.textContent = '\u2715'; // ✕
+    trash.title = 'Delete this session';
+    trash.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      if (typeof self.opts.onDeleteSession === 'function') {
+        void self.opts.onDeleteSession(entry.id);
+      }
+    });
+    row.appendChild(trash);
+
+    // Whole-row click switches session (except on the trash button, which stops propagation).
+    row.addEventListener('click', function () {
+      if (typeof self.opts.onSwitchSession === 'function') {
+        self.opts.onSwitchSession(entry.id);
+      }
+    });
+
+    return row;
+  };
+
+  /** Update the active-session highlight. Called by chatgml.js after a switch/create so the
+   * sidebar reflects the new active id without re-pulling the entire list from disk. */
+  ChatPanel.prototype.setActiveSession = function (id) {
+    this._sessionsActiveId = id || 'default';
+    if (!this.sessionsListEl) return;
+    const rows = this.sessionsListEl.querySelectorAll('.chatgml-session-list-item');
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const sid = r.dataset.sessionId;
+      const isActive = sid === this._sessionsActiveId;
+      r.classList.toggle('chatgml-session-list-item--active', isActive);
+      const dot = r.querySelector('.chatgml-session-dot');
+      if (dot) {
+        dot.className = isActive
+          ? 'chatgml-session-dot chatgml-session-dot--active'
+          : 'chatgml-session-dot';
+      }
+    }
+  };
+
+  /** Set the "switch in progress" visual cue. Used by chatgml.js to dim the sidebar header
+   * during a session switch so the user sees feedback. */
+  ChatPanel.prototype.setSessionsLoading = function (loading) {
+    if (!this.sessionsHeaderEl) return;
+    this.sessionsHeaderEl.classList.toggle('chatgml-session-header--loading', !!loading);
+  };
+
+  /** Format a millisecond timestamp as a compact relative-time string ("just now", "5m ago",
+   * "2h ago", "yesterday", "Mar 12"). Pure — no DOM, safe to call on every render. */
+  function formatRelativeTime(ts) {
+    if (!ts || typeof ts !== 'number') return '—';
+    const diff = Date.now() - ts;
+    if (diff < 0) return 'just now';
+    if (diff < 30 * 1000) return 'just now';
+    if (diff < 60 * 1000) return Math.floor(diff / 1000) + 's ago';
+    if (diff < 60 * 60 * 1000) return Math.floor(diff / (60 * 1000)) + 'm ago';
+    if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / (60 * 60 * 1000)) + 'h ago';
+    // "yesterday" iff the timestamp falls on the previous calendar day.
+    const now = new Date();
+    const then = new Date(ts);
+    const dayDiff = Math.floor((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) -
+      Date.UTC(then.getFullYear(), then.getMonth(), then.getDate())) / (24 * 60 * 60 * 1000));
+    if (dayDiff === 1) return 'yesterday';
+    if (dayDiff < 7) return dayDiff + 'd ago';
+    // Older: short month + day.
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[then.getMonth()] + ' ' + then.getDate();
+  }
+
   /** Build the inline settings dropdown (model, base URL, api key, embed model, embed base URL,
    * mode, approval, scope + Save&Restart). */
   ChatPanel.prototype._buildSettingsPanel = function () {
@@ -616,12 +896,80 @@
     const send = this.opts.onSendWithContext || this.opts.onSend;
     send(cleanText, Object.assign({}, context, { mentions: mentionsResult.mentions }));
     // Show the user message immediately (before the core responds) for instant feedback.
-    this.state.pendingUserText = cleanText;
-    this.state.answer = null;
-    this.state.transcript = '';
+    // OUTBOX: push a 'queued' entry onto the outbox so a SECOND send before this turn finishes
+    // does NOT visually overwrite the first one (the OLD code wrote `pendingUserText = cleanText`
+    // on every send). The reducer promotes this 'queued' entry to 'streaming' when tokens
+    // arrive, and 'turn_end' pops it. The same fresh `cleanText` is also kept on
+    // `state.pendingUserText` so the legacy "show my bubble immediately" code path below still
+    // works when only one message is in flight (the legacy UX contract is preserved when
+    // outbox.length === 1).
+    //
+    // Cap: drop the OLDEST entries past `this._outboxCap` (default 20) so a runaway key-repeat
+    // can't grow this array unbounded. The cap matches the spirit of TURN_CAP / ACTIVITY_CAP
+    // in state.js. The chatgml.js safety net (`if (panel.state.outbox.length > 2) return;`)
+    // already prevents runaway, so this is purely a defensive bound.
+    if (this.state.outbox.length >= this._outboxCap) {
+      const dropped = this.state.outbox.length - this._outboxCap + 1;
+      this.state.outbox = this.state.outbox.slice(dropped);
+      this._outboxRenderedIds = this._outboxRenderedIds.slice(dropped);
+      this.flash(
+        'queue capped at ' +
+          this._outboxCap +
+          ' — dropped ' +
+          dropped +
+          ' oldest message(s)',
+        true,
+      );
+    }
+    this.state.outbox.push({
+      id: 'q' + (++this._queueSeq),
+      text: cleanText,
+      status: 'queued',
+      ts: Date.now(),
+    });
+    // Mirror the seq bump into state (the reducer never writes _queueSeq; this is the only
+    // writer). The mirror lets a future server-side replay stay id-unique.
+    this.state._queueSeq = this._queueSeq;
+    // Backwards-compat: pendingUserText stays in lock-step with the head of the outbox. Single-
+    // send (the common case) makes pendingUserText == cleanText, which preserves the legacy
+    // `_render -> pending bubble` rendering path. Multi-send leaves pendingUserText pinned to
+    // the head so the legacy single-bubble render (when triggered with an empty outbox) would
+    // still show the most-recently-typed message — the bug we are fixing is "the second send
+    // visually replaced the first bubble", and pinning pendingUserText to the head is exactly
+    // the right semantics.
+    this.state.pendingUserText = this.state.outbox[0].text;
+    this._setBusy(true);
     this.inputEl.value = '';
     this._renderMentionChips();
     this.render();
+  };
+
+  /**
+   * Toggle the panel's "is a turn streaming?" UI state. Disables Send and marks the input
+   * read-only while `busy === true` so a fast second tap on Send can't enqueue a duplicate
+   * or race the in-flight wire command. The reducer's `state.busy` is the SSOT — we mirror
+   * it here at every render via render(), so this helper is the ONLY place that flips the
+   * disabled/readOnly attributes (callers: _submit [true] and handleEvent [re-sync]).
+   *
+   * Safety net: if the panel hasn't built the input row yet (e.g. during a render race), the
+   * element refs are null and we no-op silently. setRunning()/clear() also drive this via
+   * direct DOM manipulation; see those call sites.
+   */
+  ChatPanel.prototype._setBusy = function (busy) {
+    this._busy = !!busy;
+    if (this.sendBtn) {
+      if (busy) this.sendBtn.setAttribute('disabled', 'disabled');
+      else this.sendBtn.removeAttribute('disabled');
+    }
+    if (this.inputEl) {
+      // readOnly prevents typing into an in-flight turn (matches the visual "wait" affordance);
+      // it's also a hard guarantee — the textarea ignores keystrokes when readOnly = true.
+      try {
+        this.inputEl.readOnly = !!busy;
+      } catch (e) {
+        /* readOnly is a reflected property on textarea; ignore engine quirks */
+      }
+    }
   };
 
   /**
@@ -1013,6 +1361,12 @@
    * re-renders (which would freeze the panel on longer conversations). */
   ChatPanel.prototype.handleEvent = function (event) {
     this.state = State.reducePluginState(event, this.state);
+    // OUTBOX / busy re-sync: the reducer already managed `state.outbox` and `state.busy`, but
+    // `_busy` (the panel-side flag) and the Send-button disabled state have to be flipped here
+    // so the next render reflects the busy transition immediately. We re-derive busy from
+    // `state.outbox.length` rather than `state.busy` so the panel stays in sync with whichever
+    // event fired (an `error` event without a follow-up turn_end will still drop busy).
+    this._setBusy(this.state.outbox.length > 0);
     if (event.type === 'edit_proposal') {
       const proposal = this.state.pendingProposals.get(event.id);
       if (proposal) this.diffView.show(proposal);
@@ -1090,8 +1444,15 @@
     this.launchBtn.textContent = running ? 'Stop' : 'Launch';
     if (!running) {
       this.state = State.initialPluginState();
+      // Reset the panel-side seq counter alongside state.outbox so a fresh session restarts at
+      // q1 — leaving the old counter would collide on id with a future session's outbox entries
+      // if the panel instance is reused.
+      this._queueSeq = 0;
       this.catalogOpen = false;
       this.selectedCheckpointId = null;
+      // Stop+Launch cancels any in-flight turn: drop the Send-disabled / input-readOnly flags
+      // via _setBusy(false) — keeps the legacy direct DOM writes working AND resets _busy.
+      this._setBusy(false);
       this.sendBtn.setAttribute('disabled', 'disabled');
       this.reindexBtn.setAttribute('disabled', 'disabled');
       this.state.pendingUserText = null;
@@ -1103,6 +1464,8 @@
       this._renderedTurnsCount = 0;
       this._streamingBubbleEl = null;
       this._pendingBubbleEl = null;
+      this._outboxBubbleEl = null;
+      this._outboxRenderedIds = [];
       // Stop+Launch returns the panel to a clean state: drop any in-flight tier override so the
       // next turn dispatches via the freshly-loaded mode (avoids a stale override carrying over
       // from a previous session).
@@ -1177,6 +1540,10 @@
     this._renderedTurnsCount = 0;
     this._streamingBubbleEl = null;
     this._pendingBubbleEl = null;
+    // /clear also drops any outbox wrapper/ids so a /clear-mid-stream doesn't leave
+    // dangling queued user bubbles on a fresh transcript.
+    this._outboxBubbleEl = null;
+    this._outboxRenderedIds = [];
     this.state.transcript = '';
     this.state.answer = null;
     this.state.sources = [];
@@ -1191,6 +1558,12 @@
     this.state.turnsEvicted = 0;
     this.state.activityEvicted = 0;
     this.state.pendingUserText = null;
+    // OUTBOX: /clear also empties the outbox (queued/stale bubbles from prior sends have nowhere
+    // to go on a cleared session) and clears busy so Send re-enables immediately. The seq
+    // counter is preserved across /clear so future outbox ids remain unique within the panel.
+    this.state.outbox = [];
+    this.state.busy = false;
+    this._setBusy(false);
     // /clear also clears the tier override: the user explicitly asked for a clean slate.
     this.tierOverride = null;
     this._hideTierPicker();
@@ -1551,11 +1924,100 @@
       this._renderedTurnsCount = 0;
       this._streamingBubbleEl = null;
       this._pendingBubbleEl = null;
+      this._outboxBubbleEl = null;
+      this._outboxRenderedIds = [];
     }
 
     // Pending user message (sent but not yet finalized into a turn) — shows immediately.
+    //
+    // OUTBOX-aware rendering: when the user has fired multiple sends before the first response
+    // streams back, the reducer-managed `s.outbox` carries each one. We render them as a stack
+    // of user bubbles, each marked with `chatgml-outbox-` classes so a future CSS worker can
+    // dim/italicize queued entries without colliding with the `chatgml-session-` namespace.
+    //
+    // Backwards-compat: when outbox is empty we fall back to the legacy `pendingUserText`
+    // single-bubble path so reducers / clients that haven't been updated still render. The
+    // common case (single in-flight message) uses the legacy bubble so existing code keeps
+    // working unchanged.
+    var outbox = s.outbox || [];
     var hasPending = s.pendingUserText && String(s.pendingUserText).trim() !== '';
-    if (hasPending) {
+    if (outbox.length > 0) {
+      // Drop any stale `_pendingBubbleEl` so the legacy single-bubble DOM doesn't sit on
+      // top of the new outbox bubbles.
+      if (this._pendingBubbleEl) {
+        if (this._pendingBubbleEl.parentNode)
+          this._pendingBubbleEl.parentNode.removeChild(this._pendingBubbleEl);
+        this._pendingBubbleEl = null;
+      }
+      // Lazy-init the outbox DOM container if needed (sibling of, NOT replacing, the legacy
+      // pending bubble DOM). We use a dedicated wrapper so an empty outbox can be cleanly
+      // removed without disturbing the rest of the transcript.
+      if (!this._outboxBubbleEl || this._outboxBubbleEl.parentNode !== this.transcriptEl) {
+        var outboxWrap = document.createElement('div');
+        outboxWrap.className = 'chatgml-outbox-bubbles';
+        // Insert before the legacy pending bubble slot (if any) so the bubbles appear in
+        // chronological order (sends above the streaming answer).
+        this.transcriptEl.appendChild(outboxWrap);
+        this._outboxBubbleEl = outboxWrap;
+        this._outboxRenderedIds = [];
+      }
+      // Render each outbox entry once. If the id is already in _outboxRenderedIds we leave
+      // the bubble alone (status changes are reflected via className swap only — see below).
+      var seen = Object.create(null);
+      for (var oi = 0; oi < outbox.length; oi++) {
+        var entry = outbox[oi];
+        var existingNode = null;
+        var idx = this._outboxRenderedIds.indexOf(entry.id);
+        if (idx !== -1) {
+          existingNode = this._outboxBubbleEl.childNodes[idx] || null;
+        } else {
+          var bubble = document.createElement('div');
+          var labelText = entry.status === 'queued' ? '⏳ Queued' : '✍ In flight';
+          bubble.className =
+            'chatgml-turn chatgml-turn-user chatgml-turn-outbox chatgml-outbox-status-' +
+            entry.status;
+          var label = document.createElement('div');
+          label.className = 'chatgml-turn-label';
+          label.textContent = 'You • ' + labelText;
+          bubble.appendChild(label);
+          var body = document.createElement('div');
+          body.className = 'chatgml-turn-body chatgml-outbox-body';
+          body.textContent = entry.text; // user text is plain text — never run markdown
+          bubble.appendChild(body);
+          this._outboxBubbleEl.appendChild(bubble);
+          this._outboxRenderedIds.push(entry.id);
+          existingNode = bubble;
+        }
+        // Idempotent status swap: queue/streaming/sent changes the wrapper class so a future
+        // CSS worker can dim queued and highlight in-flight without rebuilding the bubble.
+        if (existingNode) {
+          existingNode.className =
+            'chatgml-turn chatgml-turn-user chatgml-turn-outbox chatgml-outbox-status-' +
+            entry.status;
+        }
+        seen[entry.id] = true;
+      }
+      // Drop outbox bubbles whose ids are no longer in state (turn_end shifted them off).
+      var newIds = outbox.map(function (e) { return e.id; });
+      // Prune _outboxRenderedIds to match current ids (preserve order).
+      var filtered = [];
+      for (var pi = 0; pi < this._outboxRenderedIds.length; pi++) {
+        if (seen[this._outboxRenderedIds[pi]]) filtered.push(this._outboxRenderedIds[pi]);
+      }
+      // Remove any DOM children that no longer have a matching id (the array-index survives
+      // pruning, so we can rekey).
+      while (this._outboxBubbleEl.childNodes.length > outbox.length) {
+        this._outboxBubbleEl.removeChild(this._outboxBubbleEl.lastChild);
+      }
+      this._outboxRenderedIds = newIds;
+    } else if (hasPending) {
+      // Drop the outbox wrapper so a /clear or empty outbox doesn't leave dangling DOM.
+      if (this._outboxBubbleEl) {
+        if (this._outboxBubbleEl.parentNode)
+          this._outboxBubbleEl.parentNode.removeChild(this._outboxBubbleEl);
+        this._outboxBubbleEl = null;
+        this._outboxRenderedIds = [];
+      }
       if (!this._pendingBubbleEl || this._pendingBubbleEl.parentNode !== this.transcriptEl) {
         var pendBubble = document.createElement('div');
         pendBubble.className = 'chatgml-turn chatgml-turn-user';
@@ -1570,11 +2032,19 @@
         this._pendingBubbleEl = pendBubble;
       }
       this._pendingBubbleEl.querySelector('.chatgml-turn-body').textContent = s.pendingUserText;
-    } else if (this._pendingBubbleEl) {
-      // Remove the pending bubble once the turn is finalized.
-      if (this._pendingBubbleEl.parentNode)
-        this._pendingBubbleEl.parentNode.removeChild(this._pendingBubbleEl);
-      this._pendingBubbleEl = null;
+    } else {
+      // No outbox and no pending text — drop both legacy and outbox DOM.
+      if (this._pendingBubbleEl) {
+        if (this._pendingBubbleEl.parentNode)
+          this._pendingBubbleEl.parentNode.removeChild(this._pendingBubbleEl);
+        this._pendingBubbleEl = null;
+      }
+      if (this._outboxBubbleEl) {
+        if (this._outboxBubbleEl.parentNode)
+          this._outboxBubbleEl.parentNode.removeChild(this._outboxBubbleEl);
+        this._outboxBubbleEl = null;
+        this._outboxRenderedIds = [];
+      }
     }
 
     // Append only NEW finalized turns (those not yet rendered as DOM nodes).

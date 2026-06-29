@@ -8,6 +8,7 @@
     "markdown.js",
     "fuzzy.js",
     "settings-tasks.js",
+    "sessions.js",
     "panel.js",
     "config-bridge.js",
     "client.js",

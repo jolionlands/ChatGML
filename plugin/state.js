@@ -144,6 +144,30 @@
       // isn't shown a stale block. Plugin reads this during the assistant bubble render to show
       // the collapsible "model thinking..." block.
       lastThinking: null,
+      // OUTBOX / QUEUE (mirror of src/plugin-runtime.ts): a queue of in-flight user messages so
+      // a second send before the first response streams back does NOT visually overwrite the
+      // first one. Items are pushed by the panel on send and popped by the reducer on
+      // `answer` / `turn_end`. The server serializes runs (`await prior.catch(() => {})` in
+      // src/serve.ts) so both messages always reach the wire; the outbox is purely UI state to
+      // render queued bubbles while the first turn is in flight.
+      outbox: [], // [{ id, text, status: 'queued'|'streaming'|'sent', ts }]
+      busy: false, // true while a turn is streaming tokens
+      // Monotonically-increasing id counter for outbox entries. Kept in state so a panel
+      // instance that inherits a reducer-only context still produces unique ids across turns
+      // (the panel-level _queueSeq is the primary sequence; this is a defensive mirror so
+      // a server-side replay that pushes onto outbox cannot collide ids).
+      _queueSeq: 0,
+      // SESSIONS / HISTORY SIDEBAR (mirror of src/plugin-runtime.ts): the multi-session
+      // sidebar in the panel reads its data from this slice. Entries are
+      // {id, title, messageCount, createdAt, updatedAt, isActive}. The slice is fully
+      // panel/IO-managed — the reducer never writes to it; it stays in lock-step with
+      // disk via chatgml.js wiring. `activeSessionId` mirrors the disk-side
+      // <projectHash>.active.json pointer (defaults to 'default'); `sessionLoading` is a
+      // visual cue flipped true while a session switch is in flight so the panel can dim
+      // the sidebar header.
+      sessionList: [],
+      activeSessionId: 'default',
+      sessionLoading: false,
     };
   }
 
@@ -165,10 +189,27 @@
       activityEvicted: state.activityEvicted,
       pendingUserText: state.pendingUserText,
       lastThinking: state.lastThinking,
+      outbox: state.outbox,
+      busy: state.busy,
+      _queueSeq: state._queueSeq,
+      // SESSIONS / HISTORY SIDEBAR: panel/IO-managed. The reducer is a no-op for these fields
+      // (no case below mutates them); we still carry them forward in the spread so a reducer
+      // pass does NOT clobber the panel's in-memory sidebar state with undefined.
+      sessionList: state.sessionList,
+      activeSessionId: state.activeSessionId,
+      sessionLoading: state.sessionLoading,
     };
     switch (event.type) {
       case 'status':
         next.phase = event.phase;
+        // OUTBOX / busy wiring: `status` carries lifecycle phases from the core. Only the
+        // terminal (idle/done/cancelled) and explicit stopped phases mean "not busy"; other
+        // phases (thinking/indexing/launching) leave busy alone so a token event arriving
+        // on the next tick can flip it true. ready is special: the panel wants Send RE-enabled
+        // even if a previous turn ended in a `busy=true` state due to a lost turn_end.
+        if (event.phase === 'idle' || event.phase === 'stopped' || event.phase === 'cancelled' || event.phase === 'done') {
+          next.busy = false;
+        }
         if (event.phase === 'ready') {
           next.ready = true;
           if (event.mode) next.mode = event.mode;
@@ -178,6 +219,15 @@
       case 'token':
         next.transcript = state.transcript + event.text;
         next.answer = (state.answer || '') + event.text;
+        next.busy = true; // transcript is streaming -> the UI is busy until turn_end
+        // Promote the head outbox item from 'queued' to 'streaming' (first token after send).
+        // Pure: build a fresh array (no in-place mutation of state.outbox) so the reducer
+        // stays referentially transparent across reducers.
+        if (state.outbox.length > 0 && state.outbox[0].status === 'queued') {
+          const promoted = state.outbox.slice();
+          promoted[0] = Object.assign({}, promoted[0], { status: 'streaming' });
+          next.outbox = promoted;
+        }
         return next;
       case 'tool_call': {
         const capped = pushCapped(
@@ -348,6 +398,14 @@
         }
         next.answer = null; // the streaming answer is now captured in the turn
         next.pendingUserText = null;
+        // OUTBOX pop: turn_end finalizes the head outbox item. If the head is still 'streaming'
+        // (the common case) shift it off; if it's 'queued' (e.g. an immediate switch), shift
+        // as well. If 'sent' (a future status), shift. If the outbox is empty we no-op. Always
+        // clear busy — the panel must re-enable Send on the next paint.
+        if (state.outbox.length > 0) {
+          next.outbox = state.outbox.slice(1);
+        }
+        next.busy = false;
         return next;
       }
       case 'tool_catalog':
@@ -385,9 +443,22 @@
         // Clear pending thinking so the next user prompt renders a fresh (empty) block; the
         // thinking block for THIS turn was already emitted by the prior `thinking` event.
         next.lastThinking = null;
+        // OUTBOX: `answer` (terminal answer) marks the head item 'streaming'; the actual pop
+        // happens on `turn_end` which always follows. We intentionally do NOT shift here so
+        // the queued bubbles remain visible until the turn_end event definitively finalizes
+        // the turn (matches the panel's expectation — see panel.js handleEvent hook).
+        if (state.outbox.length > 0 && state.outbox[0].status === 'queued') {
+          const promoted = state.outbox.slice();
+          promoted[0] = Object.assign({}, promoted[0], { status: 'streaming' });
+          next.outbox = promoted;
+        }
         return next;
       case 'error':
         next.error = event.message;
+        // An error mid-turn: don't pop the head (the panel can decide to retry/recover); just
+        // ensure busy is unset so the user can Send again. If the head was the failed turn,
+        // turn_end will arrive shortly with userText/assistantText and will pop normally.
+        next.busy = false;
         return next;
       default:
         return next;

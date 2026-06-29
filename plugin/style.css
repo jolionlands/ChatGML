@@ -1908,3 +1908,295 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   border-bottom: 1px solid var(--chatgml-border);
   margin-bottom: 2px;
 }
+
+/* ============================================================================
+ * [SESSIONS] Multi-session history sidebar
+ * ============================================================================
+ * The sessions sidebar sits at the top of the panel container and lists every
+ * session for the current project (per-project file location lives in
+ * plugin/sessions.js). Sessions can be switched, deleted, and a new one
+ * created from the "+" button. The active session is highlighted with the
+ * accent border + filled indicator dot.
+ *
+ * CSS variables (--chatgml-accent, --chatgml-surface-*, --chatgml-border, etc.)
+ * are defined in the [THEME] block above; we reference them everywhere so a
+ * light/dark theme switch recolors the sidebar without re-paint.
+ *
+ * Class prefix: `chatgml-session-*` — never collides with `chatgml-outbox-*`
+ * (the queue rendering owned by the send-bug-fix worker).
+ * ============================================================================ */
+.chatgml-session-root {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-0);
+  font-size: 12px;
+  color: var(--chatgml-fg);
+  /* Sits above controls/transcript. flex layout handled by the panel container. */
+  user-select: none;
+}
+
+.chatgml-session-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--chatgml-surface-1);
+  border-bottom: 1px solid var(--chatgml-border);
+  cursor: pointer;
+  position: relative;
+  transition: background 120ms ease;
+}
+.chatgml-session-header:hover {
+  background: var(--chatgml-surface-2);
+}
+.chatgml-session-header--loading {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: progress;
+}
+
+.chatgml-session-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--chatgml-fg);
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1;
+}
+.chatgml-session-toggle:focus-visible {
+  outline: 1px solid var(--chatgml-accent);
+  outline-offset: 1px;
+}
+
+.chatgml-session-header-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chatgml-session-header-count {
+  font-size: 11px;
+  color: var(--chatgml-muted);
+  background: var(--chatgml-surface-2);
+  border: 1px solid var(--chatgml-border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.chatgml-session-new {
+  background: var(--chatgml-accent);
+  color: var(--chatgml-bg);
+  border: 0;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 120ms ease;
+}
+.chatgml-session-new:hover {
+  background: var(--chatgml-accent-hover);
+}
+.chatgml-session-new:focus-visible {
+  outline: 2px solid var(--chatgml-accent);
+  outline-offset: 1px;
+}
+
+.chatgml-session-body {
+  display: block;
+  /* Soft cap: 10 rows visible, the rest scrolls. */
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--chatgml-surface-0);
+}
+.chatgml-session-root--collapsed .chatgml-session-body {
+  display: none;
+}
+.chatgml-session-root--collapsed .chatgml-session-header {
+  border-bottom: 0;
+}
+
+.chatgml-session-list {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+}
+
+.chatgml-session-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid transparent;
+  transition: background 100ms ease;
+}
+.chatgml-session-list-item:hover {
+  background: var(--chatgml-surface-hover);
+}
+.chatgml-session-list-item--active {
+  background: var(--chatgml-surface-active);
+  border-left-color: var(--chatgml-accent);
+}
+
+.chatgml-session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--chatgml-muted);
+  flex-shrink: 0;
+  background: transparent;
+}
+.chatgml-session-dot--active {
+  border-color: var(--chatgml-accent);
+  background: var(--chatgml-accent);
+}
+
+.chatgml-session-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatgml-session-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--chatgml-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chatgml-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--chatgml-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.chatgml-session-msgs {
+  font-variant-numeric: tabular-nums;
+}
+.chatgml-session-sep {
+  opacity: 0.6;
+}
+.chatgml-session-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.chatgml-session-trash {
+  background: transparent;
+  border: 0;
+  color: var(--chatgml-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.chatgml-session-list-item:hover .chatgml-session-trash {
+  opacity: 1;
+}
+.chatgml-session-trash:hover {
+  background: var(--chatgml-surface-2);
+  color: #f38ba8;
+}
+.chatgml-session-trash:focus-visible {
+  outline: 1px solid var(--chatgml-accent);
+  outline-offset: 1px;
+}
+
+.chatgml-session-empty {
+  padding: 12px 10px;
+  text-align: center;
+  color: var(--chatgml-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* ============================================================================
+ * [OUTBOX] Multi-send queue bubble rendering
+ * ============================================================================
+ * Multiple in-flight user messages render as a stack of bubbles above the
+ * streaming answer. Each entry's status drives a CSS class swap so queued
+ * ones are visually subdued while in-flight ones glow with the accent.
+ *
+ * Class prefix: `chatgml-outbox-*` — independent of `chatgml-session-*`.
+ * Wraps `chatgml-turn chatgml-turn-user` from the prior turn-rendering work;
+ * we extend rather than redefine to keep the bubble layout consistent.
+ * ============================================================================ */
+.chatgml-outbox-bubbles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.chatgml-turn-outbox {
+  opacity: 0.85;
+}
+.chatgml-outbox-status-queued {
+  border-style: dashed !important;
+  margin-left: 8px;
+}
+.chatgml-outbox-status-streaming {
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--chatgml-accent-hover);
+  animation: chatgml-outbox-pulse 1.4s ease-in-out infinite;
+}
+.chatgml-outbox-status-sent {
+  opacity: 1;
+}
+
+@keyframes chatgml-outbox-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--chatgml-accent-hover); }
+  50%      { box-shadow: 0 0 0 2px var(--chatgml-accent); }
+}
+
+.chatgml-outbox-body {
+  padding: 6px 8px;
+  word-break: break-word;
+}
+
+.chatgml-panel textarea.chatgml-input[readonly] {
+  background: var(--chatgml-surface-1);
+  cursor: not-allowed;
+  opacity: 0.75;
+  border-style: dashed;
+}
+.chatgml-panel .run-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
