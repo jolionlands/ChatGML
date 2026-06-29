@@ -58,17 +58,18 @@ interface JsState {
 }
 
 // Synthetic helpers (mirror the style of test/plugin/parity.test.ts).
-const user = (text: string): AgentEvent =>
-  ({ type: 'user' as const, text, sources: [] });
+const user = (text: string): AgentEvent => ({ type: 'user' as const, text, sources: [] });
 
-const token = (text: string): AgentEvent =>
-  ({ type: 'token' as const, text });
+const token = (text: string): AgentEvent => ({ type: 'token' as const, text });
 
-const answer = (text: string): AgentEvent =>
-  ({ type: 'answer' as const, text, sources: [] });
+const answer = (text: string): AgentEvent => ({ type: 'answer' as const, text, sources: [] });
 
-const turnEnd = (userText: string, assistantText: string): AgentEvent =>
-  ({ type: 'turn_end' as const, userText, assistantText, sources: [] });
+const turnEnd = (userText: string, assistantText: string): AgentEvent => ({
+  type: 'turn_end' as const,
+  userText,
+  assistantText,
+  sources: [],
+});
 
 const status = (
   phase: 'ready' | 'thinking' | 'streaming' | 'idle' | 'done' | 'stopped' | 'cancelled',
@@ -78,8 +79,7 @@ const status = (
   return ev;
 };
 
-const error = (message: string): AgentEvent =>
-  ({ type: 'error' as const, message });
+const error = (message: string): AgentEvent => ({ type: 'error' as const, message });
 
 // Drive the panel-equivalent "user clicked Send" path: push onto outbox and set pendingUserText
 // the same way `_submit` does. We mutate a state object the way the panel does (the panel
@@ -348,10 +348,7 @@ describe('parity: outbox/busy/queueSeq behavior is identical across both reducer
       ...tsMid2,
       _queueSeq: 2,
       pendingUserText: 'B',
-      outbox: [
-        ...tsMid2.outbox,
-        { id: 'q2', text: 'B', status: 'queued' as const, ts: 0 },
-      ],
+      outbox: [...tsMid2.outbox, { id: 'q2', text: 'B', status: 'queued' as const, ts: 0 }],
     };
     // The reducer for token('b') then promotes the head (which is now B) -> streaming.
     jsMid2 = js.reducePluginState(token('b'), jsMid2);

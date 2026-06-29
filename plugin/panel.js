@@ -365,13 +365,25 @@
    * `display: none`, so a freshly-built panel has empty inline style but is still visually hidden
    * — checking inline alone would make the toggle wrong on the very first click. */
   ChatPanel.prototype._toggleSettings = function () {
-    if (!this.settingsPanelEl) this._buildSettingsPanel();
+    var wasUnbuilt = !this.settingsPanelEl;
+    if (wasUnbuilt) this._buildSettingsPanel();
     var el = this.settingsPanelEl;
     var computed =
-      typeof getComputedStyle === 'function'
-        ? getComputedStyle(el).display
-        : el.style.display;
+      typeof getComputedStyle === 'function' ? getComputedStyle(el).display : el.style.display;
     el.style.display = computed === 'none' ? 'flex' : 'none';
+    // First open after the panel was just built: pick up the providers load result that
+    // chatgml.js stashed on `this._pendingProvidersLoad` during the bootstrap call. We use the
+    // same callbacks the bootstrap uses so Refresh/Add/Export behave identically.
+    if (wasUnbuilt && this._pendingProvidersLoad && typeof this.populateProviders === 'function') {
+      var pending = this._pendingProvidersLoad;
+      this._pendingProvidersLoad = null;
+      this.populateProviders(pending, {
+        onRefresh: this._pendingProvidersCallbacks && this._pendingProvidersCallbacks.onRefresh,
+        onAddProvider:
+          this._pendingProvidersCallbacks && this._pendingProvidersCallbacks.onAddProvider,
+        onExportEnv: this._pendingProvidersCallbacks && this._pendingProvidersCallbacks.onExportEnv,
+      });
+    }
   };
 
   // -------------------------------------------------------------------------
@@ -615,12 +627,28 @@
     // "yesterday" iff the timestamp falls on the previous calendar day.
     const now = new Date();
     const then = new Date(ts);
-    const dayDiff = Math.floor((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) -
-      Date.UTC(then.getFullYear(), then.getMonth(), then.getDate())) / (24 * 60 * 60 * 1000));
+    const dayDiff = Math.floor(
+      (Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) -
+        Date.UTC(then.getFullYear(), then.getMonth(), then.getDate())) /
+        (24 * 60 * 60 * 1000),
+    );
     if (dayDiff === 1) return 'yesterday';
     if (dayDiff < 7) return dayDiff + 'd ago';
     // Older: short month + day.
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return months[then.getMonth()] + ' ' + then.getDate();
   }
 
@@ -633,6 +661,31 @@
     // Explicitly hidden at build time so the computed-style read in `_toggleSettings` returns
     // 'none' on the first click. (CSS `display: none` alone isn't visible to inline-style checks.)
     this.settingsPanelEl.style.display = 'none';
+
+    // Scroll wrapper — the panel can grow tall (8+ rows + tier groups) so we cap it at ~70vh
+    // and let it scroll. The wrapper is the actual scroll container; the panel itself is just a
+    // positioning anchor. Sticky header inside the wrapper keeps the title visible while users
+    // scroll long provider lists.
+    this.settingsScrollEl = document.createElement('div');
+    this.settingsScrollEl.className = 'chatgml-settings-scroll';
+
+    // Sticky header — providers count + actions (Refresh, Add Provider, Export .env). Stays at
+    // the top of the scroll viewport so users can always see the current registry size.
+    this.settingsHeaderEl = document.createElement('div');
+    this.settingsHeaderEl.className = 'chatgml-settings-header';
+    var headerLeft = document.createElement('div');
+    headerLeft.className = 'chatgml-settings-header-left';
+    this.settingsHeaderEl.appendChild(headerLeft);
+    var headerRight = document.createElement('div');
+    headerRight.className = 'chatgml-settings-header-right';
+    this.settingsHeaderEl.appendChild(headerRight);
+    this.settingsScrollEl.appendChild(this.settingsHeaderEl);
+
+    // Provider registry section — collapsible details panel inside the settings. Lists every
+    // provider+model pair from the merged registry, with a click-to-apply handler that fills the
+    // Model + Base URL fields and stamps `providerSelected` on the save.
+    this.settingsProvidersEl = document.createElement('div');
+    this.settingsProvidersEl.className = 'chatgml-settings-providers';
 
     function makeRow(labelText, el) {
       var row = document.createElement('div');
@@ -652,19 +705,37 @@
       return help;
     }
 
-    // Model
+    // Model — text input bound to a `<datalist>` populated from the provider registry. Users can
+    // still type any value (free text) but pick from the registry as autocomplete. The datalist
+    // element is created here and re-populated whenever the providers list refreshes.
+    this.settingsModelDatalist = document.createElement('datalist');
+    this.settingsModelDatalist.id = 'chatgml-settings-model-list';
     this.settingsModelInput = document.createElement('input');
     this.settingsModelInput.type = 'text';
     this.settingsModelInput.className = 'chatgml-settings-input';
     this.settingsModelInput.placeholder = 'chat model id';
-    this.settingsPanelEl.appendChild(makeRow('Model', this.settingsModelInput));
+    this.settingsModelInput.setAttribute('list', this.settingsModelDatalist.id);
+    this.settingsScrollEl.appendChild(makeRow('Model', this.settingsModelInput));
+    this.settingsScrollEl.appendChild(this.settingsModelDatalist);
 
-    // Base URL
+    // Base URL — same datalist pattern, separate options array.
+    this.settingsUrlDatalist = document.createElement('datalist');
+    this.settingsUrlDatalist.id = 'chatgml-settings-url-list';
     this.settingsUrlInput = document.createElement('input');
     this.settingsUrlInput.type = 'text';
     this.settingsUrlInput.className = 'chatgml-settings-input';
     this.settingsUrlInput.placeholder = 'chat endpoint URL';
-    this.settingsPanelEl.appendChild(makeRow('Base URL', this.settingsUrlInput));
+    this.settingsUrlInput.setAttribute('list', this.settingsUrlDatalist.id);
+    this.settingsScrollEl.appendChild(makeRow('Base URL', this.settingsUrlInput));
+    this.settingsScrollEl.appendChild(this.settingsUrlDatalist);
+
+    // Provider-matched hint shown under the URL row when the typed value matches a registered
+    // provider. Lets the user confirm at a glance "yes, this URL is registered as X". Cleared on
+    // next edit.
+    this.settingsUrlHintEl = document.createElement('div');
+    this.settingsUrlHintEl.className = 'chatgml-settings-url-hint';
+    this.settingsUrlHintEl.style.display = 'none';
+    this.settingsScrollEl.appendChild(this.settingsUrlHintEl);
 
     // API key — password-type input so the value is never echoed on screen. When a key is already
     // set (the redacted `cfg.chat.apiKey` from `chatgml config show` is truthy), the placeholder
@@ -676,27 +747,36 @@
     this.settingsApiKeyInput.placeholder = SettingsTasks.API_KEY_PLACEHOLDER;
     this.settingsApiKeyInput.autocomplete = 'off';
     this.settingsApiKeyInput.spellcheck = false;
-    this.settingsPanelEl.appendChild(makeRow('API Key', this.settingsApiKeyInput));
-    this.settingsPanelEl.appendChild(
+    this.settingsScrollEl.appendChild(makeRow('API Key', this.settingsApiKeyInput));
+    this.settingsScrollEl.appendChild(
       makeHelpRow(
         'Stored in ~/.config/chatgml/config.json. For production, set CHATGML_CHAT_KEY in your ' +
           'environment and paste  env:CHATGML_CHAT_KEY  here — only env references are persisted.',
       ),
     );
 
-    // Embed Model (separate lane; the chat model does NOT fall back to the embed model).
+    // Embed Model (separate lane; the chat model does NOT fall back to the embed model). Bound to
+    // a datalist populated from the registry when available.
+    this.settingsEmbedModelDatalist = document.createElement('datalist');
+    this.settingsEmbedModelDatalist.id = 'chatgml-settings-embed-model-list';
     this.settingsEmbedModelInput = document.createElement('input');
     this.settingsEmbedModelInput.type = 'text';
     this.settingsEmbedModelInput.className = 'chatgml-settings-input';
     this.settingsEmbedModelInput.placeholder = 'embed model id';
-    this.settingsPanelEl.appendChild(makeRow('Embed Model', this.settingsEmbedModelInput));
+    this.settingsEmbedModelInput.setAttribute('list', this.settingsEmbedModelDatalist.id);
+    this.settingsScrollEl.appendChild(makeRow('Embed Model', this.settingsEmbedModelInput));
+    this.settingsScrollEl.appendChild(this.settingsEmbedModelDatalist);
 
     // Embed Base URL.
+    this.settingsEmbedUrlDatalist = document.createElement('datalist');
+    this.settingsEmbedUrlDatalist.id = 'chatgml-settings-embed-url-list';
     this.settingsEmbedUrlInput = document.createElement('input');
     this.settingsEmbedUrlInput.type = 'text';
     this.settingsEmbedUrlInput.className = 'chatgml-settings-input';
     this.settingsEmbedUrlInput.placeholder = 'embed endpoint URL';
-    this.settingsPanelEl.appendChild(makeRow('Embed Base URL', this.settingsEmbedUrlInput));
+    this.settingsEmbedUrlInput.setAttribute('list', this.settingsEmbedUrlDatalist.id);
+    this.settingsScrollEl.appendChild(makeRow('Embed Base URL', this.settingsEmbedUrlInput));
+    this.settingsScrollEl.appendChild(this.settingsEmbedUrlDatalist);
 
     // Mode select
     this.settingsModeSelect = document.createElement('select');
@@ -708,7 +788,7 @@
       opt.textContent = modes[i][0].toUpperCase() + modes[i].slice(1);
       this.settingsModeSelect.appendChild(opt);
     }
-    this.settingsPanelEl.appendChild(makeRow('Mode', this.settingsModeSelect));
+    this.settingsScrollEl.appendChild(makeRow('Mode', this.settingsModeSelect));
 
     // Approval select
     this.settingsApprovalSelect = document.createElement('select');
@@ -721,25 +801,28 @@
     autoOpt.textContent = 'auto';
     this.settingsApprovalSelect.appendChild(gatedOpt);
     this.settingsApprovalSelect.appendChild(autoOpt);
-    this.settingsPanelEl.appendChild(makeRow('Approval', this.settingsApprovalSelect));
+    this.settingsScrollEl.appendChild(makeRow('Approval', this.settingsApprovalSelect));
 
     // Scope
     this.settingsScopeInput = document.createElement('input');
     this.settingsScopeInput.type = 'text';
     this.settingsScopeInput.className = 'chatgml-settings-input';
     this.settingsScopeInput.placeholder = 'memory scope';
-    this.settingsPanelEl.appendChild(makeRow('Scope', this.settingsScopeInput));
+    this.settingsScrollEl.appendChild(makeRow('Scope', this.settingsScopeInput));
 
     // Tier overrides subsection (Cline-style Plan/Act). Three collapsible groups — one per tier
     // (planner/implementer/reviewer) — each with `Model` + `Base URL` fields. Empty fields are
     // dropped on save (SettingsTasks drops them when building the config commands), so a user can
-    // partially populate a tier and only those two leaves are persisted.
+    // partially populate a tier and only those two leaves are persisted. The model + base URL
+    // inputs are bound to datalists so users can pick from the registry just like the global
+    // chat lane.
     var tierHeader = document.createElement('div');
     tierHeader.className = 'chatgml-settings-section-header';
     tierHeader.textContent = 'Tiers (per-role lane overrides)';
-    this.settingsPanelEl.appendChild(tierHeader);
+    this.settingsScrollEl.appendChild(tierHeader);
 
     this.settingsTierInputs = { planner: {}, implementer: {}, reviewer: {} };
+    this.settingsTierDatalists = { planner: {}, implementer: {}, reviewer: {} };
     var tierNames = ['planner', 'implementer', 'reviewer'];
     var tierLabels = {
       planner: '🧠 Planner',
@@ -754,23 +837,32 @@
         sum.textContent = tierLabels[name];
         group.appendChild(sum);
 
+        var modelDatalist = document.createElement('datalist');
+        modelDatalist.id = 'chatgml-settings-tier-' + name + '-model-list';
         var modelInput = document.createElement('input');
         modelInput.type = 'text';
         modelInput.className = 'chatgml-settings-input';
         modelInput.placeholder = name + ' model id';
+        modelInput.setAttribute('list', modelDatalist.id);
         group.appendChild(makeRow('Model', modelInput));
+        group.appendChild(modelDatalist);
 
+        var urlDatalist = document.createElement('datalist');
+        urlDatalist.id = 'chatgml-settings-tier-' + name + '-url-list';
         var urlInput = document.createElement('input');
         urlInput.type = 'text';
         urlInput.className = 'chatgml-settings-input';
         urlInput.placeholder = name + ' endpoint URL';
+        urlInput.setAttribute('list', urlDatalist.id);
         group.appendChild(makeRow('Base URL', urlInput));
+        group.appendChild(urlDatalist);
 
         self.settingsTierInputs[name] = { model: modelInput, baseURL: urlInput };
-        self.settingsPanelEl.appendChild(group);
+        self.settingsTierDatalists[name] = { model: modelDatalist, baseURL: urlDatalist };
+        self.settingsScrollEl.appendChild(group);
       })(tierNames[tni]);
     }
-    this.settingsPanelEl.appendChild(
+    this.settingsScrollEl.appendChild(
       makeHelpRow(
         'Empty fields are dropped (existing values are preserved). Each tier is a partial ' +
           'override of the global chat lane; unset leaves fall back to the global model/URL.',
@@ -809,15 +901,29 @@
           },
         },
       };
+      // Stamp provider-selected metadata so SettingsTasks can choose to emit the registry-derived
+      // fields (path, auth) without having to re-resolve the (provider, model) pair itself. The
+      // panel set `this._activeProviderEntry` when the user clicked a registry row.
+      if (self._activeProviderEntry) {
+        settings.providerSelected = true;
+        settings.path = self._activeProviderEntry.endpoint || '';
+        settings.auth = self._activeProviderEntry.auth || '';
+      }
       if (typeof self.opts.onSaveSettings === 'function') {
         self.opts.onSaveSettings(settings);
       }
       // Reset the password field after save so the raw value doesn't linger in the DOM. Empty
       // submit is already a no-op on the wire (see SettingsTasks.buildSettingsCommands).
       self.settingsApiKeyInput.value = '';
+      // Clear the active-provider marker so the next open of the panel starts fresh — the user
+      // may pick a different entry next time.
+      self._activeProviderEntry = null;
       self.settingsPanelEl.style.display = 'none';
     });
-    this.settingsPanelEl.appendChild(saveBtn);
+    this.settingsScrollEl.appendChild(saveBtn);
+
+    // Mount the scroll wrapper inside the panel, then the panel inside the container.
+    this.settingsPanelEl.appendChild(this.settingsScrollEl);
 
     // Insert after controls, before status line.
     this.opts.container.insertBefore(this.settingsPanelEl, this.statusEl);
@@ -860,6 +966,252 @@
         if (tierSlot.baseURL) this.settingsTierInputs[tn].baseURL.value = tierSlot.baseURL;
       }
     }
+    // Re-check the URL hint so the user gets immediate feedback if their saved URL matches a
+    // registered provider. Without this the hint would only update on the next manual edit.
+    if (this.settingsUrlInput && this._refreshUrlHint) this._refreshUrlHint();
+  };
+
+  /** Populate the providers registry section. Replaces the contents of `settingsHeaderEl.left`
+   * (provider count + bootstrap indicator) and `settingsHeaderEl.right` (Refresh / Add Provider
+   * / Export .env action buttons), then renders the collapsible provider list in the scroll
+   * container. Safe to call multiple times — the panel re-reads the registry each time so the
+   * user can edit `~/.config/chatgml/providers.json` externally and refresh.
+   *
+   * @param {object} loadResult the return value of `ProvidersApi.loadAll(...)`
+   * @param {{onRefresh?:Function, onAddProvider?:Function, onExportEnv?:Function}} callbacks
+   */
+  ChatPanel.prototype.populateProviders = function (loadResult, callbacks) {
+    if (!loadResult) return;
+    if (!this.settingsHeaderEl) return;
+    var cbs = callbacks || {};
+    var self = this;
+
+    // Header (left): count + bootstrap indicator + any warnings.
+    var headerLeft = this.settingsHeaderEl.firstChild;
+    while (headerLeft.firstChild) headerLeft.removeChild(headerLeft.firstChild);
+    var count = (loadResult.providers || []).length;
+    var countLabel = document.createElement('span');
+    countLabel.className = 'chatgml-settings-providers-count';
+    countLabel.textContent = count + ' provider' + (count === 1 ? '' : 's');
+    headerLeft.appendChild(countLabel);
+    if (loadResult.bootstrapped) {
+      var bootBadge = document.createElement('span');
+      bootBadge.className = 'chatgml-settings-providers-badge';
+      bootBadge.title = 'Copied from ~/.pi/agent/providers.json — you can edit freely';
+      bootBadge.textContent = '⚙ bootstrapped';
+      headerLeft.appendChild(bootBadge);
+    }
+    if (Array.isArray(loadResult.warnings) && loadResult.warnings.length > 0) {
+      var warnBadge = document.createElement('span');
+      warnBadge.className = 'chatgml-settings-providers-warn';
+      warnBadge.title = loadResult.warnings.join('\n');
+      warnBadge.textContent = '⚠ ' + loadResult.warnings.length;
+      headerLeft.appendChild(warnBadge);
+    }
+
+    // Header (right): actions.
+    var headerRight = this.settingsHeaderEl.lastChild;
+    while (headerRight.firstChild) headerRight.removeChild(headerRight.firstChild);
+    function makeBtn(text, title, onClick) {
+      var b = document.createElement('button');
+      b.className = 'chatgml-settings-action-btn';
+      b.type = 'button';
+      b.textContent = text;
+      b.title = title;
+      b.addEventListener('click', onClick);
+      return b;
+    }
+    headerRight.appendChild(
+      makeBtn('↻', 'Refresh provider registry', function () {
+        if (typeof cbs.onRefresh === 'function') cbs.onRefresh();
+      }),
+    );
+    headerRight.appendChild(
+      makeBtn('+', 'Add a custom provider entry', function () {
+        if (typeof cbs.onAddProvider === 'function') cbs.onAddProvider();
+      }),
+    );
+    headerRight.appendChild(
+      makeBtn('.env', 'Export registry as .env snippet', function () {
+        if (typeof cbs.onExportEnv === 'function') cbs.onExportEnv();
+      }),
+    );
+
+    // Datalists — replace the option set on every refresh.
+    function fillDatalist(dl, opts) {
+      while (dl.firstChild) dl.removeChild(dl.firstChild);
+      for (var i = 0; i < opts.length; i++) {
+        var o = document.createElement('option');
+        o.value = opts[i].value;
+        o.label = opts[i].label;
+        dl.appendChild(o);
+      }
+    }
+    var dlists = loadResult.datalistOptions || { modelOptions: [], baseUrlOptions: [] };
+    if (this.settingsModelDatalist) fillDatalist(this.settingsModelDatalist, dlists.modelOptions);
+    if (this.settingsUrlDatalist) fillDatalist(this.settingsUrlDatalist, dlists.baseUrlOptions);
+    // Embed lanes reuse the same options (there is no separate registry for embeddings today);
+    // a future split could fork this out without changing the panel structure.
+    if (this.settingsEmbedModelDatalist)
+      fillDatalist(this.settingsEmbedModelDatalist, dlists.modelOptions);
+    if (this.settingsEmbedUrlDatalist)
+      fillDatalist(this.settingsEmbedUrlDatalist, dlists.baseUrlOptions);
+    var tierNames = ['planner', 'implementer', 'reviewer'];
+    for (var tni3 = 0; tni3 < tierNames.length; tni3++) {
+      var tn2 = tierNames[tni3];
+      var slot = this.settingsTierDatalists && this.settingsTierDatalists[tn2];
+      if (!slot) continue;
+      fillDatalist(slot.model, dlists.modelOptions);
+      fillDatalist(slot.baseURL, dlists.baseUrlOptions);
+    }
+
+    // Provider list — collapsible `<details>` per provider, with click-to-apply rows for each
+    // model. The apply handler fills the Model + Base URL inputs and stores the entry on the
+    // panel so the save handler can stamp `providerSelected`.
+    while (this.settingsProvidersEl.firstChild)
+      this.settingsProvidersEl.removeChild(this.settingsProvidersEl.firstChild);
+    var providers = loadResult.providers || [];
+    if (providers.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'chatgml-settings-providers-empty';
+      empty.textContent =
+        'No providers registered. Edit ~/.config/chatgml/providers.json or click + to add one.';
+      this.settingsProvidersEl.appendChild(empty);
+    } else {
+      for (var pi = 0; pi < providers.length; pi++) {
+        (function (prov) {
+          var det = document.createElement('details');
+          det.className = 'chatgml-settings-provider-group';
+          var sm = document.createElement('summary');
+          var nameSpan = document.createElement('span');
+          nameSpan.textContent = prov.name;
+          sm.appendChild(nameSpan);
+          var metaSpan = document.createElement('span');
+          metaSpan.className = 'chatgml-settings-provider-meta';
+          metaSpan.textContent =
+            prov.kind +
+            (prov.models.length > 0
+              ? ' · ' + prov.models.length + ' model' + (prov.models.length === 1 ? '' : 's')
+              : '');
+          sm.appendChild(metaSpan);
+          det.appendChild(sm);
+
+          var urlRow = document.createElement('div');
+          urlRow.className = 'chatgml-settings-provider-url';
+          urlRow.textContent = prov.baseUrl || '(no base_url)';
+          det.appendChild(urlRow);
+
+          var list = document.createElement('div');
+          list.className = 'chatgml-settings-provider-models';
+          if (prov.models.length === 0) {
+            var nm = document.createElement('div');
+            nm.className = 'chatgml-settings-provider-no-models';
+            nm.textContent = 'No models registered — click + to add one.';
+            list.appendChild(nm);
+          } else {
+            for (var mi = 0; mi < prov.models.length; mi++) {
+              (function (model, parent) {
+                var row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'chatgml-settings-provider-model';
+                row.title = 'Click to apply this provider+model to the chat lane';
+                var lbl = document.createElement('span');
+                lbl.textContent = model.id;
+                row.appendChild(lbl);
+                var wire = document.createElement('span');
+                wire.className = 'chatgml-settings-provider-wire';
+                wire.textContent =
+                  model.wireModel && model.wireModel !== model.id ? 'wire: ' + model.wireModel : '';
+                row.appendChild(wire);
+                if (model.contextWindow > 0) {
+                  var ctx = document.createElement('span');
+                  ctx.className = 'chatgml-settings-provider-ctx';
+                  ctx.textContent = 'ctx ' + model.contextWindow.toLocaleString();
+                  row.appendChild(ctx);
+                }
+                row.addEventListener('click', function () {
+                  self._applyProviderEntry({
+                    providerName: prov.name,
+                    modelId: model.id,
+                    baseUrl: prov.baseUrl,
+                    endpoint: prov.endpoint,
+                    auth: prov.auth,
+                  });
+                });
+                parent.appendChild(row);
+              })(prov.models[mi], list);
+            }
+          }
+          det.appendChild(list);
+          self.settingsProvidersEl.appendChild(det);
+        })(providers[pi]);
+      }
+    }
+    // Mount the provider list just after the sticky header, so it appears above the form rows.
+    if (this.settingsProvidersEl.parentNode !== this.settingsScrollEl) {
+      this.settingsScrollEl.insertBefore(
+        this.settingsProvidersEl,
+        this.settingsHeaderEl.nextSibling,
+      );
+    }
+    // URL hint + click handler wiring (re-bound on each refresh so the closure captures the
+    // fresh registry).
+    if (this.settingsUrlInput) {
+      var input = this.settingsUrlInput;
+      this._refreshUrlHint = function () {
+        if (!self.settingsUrlHintEl || !self._registry) return;
+        var v = (input.value || '').trim();
+        if (!v) {
+          self.settingsUrlHintEl.style.display = 'none';
+          return;
+        }
+        var ProvidersApi = self._ProvidersApi;
+        var hit = ProvidersApi && ProvidersApi.findProviderByUrl(self._registry, v);
+        if (hit) {
+          self.settingsUrlHintEl.textContent = '✓ registered as ' + hit.name;
+          self.settingsUrlHintEl.className =
+            'chatgml-settings-url-hint chatgml-settings-url-hint--match';
+          self.settingsUrlHintEl.style.display = 'block';
+        } else {
+          self.settingsUrlHintEl.textContent = 'Not in registry — free-text mode';
+          self.settingsUrlHintEl.className =
+            'chatgml-settings-url-hint chatgml-settings-url-hint--free';
+          self.settingsUrlHintEl.style.display = 'block';
+        }
+      };
+      this.settingsUrlInput.removeEventListener('input', this._onUrlInput);
+      this._onUrlInput = function () {
+        self._refreshUrlHint();
+      };
+      this.settingsUrlInput.addEventListener('input', this._onUrlInput);
+      this._refreshUrlHint();
+    }
+    // Store the registry + providers module on the instance so applyProviderEntry can look up.
+    this._registry = loadResult.registry;
+  };
+
+  /** Apply a registry (provider, model) entry to the chat-lane inputs. Called when the user
+   * clicks a row in the providers list. Stamps the entry on the panel so the save handler emits
+   * the registry-derived fields (path, auth) alongside the model + URL. */
+  ChatPanel.prototype._applyProviderEntry = function (entry) {
+    if (!entry) return;
+    this._activeProviderEntry = entry;
+    if (this.settingsModelInput) this.settingsModelInput.value = entry.modelId || '';
+    if (this.settingsUrlInput) this.settingsUrlInput.value = entry.baseUrl || '';
+    if (this._refreshUrlHint) this._refreshUrlHint();
+    // Scroll the chat-lane form rows into view so the user can confirm the auto-fill before
+    // hitting Save & Restart.
+    if (this.settingsModelInput && typeof this.settingsModelInput.scrollIntoView === 'function') {
+      this.settingsModelInput.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    if (this.settingsModelInput && typeof this.settingsModelInput.focus === 'function') {
+      this.settingsModelInput.focus();
+    }
+  };
+
+  /** Public accessor for the currently-selected provider entry, used by the save handler. */
+  ChatPanel.prototype.getActiveProviderEntry = function () {
+    return this._activeProviderEntry || null;
   };
 
   /** Submit the current input: route slash commands; otherwise send a user message + editor ctx + mentions. */
@@ -913,16 +1265,12 @@
       this.state.outbox = this.state.outbox.slice(dropped);
       this._outboxRenderedIds = this._outboxRenderedIds.slice(dropped);
       this.flash(
-        'queue capped at ' +
-          this._outboxCap +
-          ' — dropped ' +
-          dropped +
-          ' oldest message(s)',
+        'queue capped at ' + this._outboxCap + ' — dropped ' + dropped + ' oldest message(s)',
         true,
       );
     }
     this.state.outbox.push({
-      id: 'q' + (++this._queueSeq),
+      id: 'q' + ++this._queueSeq,
       text: cleanText,
       status: 'queued',
       ts: Date.now(),
@@ -1529,7 +1877,11 @@
       this.inputEl.focus();
       if (typeof this.inputEl.setSelectionRange === 'function') {
         const len = (this.inputEl.value || '').length;
-        try { this.inputEl.setSelectionRange(len, len); } catch (_) { /* ignore */ }
+        try {
+          this.inputEl.setSelectionRange(len, len);
+        } catch (_) {
+          /* ignore */
+        }
       }
     }
   };
@@ -1998,7 +2350,9 @@
         seen[entry.id] = true;
       }
       // Drop outbox bubbles whose ids are no longer in state (turn_end shifted them off).
-      var newIds = outbox.map(function (e) { return e.id; });
+      var newIds = outbox.map(function (e) {
+        return e.id;
+      });
       // Prune _outboxRenderedIds to match current ids (preserve order).
       var filtered = [];
       for (var pi = 0; pi < this._outboxRenderedIds.length; pi++) {

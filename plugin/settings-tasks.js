@@ -110,10 +110,57 @@
     return typeof redactedApiKey === 'string' && redactedApiKey.length > 0;
   }
 
+  /**
+   * Decide whether a settings save includes a provider-registry derived entry. The panel stamps a
+   * `providerSelected` flag on the settings object when the user picked a row from the providers
+   * datalist; if so, the helper trusts the inline Model + Base URL fields (they were populated
+   * from the registry entry) and skips the tier-override / re-resolution steps that the panel
+   * would otherwise need to run itself.
+   *
+   * @param {object} settings - the settings object the panel collected
+   * @returns {boolean}
+   */
+  function hasProviderSelection(settings) {
+    if (!settings || typeof settings !== 'object') return false;
+    if (settings.providerSelected === true) return true;
+    // Defensive fallback: a non-empty model + non-empty baseURL are enough to consider the user
+    // "selected" — the panel always populates both when picking from the datalist.
+    var model = typeof settings.model === 'string' ? settings.model.trim() : '';
+    var baseURL = typeof settings.baseURL === 'string' ? settings.baseURL.trim() : '';
+    return model !== '' && baseURL !== '';
+  }
+
+  /**
+   * Return a list of provider-suggested field writes that should be appended to the save plan.
+   * Currently only the chat lane has a corresponding core config field; embedding providers are
+   * surfaced in the UI as suggestions but not auto-written (the user can pick them manually).
+   *
+   * Each returned entry is `[field, value]` matching the existing `commands` array shape. The
+   * `path` and `auth` fields are optional and only emitted when explicitly provided by the
+   * panel's provider selection (the core has to learn about them before they take effect).
+   *
+   * @param {object} settings
+   * @returns {Array<[string,string]>}
+   */
+  function providerDerivedCommands(settings) {
+    var out = [];
+    if (!settings || typeof settings !== 'object') return out;
+    // The path field is only meaningful when the panel explicitly set it from a provider entry.
+    if (typeof settings.path === 'string' && settings.path.trim() !== '') {
+      out.push(['chat.path', settings.path.trim()]);
+    }
+    if (typeof settings.auth === 'string' && settings.auth.trim() !== '') {
+      out.push(['chat.auth', settings.auth.trim()]);
+    }
+    return out;
+  }
+
   const api = {
     buildSettingsCommands: buildSettingsCommands,
     apiKeyDisplayPlaceholder: apiKeyDisplayPlaceholder,
     hasApiKey: hasApiKey,
+    hasProviderSelection: hasProviderSelection,
+    providerDerivedCommands: providerDerivedCommands,
     API_KEY_PLACEHOLDER: API_KEY_PLACEHOLDER,
   };
 

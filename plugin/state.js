@@ -207,7 +207,12 @@
         // phases (thinking/indexing/launching) leave busy alone so a token event arriving
         // on the next tick can flip it true. ready is special: the panel wants Send RE-enabled
         // even if a previous turn ended in a `busy=true` state due to a lost turn_end.
-        if (event.phase === 'idle' || event.phase === 'stopped' || event.phase === 'cancelled' || event.phase === 'done') {
+        if (
+          event.phase === 'idle' ||
+          event.phase === 'stopped' ||
+          event.phase === 'cancelled' ||
+          event.phase === 'done'
+        ) {
           next.busy = false;
         }
         if (event.phase === 'ready') {

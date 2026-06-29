@@ -18,6 +18,9 @@
   --chatgml-add-fg: #a6e3a1;
   --chatgml-del-bg: rgba(243, 139, 168, 0.16);
   --chatgml-del-fg: #f38ba8;
+  --chatgml-accent-bg: rgba(137, 180, 250, 0.12);
+  --chatgml-warn: #f9e2af;
+  --chatgml-warn-bg: rgba(249, 226, 175, 0.12);
   --chatgml-card-bg: #181825;
   --chatgml-card-border: #313244;
 
@@ -52,6 +55,9 @@
   --chatgml-del-fg: #e03131;
   --chatgml-card-bg: #ffffff;
   --chatgml-card-border: #e1e1e6;
+  --chatgml-accent-bg: rgba(30, 102, 245, 0.08);
+  --chatgml-warn: #b4731a;
+  --chatgml-warn-bg: rgba(180, 115, 26, 0.1);
 
   --chatgml-surface-0: #fafafa;
   --chatgml-surface-1: #f0f0f3;
@@ -1579,12 +1585,269 @@ button[disabled],
   flex: 0 0 auto;
   display: none;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 0;
+  padding: 0;
   background: var(--chatgml-card-bg);
   border: 1px solid var(--chatgml-card-border);
   border-radius: var(--chatgml-radius);
   margin: 2px 0;
+  /* Cap the panel height at ~70% of the viewport so it never pushes the transcript off-screen,
+     even with every tier group expanded. The inner `.chatgml-settings-scroll` element is the
+     actual scroll container — keeping the panel itself scroll-free means the box-shadow and
+     border stay locked to the panel bounds and don't move on scroll. */
+  max-height: min(70vh, 720px);
+}
+
+/* Scroll wrapper inside the panel. The only element with `overflow-y: auto` — the panel itself
+   stays a positioning anchor so the rounded corners don't clip awkwardly mid-scroll. */
+.chatgml-settings-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  /* Reserve space for the scrollbar so the form doesn't jump when content appears/disappears. */
+  scrollbar-gutter: stable;
+  /* Custom scrollbar — match the GMEdit surface tokens so the panel doesn't look out of place. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--chatgml-border) transparent;
+}
+
+.chatgml-settings-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.chatgml-settings-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chatgml-settings-scroll::-webkit-scrollbar-thumb {
+  background: var(--chatgml-border);
+  border-radius: 4px;
+}
+.chatgml-settings-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--chatgml-muted);
+}
+
+/* Sticky header inside the scroll wrapper — keeps the providers count + action buttons visible
+   while the user scrolls through long tier sections. The sticky offset accounts for the wrapper
+   padding so the header pins flush with the scroll edge. */
+.chatgml-settings-header {
+  position: sticky;
+  top: -10px; /* offset the wrapper's top padding */
+  z-index: 2;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0 6px 0;
+  margin: -10px -12px 4px -12px; /* bleed to wrapper edges */
+  padding-left: 12px;
+  padding-right: 12px;
+  background: var(--chatgml-card-bg);
+  border-bottom: 1px solid var(--chatgml-border);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+.chatgml-settings-header-left {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chatgml-settings-header-right {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+.chatgml-settings-providers-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--chatgml-fg);
+}
+
+.chatgml-settings-providers-badge {
+  font-size: 10px;
+  color: var(--chatgml-accent);
+  background: var(--chatgml-accent-bg);
+  border: 1px solid var(--chatgml-accent);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+.chatgml-settings-providers-warn {
+  font-size: 10px;
+  color: var(--chatgml-warn);
+  background: var(--chatgml-warn-bg);
+  border: 1px solid var(--chatgml-warn);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+.chatgml-settings-action-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.chatgml-settings-action-btn:hover {
+  background: var(--chatgml-surface-hover);
+  border-color: var(--chatgml-accent);
+}
+
+/* Provider list — collapsible details per provider. */
+.chatgml-settings-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.chatgml-settings-providers-empty {
+  font-size: 11px;
+  color: var(--chatgml-muted);
+  padding: 6px 8px;
+  background: var(--chatgml-surface-1);
+  border: 1px dashed var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+}
+
+.chatgml-settings-provider-group {
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  overflow: hidden;
+}
+
+.chatgml-settings-provider-group > summary {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--chatgml-fg);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.chatgml-settings-provider-group > summary::-webkit-details-marker {
+  display: none;
+}
+.chatgml-settings-provider-group > summary::before {
+  content: '▶';
+  font-size: 9px;
+  color: var(--chatgml-muted);
+  transition: transform 0.15s ease;
+  margin-right: 4px;
+}
+.chatgml-settings-provider-group[open] > summary::before {
+  transform: rotate(90deg);
+}
+.chatgml-settings-provider-group > summary:hover {
+  background: var(--chatgml-surface-hover);
+}
+
+.chatgml-settings-provider-meta {
+  font-size: 10px;
+  color: var(--chatgml-muted);
+  font-weight: 400;
+}
+
+.chatgml-settings-provider-url {
+  font-size: 10px;
+  color: var(--chatgml-muted);
+  font-family: var(--chatgml-mono);
+  padding: 0 8px 4px 24px;
+  word-break: break-all;
+}
+
+.chatgml-settings-provider-models {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px 6px 8px;
+}
+
+.chatgml-settings-provider-model {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--chatgml-fg);
+  background: var(--chatgml-surface-2);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+.chatgml-settings-provider-model:hover {
+  background: var(--chatgml-accent-bg);
+  border-color: var(--chatgml-accent);
+}
+.chatgml-settings-provider-model:focus-visible {
+  outline: none;
+  border-color: var(--chatgml-accent);
+  box-shadow: 0 0 0 2px var(--chatgml-accent-bg);
+}
+
+.chatgml-settings-provider-wire {
+  font-size: 10px;
+  color: var(--chatgml-muted);
+  font-family: var(--chatgml-mono);
+  margin-left: auto;
+}
+
+.chatgml-settings-provider-ctx {
+  font-size: 10px;
+  color: var(--chatgml-accent);
+  background: var(--chatgml-accent-bg);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 14px;
+}
+
+.chatgml-settings-provider-no-models {
+  font-size: 10px;
+  color: var(--chatgml-muted);
+  padding: 2px 4px;
+}
+
+/* URL hint — shown under the Base URL row when the typed value matches (or doesn't match) a
+   registered provider. The match variant uses the accent color; the free-text variant is muted. */
+.chatgml-settings-url-hint {
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 2px 0 4px 78px;
+  word-break: break-word;
+}
+.chatgml-settings-url-hint--match {
+  color: var(--chatgml-accent);
+}
+.chatgml-settings-url-hint--free {
+  color: var(--chatgml-muted);
 }
 
 .chatgml-settings-row {
@@ -2124,7 +2387,10 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   padding: 0;
   flex-shrink: 0;
   opacity: 0.4;
-  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
 }
 .chatgml-session-list-item:hover .chatgml-session-trash {
   opacity: 1;
@@ -2181,8 +2447,13 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 }
 
 @keyframes chatgml-outbox-pulse {
-  0%, 100% { box-shadow: 0 0 0 1px var(--chatgml-accent-hover); }
-  50%      { box-shadow: 0 0 0 2px var(--chatgml-accent); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px var(--chatgml-accent-hover);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--chatgml-accent);
+  }
 }
 
 .chatgml-outbox-body {

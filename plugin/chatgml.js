@@ -24,7 +24,9 @@
   // modules resolve correctly. The `globalThis.*` short-circuit still wins when the script is
   // preloaded by config.json (the normal case) and lets Node-based tests require this file
   // directly without a custom loader.
-  const _abs = function (mod) { return require(path.join(__dirname, mod)); };
+  const _abs = function (mod) {
+    return require(path.join(__dirname, mod));
+  };
   const ClientApi = globalThis.ChatGmlClient || _abs('client.js');
   const PanelApi = globalThis.ChatGmlPanel || _abs('panel.js');
   const DiffViewApi = globalThis.ChatGmlDiffView || _abs('diff-view.js');
@@ -40,6 +42,10 @@
   // as the other modules above — `globalThis.ChatGmlSessions` first (the normal config.json
   // load path), `require(path.join(__dirname, 'sessions.js'))` as the test/renderer fallback.
   const Sessions = globalThis.ChatGmlSessions || _abs('sessions.js');
+  // Providers registry module (plugin/providers.js). Owns the bootstrap from
+  // `~/.pi/agent/providers.json` and the `.env` export; panel.js consumes it via the instance
+  // methods `populateProviders` / `applyProviderEntry`.
+  const ProvidersApi = globalThis.ChatGmlProviders || _abs('providers.js');
 
   const PLUGIN_NAME = 'chatgml';
   // SESSION_DIR is the per-project NDJSON store. Per spec, files live at
@@ -70,6 +76,24 @@
   // stamped with the tier that produced it and the panel renders a badge).
   let activeTierOverride = null;
   const configBridge = new ConfigBridgeApi.ConfigBridge(__dirname);
+
+  // Resolve the chatgml-owned user config directory for the providers.json file. Mirrors the
+  // platform conventions of `~/.config/chatgml/` on POSIX and `%APPDATA%/chatgml/` on Windows so
+  // the bootstrap-write lands alongside `~/.config/chatgml/config.json`. Centralized in a helper
+  // so the providers callbacks always agree on the path.
+  function chatgmlUserDirForProviders() {
+    try {
+      const xdg = process.env.XDG_CONFIG_HOME;
+      if (xdg && typeof xdg === 'string') return path.join(xdg, 'chatgml');
+      if (process.platform === 'win32') {
+        const appdata = process.env.APPDATA;
+        if (appdata) return path.join(appdata, 'chatgml');
+      }
+      return path.join(require('os').homedir(), '.config', 'chatgml');
+    } catch (e) {
+      return path.join(require('os').homedir(), '.config', 'chatgml');
+    }
+  }
 
   // File index for @file autocomplete: cached list of project files, lazily scanned, invalidated
   // when projectDirectory changes. Capped at FILE_INDEX_MAX to keep autocomplete snappy on huge
@@ -400,9 +424,13 @@
         }
         if (typeof panel.setTasks === 'function') {
           // Legacy task picker takes just ids, in stable order (old code sorted alphabetically).
-          panel.setTasks(list.map(function (e) {
-            return e.id;
-          }).sort());
+          panel.setTasks(
+            list
+              .map(function (e) {
+                return e.id;
+              })
+              .sort(),
+          );
         }
       }
     } catch (e) {
@@ -1195,6 +1223,173 @@
       onUndo: function () {
         if (client) client.send({ type: 'undo' });
       },
+      // ---- Provider registry callbacks (panel populates / refreshes / adds / exports) ----
+      // The panel keeps the registry module reference + raw registry in instance state; the
+      // glue just re-reads disk and re-pushes. All three callbacks are best-effort — a failure
+      // surfaces as a panel flash and the settings panel stays usable.
+      onRefreshProviders: function () {
+        if (panel && typeof panel.populateProviders === 'function') {
+          try {
+            var load = ProvidersApi.loadAll({
+              chatgmlUserDir: chatgmlUserDirForProviders(),
+            });
+            panel._registry = load.registry;
+            panel._ProvidersApi = ProvidersApi;
+            panel.populateProviders(load, {
+              onRefresh: function () {
+                onRefreshProviders();
+              },
+              onAddProvider: function () {
+                onAddProvider();
+              },
+              onExportEnv: function () {
+                onExportEnv();
+              },
+            });
+            if (load.bootstrapped && panel) {
+              panel.flash('Providers bootstrapped from ~/.pi/agent/providers.json');
+            }
+          } catch (e) {
+            if (panel) panel.flash('refresh providers failed: ' + (e.message || e), true);
+          }
+        }
+      },
+      onAddProvider: function () {
+        // Minimal inline add form. The panel could grow this into a full modal later; for now
+        // we collect (name, baseURL, modelId) via window.prompt and write through the
+        // ProvidersApi. The registry refresh callback then re-renders the section.
+        var name = null;
+        var baseUrl = null;
+        var modelId = null;
+        try {
+          // GMEdit's renderer has window.prompt; we fall back to a no-op for safety in headless
+          // contexts (tests + the initial background bootstrap).
+          if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+            name = window.prompt('Provider name (a-z, 0-9, _, -):', '');
+            if (!name) return;
+            baseUrl = window.prompt('Base URL (e.g. https://api.example.com/v1):', '');
+            if (!baseUrl) return;
+            modelId = window.prompt('First model id (or leave blank for no models yet):', '');
+          }
+        } catch (e) {
+          if (panel) panel.flash('add provider aborted: ' + (e.message || e), true);
+          return;
+        }
+        if (!name || !baseUrl) return;
+        try {
+          var chatgmlPath = ProvidersApi.defaultChatgmlProvidersPath(chatgmlUserDirForProviders());
+          var entry = {
+            chatgmlPath: chatgmlPath,
+            name: String(name).trim(),
+            baseUrl: String(baseUrl).trim(),
+            endpoint: '/chat/completions',
+            auth: 'bearer',
+            models: modelId
+              ? [{ id: String(modelId).trim(), wire_model: String(modelId).trim() }]
+              : [],
+          };
+          var result = ProvidersApi.registerProvider(entry);
+          if (!result.ok) {
+            if (panel) panel.flash('add provider failed: ' + result.error, true);
+            return;
+          }
+          if (panel) panel.flash('Provider "' + entry.name + '" added — refresh to see');
+          // Auto-refresh so the user sees the new entry in the list without an extra click.
+          onRefreshProviders();
+        } catch (e) {
+          if (panel) panel.flash('add provider failed: ' + (e.message || e), true);
+        }
+      },
+      onExportEnv: function () {
+        try {
+          var load = ProvidersApi.loadAll({ chatgmlUserDir: chatgmlUserDirForProviders() });
+          var env = ProvidersApi.toEnvFormat(load.registry);
+          // Try GMEdit's clipboard API first; fall back to a textarea+execCommand for headless.
+          var copied = false;
+          try {
+            if (
+              typeof GMEdit !== 'undefined' &&
+              GMEdit &&
+              typeof GMEdit.setClipboard === 'function'
+            ) {
+              GMEdit.setClipboard(env);
+              copied = true;
+            } else if (
+              typeof navigator !== 'undefined' &&
+              navigator.clipboard &&
+              typeof navigator.clipboard.writeText === 'function'
+            ) {
+              navigator.clipboard.writeText(env);
+              copied = true;
+            } else if (typeof document !== 'undefined') {
+              var ta = document.createElement('textarea');
+              ta.value = env;
+              ta.style.position = 'fixed';
+              ta.style.opacity = '0';
+              document.body.appendChild(ta);
+              ta.select();
+              try {
+                document.execCommand('copy');
+                copied = true;
+              } catch (e) {
+                /* fallthrough */
+              }
+              document.body.removeChild(ta);
+            }
+          } catch (e) {
+            /* fallthrough */
+          }
+          if (copied) {
+            if (panel)
+              panel.flash('.env copied to clipboard (' + load.providers.length + ' providers)');
+          } else {
+            // Last resort: log to console so the user can copy manually.
+            try {
+              console.info('[chatgml] provider .env export:\n' + env);
+            } catch (e) {
+              /* no console */
+            }
+            if (panel)
+              panel.flash(
+                '.env export logged to console (' + load.providers.length + ' providers)',
+              );
+          }
+        } catch (e) {
+          if (panel) panel.flash('export .env failed: ' + (e.message || e), true);
+        }
+      },
+      // Bootstrap-on-init: read the registry and stamp it on the panel BEFORE the user opens
+      // settings so the first open already shows a populated list (and the sticky header has
+      // data). Best-effort — a failure here is silently logged; the panel will still work, it
+      // just shows "0 providers" until the user clicks Refresh.
+      onSettingsBootstrap: function () {
+        try {
+          var load = ProvidersApi.loadAll({ chatgmlUserDir: chatgmlUserDirForProviders() });
+          if (!panel) return;
+          panel._registry = load.registry;
+          panel._ProvidersApi = ProvidersApi;
+          // Always stash the callbacks so the lazy-build path can pick them up on first open.
+          // Without this, Refresh/Add/Export buttons would be no-ops until the user closed and
+          // reopened settings (since `_pendingProvidersLoad` alone would carry data but no
+          // callbacks).
+          panel._pendingProvidersCallbacks = {
+            onRefresh: onRefreshProviders,
+            onAddProvider: onAddProvider,
+            onExportEnv: onExportEnv,
+          };
+          // The panel might not have built the settings DOM yet (first open lazy-builds it).
+          // If the DOM exists, populate; otherwise the panel calls populateProviders itself the
+          // first time settings is opened.
+          if (panel.settingsHeaderEl) {
+            panel.populateProviders(load, panel._pendingProvidersCallbacks);
+          } else {
+            // Stash the load result so the panel can pick it up on first open.
+            panel._pendingProvidersLoad = load;
+          }
+        } catch (e) {
+          console.info('chatgml: providers bootstrap failed', e && (e.message || e));
+        }
+      },
       onSaveSettings: function (settings) {
         void (async function () {
           // Decide which `chatgml config set` commands to run (and whether to also set the
@@ -1205,7 +1400,11 @@
           // `env:NAME` reference is accepted — and that's exactly what the help text under the
           // input tells the user to paste.
           var plan = SettingsTasks.buildSettingsCommands(settings);
-          var tasks = plan.commands;
+          // Provider-derived fields (path, auth) are appended AFTER the user-typed fields so the
+          // visible "model + url" always wins on collision — a registry-derived path is only
+          // persisted when the user actually picked a registry row.
+          var provDerived = SettingsTasks.providerDerivedCommands(settings);
+          var tasks = plan.commands.concat(provDerived);
           // Write each config field sequentially, then restart the core. Scope is a plugin pref
           // (it must precede the serve argv on restart, NOT a user-global config field) so it
           // goes through configBridge.setScope, not configBridge.setConfigField.
@@ -1232,6 +1431,12 @@
     });
     // Wire the fuzzy filter for the @file autocomplete dropdown.
     panel._fileFilter = FuzzyApi.filter;
+
+    // Kick off the providers registry bootstrap as soon as the panel is alive. The panel may not
+    // have built its settings DOM yet (lazy on first open) — `_pendingProvidersLoad` is the
+    // handoff for that case; `_toggleSettings` consults it and runs the populate when the user
+    // first opens the settings dropdown.
+    if (typeof opts.onSettingsBootstrap === 'function') opts.onSettingsBootstrap();
 
     sizer = document.createElement('div');
     sizer.setAttribute('splitter-element', '#chatgml_editor');
@@ -1547,7 +1752,10 @@
         show();
         setTimeout(function () {
           if (!panel || !client) return;
-          const selection = (typeof aceEditor !== 'undefined' && aceEditor && aceEditor.getSelectedText) ? (aceEditor.getSelectedText() || '') : '';
+          const selection =
+            typeof aceEditor !== 'undefined' && aceEditor && aceEditor.getSelectedText
+              ? aceEditor.getSelectedText() || ''
+              : '';
           const prompt =
             selection.trim() !== ''
               ? 'Explain this selection and suggest improvements.'

@@ -7,6 +7,7 @@
     "diff-view.js",
     "markdown.js",
     "fuzzy.js",
+    "providers.js",
     "settings-tasks.js",
     "sessions.js",
     "panel.js",

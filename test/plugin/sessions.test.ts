@@ -166,10 +166,7 @@ describe('plugin/sessions.js', () => {
 
   it('deriveTitle truncates long titles and falls back to "untitled"', () => {
     expect(
-      Sessions.deriveTitle([
-        { userText: 'short' },
-        { userText: 'ignored because second' },
-      ]),
+      Sessions.deriveTitle([{ userText: 'short' }, { userText: 'ignored because second' }]),
     ).toBe('short');
 
     const long = 'x'.repeat(80);

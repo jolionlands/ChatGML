@@ -239,8 +239,7 @@
       out.set(id, {
         id: id,
         title: meta && typeof meta.title === 'string' ? meta.title : 'untitled',
-        messageCount:
-          meta && typeof meta.messageCount === 'number' ? meta.messageCount : 0,
+        messageCount: meta && typeof meta.messageCount === 'number' ? meta.messageCount : 0,
         createdAt: meta && typeof meta.createdAt === 'number' ? meta.createdAt : 0,
         updatedAt: meta && typeof meta.updatedAt === 'number' ? meta.updatedAt : 0,
         isActive: id === activeId,
@@ -375,11 +374,7 @@
     const record = Object.assign({}, turn, { ts: ts, sessionId: id });
     let writeOk = true;
     try {
-      await fsp.appendFile(
-        sessionFile(projectDir, id),
-        JSON.stringify(record) + '\n',
-        'utf8',
-      );
+      await fsp.appendFile(sessionFile(projectDir, id), JSON.stringify(record) + '\n', 'utf8');
     } catch (e) {
       writeOk = false;
     }
@@ -441,11 +436,7 @@
           }
         })
         .filter(function (t) {
-          return (
-            t &&
-            typeof t.userText === 'string' &&
-            typeof t.assistantText === 'string'
-          );
+          return t && typeof t.userText === 'string' && typeof t.assistantText === 'string';
         });
     } catch (e) {
       return [];
