@@ -1435,8 +1435,15 @@
     // Kick off the providers registry bootstrap as soon as the panel is alive. The panel may not
     // have built its settings DOM yet (lazy on first open) — `_pendingProvidersLoad` is the
     // handoff for that case; `_toggleSettings` consults it and runs the populate when the user
-    // first opens the settings dropdown.
-    if (typeof opts.onSettingsBootstrap === 'function') opts.onSettingsBootstrap();
+    // first opens the settings dropdown. The panel stores its constructor opts on `this.opts`
+    // (see panel.js ChatPanel()), so that's where the bootstrap callback lives — NOT a free
+    // `opts` variable in this scope. (Left over from a refactor: previously this function
+    // received opts as a parameter; the panel constructor now owns that surface.)
+    if (panel && panel.opts && typeof panel.opts.onSettingsBootstrap === 'function') {
+      try { panel.opts.onSettingsBootstrap(); } catch (e) {
+        console.info('chatgml: settings bootstrap threw', e && (e.message || e));
+      }
+    }
 
     sizer = document.createElement('div');
     sizer.setAttribute('splitter-element', '#chatgml_editor');
