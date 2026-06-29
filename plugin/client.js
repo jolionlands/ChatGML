@@ -84,11 +84,7 @@
     if (context !== undefined && context !== null) cmd.context = Object.assign({}, context);
     if (opts) {
       if (opts.taskId !== undefined && opts.taskId !== null) cmd.taskId = opts.taskId;
-      if (
-        opts.tier === 'planner' ||
-        opts.tier === 'implementer' ||
-        opts.tier === 'reviewer'
-      ) {
+      if (opts.tier === 'planner' || opts.tier === 'implementer' || opts.tier === 'reviewer') {
         cmd.tier = opts.tier;
       }
     }

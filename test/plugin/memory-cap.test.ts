@@ -20,21 +20,17 @@ import type { AgentEvent } from '../../src/types.js';
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const js = require('../../plugin/state.js') as {
-  reducePluginState: (e: AgentEvent, s: ReturnType<typeof js.initialPluginState>) => ReturnType<
-    typeof js.initialPluginState
-  >;
+  reducePluginState: (
+    e: AgentEvent,
+    s: ReturnType<typeof js.initialPluginState>,
+  ) => ReturnType<typeof js.initialPluginState>;
   initialPluginState: () => {
     turns: TurnRecord[];
     activity: ActivityEntry[];
     turnsEvicted: number;
     activityEvicted: number;
   };
-  pushCapped: <T>(
-    arr: readonly T[],
-    item: T,
-    max: number,
-    evictedCount: number,
-  ) => [T[], number];
+  pushCapped: <T>(arr: readonly T[], item: T, max: number, evictedCount: number) => [T[], number];
   TURN_CAP: number;
   ACTIVITY_CAP: number;
 };

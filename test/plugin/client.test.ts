@@ -210,7 +210,13 @@ describe('NdjsonClient', () => {
     client.sendUser('hi');
     expect(sent).toEqual([
       { type: 'user', text: 'hi', tier: 'planner' },
-      { type: 'user', text: 'hi', context: { openFile: 'a.gml' }, taskId: 'feat-1', tier: 'implementer' },
+      {
+        type: 'user',
+        text: 'hi',
+        context: { openFile: 'a.gml' },
+        taskId: 'feat-1',
+        tier: 'implementer',
+      },
       { type: 'user', text: 'hi' },
       { type: 'user', text: 'hi' },
       { type: 'user', text: 'hi' },

@@ -694,7 +694,13 @@ function mergeTiers(
   let any = false;
   const out: Tiers = {};
   for (const name of TIER_NAMES) {
-    const merged: { model: string; baseURL?: string; apiKey?: string; temperature?: number; maxTokens?: number } = {
+    const merged: {
+      model: string;
+      baseURL?: string;
+      apiKey?: string;
+      temperature?: number;
+      maxTokens?: number;
+    } = {
       model: '',
     };
     const f = flags?.[name];
@@ -703,7 +709,11 @@ function mergeTiers(
     merged.model = pick(f?.model, e?.model, fl?.model) ?? '';
     merged.baseURL = pick(f?.baseURL, e?.baseURL, fl?.baseURL);
     merged.apiKey = pick(f?.apiKey, e?.apiKey, fl?.apiKey);
-    if (f?.temperature !== undefined || e?.temperature !== undefined || fl?.temperature !== undefined) {
+    if (
+      f?.temperature !== undefined ||
+      e?.temperature !== undefined ||
+      fl?.temperature !== undefined
+    ) {
       merged.temperature = pick(f?.temperature, e?.temperature, fl?.temperature);
     }
     if (f?.maxTokens !== undefined || e?.maxTokens !== undefined || fl?.maxTokens !== undefined) {

@@ -295,13 +295,13 @@ export class LlmClient {
     // the message body as `reasoning` (Kimi/GLM thinking models). Pick whichever is set and
     // non-empty. Empty strings are skipped so the panel never sees a phantom empty block.
     const reasoningText = rawMessage
-      ? (typeof rawMessage['reasoning_content'] === 'string' &&
-          (rawMessage['reasoning_content'] as string).length > 0
-          ? (rawMessage['reasoning_content'] as string)
-          : typeof rawMessage['reasoning'] === 'string' &&
+      ? typeof rawMessage['reasoning_content'] === 'string' &&
+        (rawMessage['reasoning_content'] as string).length > 0
+        ? (rawMessage['reasoning_content'] as string)
+        : typeof rawMessage['reasoning'] === 'string' &&
             (rawMessage['reasoning'] as string).length > 0
           ? (rawMessage['reasoning'] as string)
-          : null)
+          : null
       : null;
     const message: ChatMessage = {
       role: 'assistant',
@@ -424,9 +424,7 @@ function consumeChunk(
       (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0
         ? delta.reasoning_content
         : null) ??
-      (typeof delta?.reasoning === 'string' && delta.reasoning.length > 0
-        ? delta.reasoning
-        : null);
+      (typeof delta?.reasoning === 'string' && delta.reasoning.length > 0 ? delta.reasoning : null);
     if (reasoningText) {
       out.push({ kind: 'thinking', text: reasoningText });
     }

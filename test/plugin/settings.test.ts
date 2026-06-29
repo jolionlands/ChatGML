@@ -115,7 +115,9 @@ describe('plugin/settings-tasks.js — settings save plan (audit gaps #12 + #13)
 
   it('buildSettingsCommands: handles missing/undefined settings object safely', () => {
     // Defensive: callers may pass undefined when the panel has not collected anything yet.
-    const plan = SettingsTasks.buildSettingsCommands(undefined as unknown as Record<string, string>);
+    const plan = SettingsTasks.buildSettingsCommands(
+      undefined as unknown as Record<string, string>,
+    );
     expect(plan.commands).toEqual([]);
     expect(plan.scope).toBeNull();
   });
@@ -179,7 +181,8 @@ describe('plugin/settings-tasks.js — settings save plan (audit gaps #12 + #13)
       ['tiers.implementer.baseURL', 'https://code.example.com/v1'],
     ]);
   });
-  it('buildSettingsCommands: drops empty / whitespace-only tier leaves (no accidental blanks)', () => {
+
+  it('buildSettingsCommands: drops empty / whitespace-only tier leaves (no accidental blanks)', () => {
     // Per-leaf drop behavior, mirroring the global-lane rule. A user editing the panel and
     // clearing one field must NOT have the existing saved value overwritten with ''.
     const plan = SettingsTasks.buildSettingsCommands({
@@ -284,4 +287,4 @@ describe('plugin/settings-tasks.js — loadability + global wiring', () => {
     expect(typeof g?.apiKeyDisplayPlaceholder).toBe('function');
     expect(typeof g?.hasApiKey).toBe('function');
   });
-});
+});

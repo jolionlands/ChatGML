@@ -359,11 +359,7 @@ export function tierForMode(mode: Mode, override?: TierName | null): TierName | 
  *          (`null` ⇒ global lane, no badge). The lane is ALWAYS concrete: it is either the tier's
  *          merged override OR a clone of the global lane — never undefined.
  */
-export function resolveTier(
-  config: Config,
-  mode: Mode,
-  useTier?: TierName | null,
-): ResolvedTier {
+export function resolveTier(config: Config, mode: Mode, useTier?: TierName | null): ResolvedTier {
   const name = tierForMode(mode, useTier);
   if (name === null) {
     // No tier chosen at all; just return the global lane.

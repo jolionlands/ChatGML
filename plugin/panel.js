@@ -260,7 +260,8 @@
         return;
       }
       // Mention autocomplete keyboard navigation
-      var dropdownVisible = self.mentionDropdownEl && self.mentionDropdownEl.style.display !== 'none';
+      var dropdownVisible =
+        self.mentionDropdownEl && self.mentionDropdownEl.style.display !== 'none';
       if (ev.key === '@') {
         self._mentionTriggerPos = self.inputEl.selectionStart;
         self._showMentionDropdown();
@@ -453,7 +454,11 @@
 
     this.settingsTierInputs = { planner: {}, implementer: {}, reviewer: {} };
     var tierNames = ['planner', 'implementer', 'reviewer'];
-    var tierLabels = { planner: '🧠 Planner', implementer: '⚙ Implementer', reviewer: '🔍 Reviewer' };
+    var tierLabels = {
+      planner: '🧠 Planner',
+      implementer: '⚙ Implementer',
+      reviewer: '🔍 Reviewer',
+    };
     for (var tni = 0; tni < tierNames.length; tni++) {
       (function (name) {
         var group = document.createElement('details');
@@ -711,7 +716,10 @@
       if (ch === '@') {
         // Check the prefix is '@file ' or '@file<not-space>' (so '@filename' does NOT match).
         var after = val.slice(i, i + 4);
-        if (after.toLowerCase() === 'file' && (i + 4 >= val.length || /\s/.test(val.charAt(i + 4)))) {
+        if (
+          after.toLowerCase() === 'file' &&
+          (i + 4 >= val.length || /\s/.test(val.charAt(i + 4)))
+        ) {
           // Cursor must be within or at the end of the file mention. We allow the cursor to be
           // anywhere in "after @file" up to the next whitespace.
           var j = i + 4;
@@ -735,22 +743,29 @@
     var promise = this.opts.getProjectFiles();
     if (!promise || typeof promise.then !== 'function') return; // not a promise
     var token = ++this._fileDropdownToken;
-    promise.then(function (files) {
-      if (token !== self._fileDropdownToken) return; // stale (user kept typing)
-      if (!files || files.length === 0) {
+    promise
+      .then(function (files) {
+        if (token !== self._fileDropdownToken) return; // stale (user kept typing)
+        if (!files || files.length === 0) {
+          self._hideFileMentionDropdown();
+          return;
+        }
+        var matches = (
+          self._fileFilter ||
+          function (all, q) {
+            return all.slice(0, 8);
+          }
+        )(files, query);
+        if (!matches || matches.length === 0) {
+          self._hideFileMentionDropdown();
+          return;
+        }
+        self._renderFileDropdown(matches, query);
+      })
+      .catch(function (e) {
+        console.warn('chatgml: file index failed', e);
         self._hideFileMentionDropdown();
-        return;
-      }
-      var matches = (self._fileFilter || function (all, q) { return all.slice(0, 8); })(files, query);
-      if (!matches || matches.length === 0) {
-        self._hideFileMentionDropdown();
-        return;
-      }
-      self._renderFileDropdown(matches, query);
-    }).catch(function (e) {
-      console.warn('chatgml: file index failed', e);
-      self._hideFileMentionDropdown();
-    });
+      });
   };
 
   /** Render the file dropdown contents (called by _showFileMentionDropdown once files are ready). */
@@ -766,12 +781,15 @@
       div.className = 'chatgml-mention-autocomplete-item';
       if (i === 0) div.classList.add('chatgml-mention-active');
       div.textContent = item.label;
-      div.addEventListener('click', (function (insert) {
-        return function () {
-          self._insertFileResult(insert);
-          self._hideMentionDropdown();
-        };
-      })(item.label));
+      div.addEventListener(
+        'click',
+        (function (insert) {
+          return function () {
+            self._insertFileResult(insert);
+            self._hideMentionDropdown();
+          };
+        })(item.label),
+      );
       this.mentionDropdownEl.appendChild(div);
     }
     this.mentionDropdownEl.style.display = 'block';
@@ -854,12 +872,14 @@
         var btn = document.createElement('button');
         btn.className = 'chatgml-tier-picker-btn ' + entry.cls;
         btn.textContent = entry.label;
-        if (entry.name === selfRef.tierOverride || (entry.name === 'auto' && selfRef.tierOverride === null)) {
+        if (
+          entry.name === selfRef.tierOverride ||
+          (entry.name === 'auto' && selfRef.tierOverride === null)
+        ) {
           btn.classList.add('active');
         }
         btn.addEventListener('click', function () {
-          var chosen =
-            entry.name === 'auto' ? null : entry.name;
+          var chosen = entry.name === 'auto' ? null : entry.name;
           selfRef.setTierOverride(chosen);
           if (chosen) selfRef.flash('tier set to ' + chosen + ' — next turn uses this lane');
           else selfRef.flash('tier override cleared — back to mode-based dispatch');
@@ -1045,7 +1065,9 @@
           if (lum > 128) isLight = true;
         }
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      /* ignore */
+    }
     this.opts.container.setAttribute('data-theme', isLight ? 'light' : 'dark');
   };
 
@@ -1227,9 +1249,10 @@
     // a tool, or the core is still booting.
     var isWorking =
       (s.answer != null && String(s.answer).length > 0) ||
-      (s.activity && s.activity.some(function (a) {
-        return a.status === 'running' || a.status === 'waiting';
-      }));
+      (s.activity &&
+        s.activity.some(function (a) {
+          return a.status === 'running' || a.status === 'waiting';
+        }));
     this.statusEl.classList.remove('chatgml-status--working');
     this.statusEl.classList.remove('chatgml-status--connecting');
     if (isWorking && this.running) {
@@ -1458,15 +1481,19 @@
     // without leaving the panel. Text content is set via textContent (never innerHTML) — these
     // counters are integers so XSS is impossible, but the project rule is textContent only.
     if (this.trimNoticeEl) {
-      var turnCap = (State.TURN_CAP || 200);
-      var actCap = (State.ACTIVITY_CAP || 500);
+      var turnCap = State.TURN_CAP || 200;
+      var actCap = State.ACTIVITY_CAP || 500;
       var turnEvicted = s.turnsEvicted | 0;
       var actEvicted = s.activityEvicted | 0;
       if (turnEvicted > 0 || actEvicted > 0) {
         var parts = [];
         if (turnEvicted > 0) {
           parts.push(
-            '⚠ Showing last ' + turnCap + ' turns (' + turnEvicted + ' trimmed from earlier history)',
+            '⚠ Showing last ' +
+              turnCap +
+              ' turns (' +
+              turnEvicted +
+              ' trimmed from earlier history)',
           );
         }
         if (actEvicted > 0) {
@@ -1492,9 +1519,9 @@
     // every token event. The streaming bubble is updated in-place (its body element is reused).
     // This prevents O(n²) DOM creation on long conversations with many tokens.
     var MarkdownApi =
-      typeof root !== "undefined" && root.ChatGmlMarkdown
+      typeof root !== 'undefined' && root.ChatGmlMarkdown
         ? root.ChatGmlMarkdown
-        : typeof ChatGmlMarkdown !== "undefined"
+        : typeof ChatGmlMarkdown !== 'undefined'
           ? ChatGmlMarkdown
           : null;
     var turns = s.turns || [];
@@ -1527,7 +1554,8 @@
       this._pendingBubbleEl.querySelector('.chatgml-turn-body').textContent = s.pendingUserText;
     } else if (this._pendingBubbleEl) {
       // Remove the pending bubble once the turn is finalized.
-      if (this._pendingBubbleEl.parentNode) this._pendingBubbleEl.parentNode.removeChild(this._pendingBubbleEl);
+      if (this._pendingBubbleEl.parentNode)
+        this._pendingBubbleEl.parentNode.removeChild(this._pendingBubbleEl);
       this._pendingBubbleEl = null;
     }
 
@@ -1559,7 +1587,8 @@
             // Three short labels mirror the Cline Plan/Act affordance: "planner" reads as a
             // think-first role, "implementer" as code-action, "reviewer" as a self-check pass.
             // The emoji prefix + the per-tier class is the visual hook; see style.css.
-            var tierGlyph = turn.tier === 'planner' ? '🧠' : turn.tier === 'implementer' ? '⚙' : '🔍';
+            var tierGlyph =
+              turn.tier === 'planner' ? '🧠' : turn.tier === 'implementer' ? '⚙' : '🔍';
             tierBadge = document.createElement('span');
             tierBadge.className = 'chatgml-turn-tier chatgml-turn-tier-' + turn.tier;
             tierBadge.textContent = tierGlyph + ' ' + turn.tier;
@@ -1609,8 +1638,7 @@
                 ? '⚙'
                 : '🔍';
           var sBadge = document.createElement('span');
-          sBadge.className =
-            'chatgml-turn-tier chatgml-turn-tier-' + this.tierOverride;
+          sBadge.className = 'chatgml-turn-tier chatgml-turn-tier-' + this.tierOverride;
           sBadge.textContent = sGlyph + ' ' + this.tierOverride;
           sBadge.title = 'This turn is using the ' + this.tierOverride + ' tier lane';
           streamBubble.appendChild(sBadge);
@@ -1633,7 +1661,8 @@
       }
     } else if (this._streamingBubbleEl) {
       // Streaming done — remove the streaming bubble (the turn is now in s.turns).
-      if (this._streamingBubbleEl.parentNode) this._streamingBubbleEl.parentNode.removeChild(this._streamingBubbleEl);
+      if (this._streamingBubbleEl.parentNode)
+        this._streamingBubbleEl.parentNode.removeChild(this._streamingBubbleEl);
       this._streamingBubbleEl = null;
     }
 

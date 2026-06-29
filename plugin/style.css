@@ -1690,8 +1690,15 @@ button[disabled],
   animation: chatgml-status-pulse 1s ease-in-out infinite;
 }
 @keyframes chatgml-status-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1.2); }
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
 }
 
 /* Connecting phase status */
@@ -1728,7 +1735,7 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 }
 
 /* Settings panel: password-type input */
-.chatgml-settings-input[type="password"] {
+.chatgml-settings-input[type='password'] {
   -webkit-text-security: disc;
   letter-spacing: 2px;
 }
@@ -1736,9 +1743,11 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 /* Clickable sources */
 .chatgml-source {
   cursor: default;
-  transition: background-color 0.12s ease, border-left-color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    border-left-color 0.12s ease;
 }
-.chatgml-source[style*="cursor: pointer"]:hover,
+.chatgml-source[style*='cursor: pointer']:hover,
 .chatgml-source:hover {
   background: var(--chatgml-surface-hover);
   border-left-color: var(--chatgml-accent);
@@ -1769,7 +1778,9 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   background: var(--chatgml-surface-2);
   color: var(--chatgml-fg);
   cursor: pointer;
-  transition: border-color 0.12s ease, background-color 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease;
   user-select: none;
 }
 .chatgml-tier-chip:hover {
@@ -1820,7 +1831,9 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   color: var(--chatgml-fg);
   border: 1px solid var(--chatgml-border);
   cursor: pointer;
-  transition: border-color 0.12s ease, background-color 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease;
 }
 .chatgml-tier-picker-btn:hover {
   border-color: var(--chatgml-accent);
@@ -1895,4 +1908,3 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   border-bottom: 1px solid var(--chatgml-border);
   margin-bottom: 2px;
 }
-

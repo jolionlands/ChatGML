@@ -24,8 +24,7 @@
   const DiffViewApi = globalThis.ChatGmlDiffView || require('./diff-view.js');
   const ConfigBridgeApi = globalThis.ChatGmlConfigBridge || require('./config-bridge.js');
   const State = globalThis.ChatGmlState || require('./state.js');
-  const SettingsTasks =
-    globalThis.ChatGmlSettingsTasks || require('./settings-tasks.js');
+  const SettingsTasks = globalThis.ChatGmlSettingsTasks || require('./settings-tasks.js');
   // Resolve markdown.js so the renderer global is populated (config.json loads it before
   // panel.js, but the require fallback is also fine in Node-based test contexts).
   const MarkdownApi = globalThis.ChatGmlMarkdown || require('./markdown.js');
@@ -61,12 +60,49 @@
   // the input.
   const FILE_INDEX_MAX = 5000;
   const FILE_INDEX_SKIP_DIRS = new Set([
-    'node_modules', '.git', '.cache', '.vscode', 'build', 'dist', 'out', 'target', '.next', '.nuxt',
+    'node_modules',
+    '.git',
+    '.cache',
+    '.vscode',
+    'build',
+    'dist',
+    'out',
+    'target',
+    '.next',
+    '.nuxt',
   ]);
   const FILE_INDEX_SKIP_EXTS = new Set([
-    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.pdf', '.zip', '.tar', '.gz', '.7z', '.rar',
-    '.mp3', '.mp4', '.mov', '.wav', '.ogg', '.ttf', '.otf', '.woff', '.woff2', '.exe', '.dll',
-    '.so', '.dylib', '.class', '.o', '.obj', '.lib', '.a', '.pdb',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.bmp',
+    '.ico',
+    '.pdf',
+    '.zip',
+    '.tar',
+    '.gz',
+    '.7z',
+    '.rar',
+    '.mp3',
+    '.mp4',
+    '.mov',
+    '.wav',
+    '.ogg',
+    '.ttf',
+    '.otf',
+    '.woff',
+    '.woff2',
+    '.exe',
+    '.dll',
+    '.so',
+    '.dylib',
+    '.class',
+    '.o',
+    '.obj',
+    '.lib',
+    '.a',
+    '.pdb',
   ]);
   let fileIndexCache = { cwd: null, files: null };
 
@@ -914,7 +950,9 @@
         void deleteTask(name);
       },
       getMentions: getMentions,
-      getProjectFiles: function () { return scanProjectFiles(projectDirectory); },
+      getProjectFiles: function () {
+        return scanProjectFiles(projectDirectory);
+      },
       onSendWithContext: function (text, context) {
         if (!client) return;
         // UserCommand wire shape (src/types.ts): { type:'user', text, context?, taskId?, tier? }.
@@ -1037,7 +1075,8 @@
             var value = tasks[i][1];
             i++;
             configBridge.setConfigField(field, value, function (err) {
-              if (err && panel) panel.flash('config set ' + field + ' failed: ' + (err.message || err), true);
+              if (err && panel)
+                panel.flash('config set ' + field + ' failed: ' + (err.message || err), true);
               next();
             });
           }
@@ -1047,7 +1086,6 @@
     });
     // Wire the fuzzy filter for the @file autocomplete dropdown.
     panel._fileFilter = FuzzyApi.filter;
-
 
     sizer = document.createElement('div');
     sizer.setAttribute('splitter-element', '#chatgml_editor');

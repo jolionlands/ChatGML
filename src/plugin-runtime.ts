@@ -8,7 +8,14 @@
 //
 // Nothing here touches the DOM, the filesystem, or `process` — every dependency (env, platform,
 // existence probe) is passed in, so the whole surface is deterministic under vitest.
-import type { AgentEvent, Citation, EditorContext, Mode, TierName, ToolCatalogEntry } from './types.js';
+import type {
+  AgentEvent,
+  Citation,
+  EditorContext,
+  Mode,
+  TierName,
+  ToolCatalogEntry,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // 1. NDJSON line buffer (raw-chunk, streaming-UTF-8, tolerant of a malformed line).

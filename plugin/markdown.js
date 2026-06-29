@@ -114,7 +114,11 @@
           break;
         case 'link':
           parts.push(
-            '<a href="' + escapeHtml(t.url) + '" class="chatgml-md-link">' + inlineToHtml(parseInline(t.value)) + '</a>',
+            '<a href="' +
+              escapeHtml(t.url) +
+              '" class="chatgml-md-link">' +
+              inlineToHtml(parseInline(t.value)) +
+              '</a>',
           );
           break;
       }
@@ -263,12 +267,26 @@
           break;
         case 'header': {
           var cls = 'chatgml-md-h' + block.level;
-          parts.push('<h' + (block.level >= 3 ? block.level : 3) + ' class="' + cls + '">' + inlineToHtml(parseInline(block.content)) + '</h' + (block.level >= 3 ? block.level : 3) + '>');
+          parts.push(
+            '<h' +
+              (block.level >= 3 ? block.level : 3) +
+              ' class="' +
+              cls +
+              '">' +
+              inlineToHtml(parseInline(block.content)) +
+              '</h' +
+              (block.level >= 3 ? block.level : 3) +
+              '>',
+          );
           break;
         }
         case 'blockquote': {
           var inner = stripHtmlTags(block.content);
-          parts.push('<blockquote class="chatgml-md-blockquote">' + inlineToHtml(parseInline(inner)) + '</blockquote>');
+          parts.push(
+            '<blockquote class="chatgml-md-blockquote">' +
+              inlineToHtml(parseInline(inner)) +
+              '</blockquote>',
+          );
           break;
         }
         case 'ul': {
@@ -282,7 +300,8 @@
         case 'ol': {
           var itemHtml2 = '';
           for (var k = 0; k < block.items.length; k++) {
-            itemHtml2 += '<li>' + inlineToHtml(parseInline(stripHtmlTags(block.items[k]))) + '</li>';
+            itemHtml2 +=
+              '<li>' + inlineToHtml(parseInline(stripHtmlTags(block.items[k]))) + '</li>';
           }
           parts.push('<ol class="chatgml-md-ol">' + itemHtml2 + '</ol>');
           break;

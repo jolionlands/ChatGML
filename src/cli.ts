@@ -143,8 +143,7 @@ function makeLlmFromLane(deps: CliDeps, config: Config, lane: ChatLane): LlmLike
   if (deps.makeLlm) {
     // Tests can intercept the global lane, but for tier lanes we honor a dedicated hook too so a
     // test fixture can simulate per-tier model routing.
-    const tierHook = (deps as CliDeps & { makeTierLlm?: (lane: ChatLane) => LlmLike })
-      .makeTierLlm;
+    const tierHook = (deps as CliDeps & { makeTierLlm?: (lane: ChatLane) => LlmLike }).makeTierLlm;
     if (tierHook) return tierHook(lane);
   }
   // Fallback: tests that only set `makeLlm` (no `makeTierLlm`) get the same fake LLM for every

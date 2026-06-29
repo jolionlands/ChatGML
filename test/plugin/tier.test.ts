@@ -122,9 +122,7 @@ describe('reducePluginState — turn_end tier stamp (per-turn tier UI)', () => {
     // The first retained turn is index `firstRetainedIndex` of the original sequence (cap
     // dropped the older ones from the front).
     expect(state.turns[0]?.userText).toBe('q' + firstRetainedIndex);
-    expect(state.turns[0]?.tier).toBe(
-      firstRetainedIndex % 2 === 0 ? 'planner' : 'implementer',
-    );
+    expect(state.turns[0]?.tier).toBe(firstRetainedIndex % 2 === 0 ? 'planner' : 'implementer');
     // The most recent turn (last element) is event #TOTAL-1 -> 204 (even) -> 'planner'.
     expect(state.turns[state.turns.length - 1]?.userText).toBe('q' + (TOTAL - 1));
     expect(state.turns[state.turns.length - 1]?.tier).toBe('planner');

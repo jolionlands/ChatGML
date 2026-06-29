@@ -195,9 +195,7 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
     expect(jsState.activity.length).toBe(ts.ACTIVITY_CAP);
     // Identical content (FIFO drop from the front) on both copies.
     expect(jsState.turns).toEqual(tsState.turns);
-    expect(jsState.activity.map((a) => a.id)).toEqual(
-      tsState.activity.map((a) => a.id),
-    );
+    expect(jsState.activity.map((a) => a.id)).toEqual(tsState.activity.map((a) => a.id));
     // Identical evicted totals.
     expect(jsState.turnsEvicted).toBe(tsState.turnsEvicted);
     expect(jsState.activityEvicted).toBe(tsState.activityEvicted);
@@ -273,14 +271,15 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
     // The Cline-style tier UI needs turn_end.tier to land on the stored turn record so the panel
     // can render the per-bubble badge. Both reducer copies MUST agree on the stored value field-
     // for-field (additive — does not change the existing assertions above).
-    const cases: Array<{ tier: unknown; expected: 'planner' | 'implementer' | 'reviewer' | null }> = [
-      { tier: 'planner', expected: 'planner' },
-      { tier: 'implementer', expected: 'implementer' },
-      { tier: 'reviewer', expected: 'reviewer' },
-      { tier: null, expected: null },
-      { tier: undefined, expected: null },
-      { tier: 'bogus', expected: null }, // defensive normalization
-    ];
+    const cases: Array<{ tier: unknown; expected: 'planner' | 'implementer' | 'reviewer' | null }> =
+      [
+        { tier: 'planner', expected: 'planner' },
+        { tier: 'implementer', expected: 'implementer' },
+        { tier: 'reviewer', expected: 'reviewer' },
+        { tier: null, expected: null },
+        { tier: undefined, expected: null },
+        { tier: 'bogus', expected: null }, // defensive normalization
+      ];
     for (const c of cases) {
       const ev = {
         type: 'turn_end' as const,

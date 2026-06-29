@@ -22,9 +22,27 @@ const GLOBAL_LANE: ChatLane = {
 
 function makeConfig(overrides?: {
   tiers?: {
-    planner?: { model: string; baseURL?: string; apiKey?: string; temperature?: number; maxTokens?: number };
-    implementer?: { model: string; baseURL?: string; apiKey?: string; temperature?: number; maxTokens?: number };
-    reviewer?: { model: string; baseURL?: string; apiKey?: string; temperature?: number; maxTokens?: number };
+    planner?: {
+      model: string;
+      baseURL?: string;
+      apiKey?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
+    implementer?: {
+      model: string;
+      baseURL?: string;
+      apiKey?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
+    reviewer?: {
+      model: string;
+      baseURL?: string;
+      apiKey?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
   };
   mode?: Mode;
 }): {
