@@ -182,6 +182,14 @@ describe('plugin/providers.js — readProvidersFile shape normalization', () => 
     const out = Providers.readProvidersFile(chatgmlPath);
     expect(out).toEqual({ providers: {} });
   });
+
+  it('strips a leading UTF-8 BOM (common on hand-edited Windows files)', () => {
+    // Write BOM (0xEF 0xBB 0xBF) + valid JSON.
+    fs.writeFileSync(chatgmlPath, '﻿' + JSON.stringify({ providers: { x: { base_url: 'http://x' } } }));
+    const out = Providers.readProvidersFile(chatgmlPath);
+    expect(out).not.toBeNull();
+    expect((out as { providers: Record<string, unknown> }).providers.x).toBeDefined();
+  });
 });
 
 describe('plugin/providers.js — bootstrapProviders', () => {
@@ -531,6 +539,20 @@ describe('plugin/providers.js — buildDatalistOptions', () => {
 });
 
 describe('plugin/providers.js — loadAll end-to-end', () => {
+  // Helper: pass explicit empty paths for every external source so these legacy tests stay
+  // isolated from the user's real config files on disk.
+  function isolatedLoad(overrides: { chatgmlPath: string; piPath: string; [k: string]: string }) {
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    return Providers.loadAll({
+      chatgmlPath: overrides.chatgmlPath,
+      piPath: overrides.piPath,
+      opencodePath: overrides.opencodePath ?? noPath('no-opencode.json'),
+      crushPath: overrides.crushPath ?? noPath('no-crush.json'),
+      authPath: overrides.authPath ?? noPath('no-auth.json'),
+      catalogPath: overrides.catalogPath ?? noPath('no-catalog.json'),
+    });
+  }
+
   it('bootstraps from external file when chatgml file is absent', () => {
     fs.writeFileSync(
       piPath,
@@ -544,7 +566,7 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
         },
       }),
     );
-    const out = Providers.loadAll({ chatgmlPath, piPath });
+    const out = isolatedLoad({ chatgmlPath, piPath });
     expect(out.bootstrapped).toBe(true);
     expect(out.providers).toHaveLength(1);
     expect(out.providers[0]?.name).toBe('maveros');
@@ -560,7 +582,7 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
       chatgmlPath,
       JSON.stringify({ providers: { own: { base_url: 'http://own' } } }),
     );
-    const out = Providers.loadAll({ chatgmlPath, piPath });
+    const out = isolatedLoad({ chatgmlPath, piPath });
     expect(out.bootstrapped).toBe(false);
     // Merged registry contains BOTH providers — chatgml takes precedence on collision but
     // external entries with unique names survive.
@@ -573,7 +595,7 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
       chatgmlPath,
       JSON.stringify({ providers: { shared: { base_url: 'http://own' } } }),
     );
-    const out = Providers.loadAll({ chatgmlPath, piPath });
+    const out = isolatedLoad({ chatgmlPath, piPath });
     const providers = out.registry.providers as { shared: { base_url: string } };
     expect(providers.shared.base_url).toBe('http://own');
   });
@@ -581,13 +603,13 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
   it('returns warnings when a source file is malformed but keeps the load alive', () => {
     fs.writeFileSync(chatgmlPath, JSON.stringify({ providers: { ok: { base_url: 'http://x' } } }));
     fs.writeFileSync(piPath, '{ broken');
-    const out = Providers.loadAll({ chatgmlPath, piPath });
+    const out = isolatedLoad({ chatgmlPath, piPath });
     expect(out.warnings.length).toBeGreaterThan(0);
     expect(out.providers[0]?.name).toBe('ok');
   });
 
   it('empty registries return empty providers + empty datalists + no warnings', () => {
-    const out = Providers.loadAll({
+    const out = isolatedLoad({
       chatgmlPath: path.join(tmpRoot, 'no-chatgml.json'),
       piPath: path.join(tmpRoot, 'no-pi.json'),
     });
@@ -597,6 +619,640 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
     expect(out.datalistOptions.modelOptions).toEqual([]);
     expect(out.datalistOptions.baseUrlOptions).toEqual([]);
     expect(out.warnings).toEqual([]);
+  });
+});
+
+describe('plugin/providers.js — readOpencodeConfig', () => {
+  let opencodePath: string;
+  beforeEach(() => {
+    opencodePath = path.join(tmpRoot, 'opencode', 'opencode.json');
+    fs.mkdirSync(path.dirname(opencodePath), { recursive: true });
+  });
+
+  it('normalizes opencode provider entries to the chatgml shape', () => {
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: {
+          nvidia: {
+            npm: '@ai-sdk/openai-compatible',
+            name: 'NVIDIA NIM',
+            options: {
+              baseURL: 'https://integrate.api.nvidia.com/v1',
+              apiKey: 'nvapi-secret',
+            },
+            models: {
+              'meta/llama-3.1-70b': { name: 'Llama 3.1 70B' },
+              'baai/bge-m3': { name: 'BGE M3' },
+            },
+          },
+          kimi: {
+            npm: '@ai-sdk/openai-compatible',
+            options: {
+              baseURL: 'https://api.kimi.com/coding/v1',
+            },
+            models: {
+              'kimi-for-coding': { name: 'Kimi K2.6' },
+            },
+          },
+        },
+      }),
+    );
+    const out = Providers.readOpencodeConfig(opencodePath);
+    expect(out.warning).toBeNull();
+    expect(Object.keys(out.providers)).toEqual(['nvidia', 'kimi']);
+    const nvidia = out.providers.nvidia as {
+      kind: string;
+      base_url: string;
+      auth: string;
+      models: Array<{ id: string; wire_model: string }>;
+    };
+    expect(nvidia.kind).toBe('openai_compat');
+    expect(nvidia.base_url).toBe('https://integrate.api.nvidia.com/v1');
+    expect(nvidia.auth).toBe('bearer'); // had inline key
+    expect(nvidia.models).toHaveLength(2);
+    expect(nvidia.models[0]?.id).toBe('meta/llama-3.1-70b');
+    expect(nvidia.models[0]?.wire_model).toBe('Llama 3.1 70B');
+    const kimi = out.providers.kimi as { auth: string };
+    expect(kimi.auth).toBe('env'); // no inline key → env reference
+  });
+
+  it('skips providers with empty baseURL', () => {
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: {
+          good: { options: { baseURL: 'http://x' }, models: {} },
+          bad: { options: {}, models: {} },
+        },
+      }),
+    );
+    const out = Providers.readOpencodeConfig(opencodePath);
+    expect(Object.keys(out.providers)).toEqual(['good']);
+  });
+
+  it('marks anthropic-style providers separately', () => {
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: {
+          claude: {
+            npm: '@ai-sdk/anthropic',
+            options: { baseURL: 'https://api.anthropic.com' },
+            models: {},
+          },
+        },
+      }),
+    );
+    const out = Providers.readOpencodeConfig(opencodePath);
+    expect((out.providers.claude as { kind: string }).kind).toBe('anthropic');
+  });
+
+  it('returns empty + no warning for missing file (silent skip)', () => {
+    const out = Providers.readOpencodeConfig(path.join(tmpRoot, 'nope.json'));
+    expect(out).toEqual({ providers: {}, warning: null });
+  });
+
+  it('returns warning + empty for malformed JSON', () => {
+    fs.writeFileSync(opencodePath, '{ broken');
+    const out = Providers.readOpencodeConfig(opencodePath);
+    expect(out.providers).toEqual({});
+    expect(out.warning).toMatch(/not valid JSON/);
+  });
+
+  it('returns empty + no warning when there is no `provider` key', () => {
+    fs.writeFileSync(opencodePath, JSON.stringify({ someOtherKey: true }));
+    const out = Providers.readOpencodeConfig(opencodePath);
+    expect(out).toEqual({ providers: {}, warning: null });
+  });
+
+  it('strips a leading UTF-8 BOM', () => {
+    fs.writeFileSync(
+      opencodePath,
+      '﻿' + JSON.stringify({ provider: { x: { options: { baseURL: 'http://x' }, models: {} } } }),
+    );
+    const out = Providers.readOpencodeConfig(opencodePath);
+    expect(out.providers.x).toBeDefined();
+  });
+});
+
+describe('plugin/providers.js — readCrushProviders', () => {
+  let crushPath: string;
+  beforeEach(() => {
+    crushPath = path.join(tmpRoot, 'crush', 'providers.json');
+    fs.mkdirSync(path.dirname(crushPath), { recursive: true });
+  });
+
+  it('normalizes crush array entries to the chatgml shape', () => {
+    fs.writeFileSync(
+      crushPath,
+      JSON.stringify([
+        {
+          name: 'Google Gemini',
+          id: 'gemini',
+          api_key: '$GEMINI_API_KEY',
+          api_endpoint: 'https://generativelanguage.googleapis.com/v1beta',
+          type: 'google',
+          models: [
+            {
+              id: 'gemini-3.1-pro-preview',
+              name: 'Gemini 3.1 Pro',
+              context_window: 1048576,
+              can_reason: true,
+              supports_attachments: true,
+            },
+          ],
+        },
+        {
+          name: 'OpenAI',
+          id: 'openai',
+          api_key: 'sk-literal-key',
+          api_endpoint: 'https://api.openai.com/v1',
+          type: 'openai-compat',
+          models: [{ id: 'gpt-5', name: 'GPT-5', context_window: 400000 }],
+        },
+      ]),
+    );
+    const out = Providers.readCrushProviders(crushPath);
+    expect(Object.keys(out.providers).sort()).toEqual(['gemini', 'openai']);
+    const gemini = out.providers.gemini as {
+      kind: string;
+      auth: string;
+      _envVar: string;
+      models: Array<{ id: string; context_window: number; can_reason: boolean }>;
+    };
+    expect(gemini.kind).toBe('openai_compat'); // 'google' isn't 'anthropic', so treated as openai_compat
+    expect(gemini.auth).toBe('env'); // $ENV_VAR pattern
+    expect(gemini._envVar).toBe('GEMINI_API_KEY');
+    expect(gemini.models[0]?.context_window).toBe(1048576);
+    expect(gemini.models[0]?.can_reason).toBe(true);
+    const openai = out.providers.openai as { auth: string };
+    expect(openai.auth).toBe('bearer'); // literal key
+  });
+
+  it('accepts the {providers: [...]} wrapper shape too', () => {
+    fs.writeFileSync(
+      crushPath,
+      JSON.stringify({
+        providers: [
+          { id: 'x', api_endpoint: 'http://x', api_key: '$X', models: [] },
+        ],
+      }),
+    );
+    const out = Providers.readCrushProviders(crushPath);
+    expect(out.providers.x).toBeDefined();
+  });
+
+  it('skips entries with empty api_endpoint', () => {
+    fs.writeFileSync(
+      crushPath,
+      JSON.stringify([
+        { id: 'good', api_endpoint: 'http://g', api_key: '$G', models: [] },
+        { id: 'bad', api_endpoint: '', api_key: '$B', models: [] },
+      ]),
+    );
+    const out = Providers.readCrushProviders(crushPath);
+    expect(Object.keys(out.providers)).toEqual(['good']);
+  });
+
+  it('returns empty + no warning for missing file', () => {
+    const out = Providers.readCrushProviders(path.join(tmpRoot, 'nope.json'));
+    expect(out).toEqual({ providers: {}, warning: null });
+  });
+
+  it('returns warning for malformed JSON', () => {
+    fs.writeFileSync(crushPath, '[] broken');
+    const out = Providers.readCrushProviders(crushPath);
+    expect(out.warning).toMatch(/not valid JSON/);
+  });
+
+  it('strips a leading UTF-8 BOM', () => {
+    fs.writeFileSync(crushPath, '﻿' + JSON.stringify([{ id: 'x', api_endpoint: 'http://x' }]));
+    const out = Providers.readCrushProviders(crushPath);
+    expect(out.providers.x).toBeDefined();
+  });
+});
+
+describe('plugin/providers.js — readAuthFile', () => {
+  let authPath: string;
+  beforeEach(() => {
+    authPath = path.join(tmpRoot, 'auth.json');
+  });
+
+  it('parses api_key entries (literal + env references)', () => {
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        nvidia: { type: 'api_key', key: 'nvapi-literal' },
+        kimi: { type: 'api_key', key: 'env:KIMI_CODING_API_KEY' },
+      }),
+    );
+    const out = Providers.readAuthFile(authPath);
+    expect((out.auth.nvidia as { apiKey: string }).apiKey).toBe('nvapi-literal');
+    expect((out.auth.kimi as { envVar: string; apiKey?: string }).envVar).toBe(
+      'KIMI_CODING_API_KEY',
+    );
+    expect((out.auth.kimi as { apiKey?: string }).apiKey).toBeUndefined();
+  });
+
+  it('parses oauth entries (access + refresh + expires)', () => {
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        'google-gemini-cli': {
+          type: 'oauth',
+          access: 'ya29.ACCESS',
+          refresh: '1//REFRESH',
+          expires: 1780069941859,
+        },
+      }),
+    );
+    const out = Providers.readAuthFile(authPath);
+    const entry = out.auth['google-gemini-cli'] as {
+      auth: string;
+      apiKey: string;
+      refresh: string;
+      expires: number;
+    };
+    expect(entry.auth).toBe('oauth');
+    expect(entry.apiKey).toBe('ya29.ACCESS');
+    expect(entry.refresh).toBe('1//REFRESH');
+    expect(entry.expires).toBe(1780069941859);
+  });
+
+  it('skips entries with empty key / empty access', () => {
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        empty: { type: 'api_key', key: '' },
+        noAccess: { type: 'oauth', access: '' },
+      }),
+    );
+    const out = Providers.readAuthFile(authPath);
+    expect(out.auth).toEqual({});
+  });
+
+  it('returns empty + no warning for missing file', () => {
+    const out = Providers.readAuthFile(path.join(tmpRoot, 'nope.json'));
+    expect(out).toEqual({ auth: {}, warning: null });
+  });
+});
+
+describe('plugin/providers.js — readModelCatalog', () => {
+  let catalogPath: string;
+  beforeEach(() => {
+    catalogPath = path.join(tmpRoot, 'model_catalog.json');
+  });
+
+  it('parses top-level array schema', () => {
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify([
+        {
+          id: 'gpt-5',
+          name: 'GPT-5',
+          context_window: 400000,
+          can_reason: true,
+          supports_attachments: true,
+        },
+        { id: 'claude-opus-4.7', name: 'Claude Opus 4.7', context_window: 200000 },
+      ]),
+    );
+    const out = Providers.readModelCatalog(catalogPath);
+    expect(out.catalog['gpt-5']?.contextWindow).toBe(400000);
+    expect(out.catalog['gpt-5']?.canReason).toBe(true);
+    expect(out.catalog['claude-opus-4.7']?.canReason).toBe(false); // defaulted
+  });
+
+  it('parses {models: [...]} wrapper schema', () => {
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({ models: [{ id: 'foo', name: 'Foo', context_window: 1024 }] }),
+    );
+    const out = Providers.readModelCatalog(catalogPath);
+    expect(out.catalog.foo).toBeDefined();
+  });
+
+  it('parses keyed-by-id schema', () => {
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({ 'qwen3-coder': { name: 'Qwen3 Coder', context_window: 262144 } }),
+    );
+    const out = Providers.readModelCatalog(catalogPath);
+    expect(out.catalog['qwen3-coder']).toBeDefined();
+  });
+
+  it('returns empty + no warning for missing file', () => {
+    const out = Providers.readModelCatalog(path.join(tmpRoot, 'nope.json'));
+    expect(out).toEqual({ catalog: {}, warning: null });
+  });
+
+  it('returns warning for malformed JSON', () => {
+    fs.writeFileSync(catalogPath, 'not json');
+    const out = Providers.readModelCatalog(catalogPath);
+    expect(out.warning).toMatch(/not valid JSON/);
+  });
+});
+
+describe('plugin/providers.js — enrichWithAuth', () => {
+  it('injects bearer tokens for matching providers', () => {
+    const registry = {
+      providers: {
+        nvidia: { base_url: 'http://n', auth: 'bearer', models: [] },
+      },
+    };
+    const auth = { nvidia: { auth: 'bearer', apiKey: 'nvapi-XYZ' } };
+    Providers.enrichWithAuth(registry, auth);
+    expect((registry.providers.nvidia as { apiKey: string }).apiKey).toBe('nvapi-XYZ');
+  });
+
+  it('injects env var references when only envVar is set', () => {
+    const registry = { providers: { kimi: { base_url: 'http://k', auth: 'bearer', models: [] } } };
+    const auth = { kimi: { auth: 'bearer', envVar: 'KIMI_KEY' } };
+    Providers.enrichWithAuth(registry, auth);
+    expect((registry.providers.kimi as { auth: string; envVar: string }).auth).toBe('env');
+    expect((registry.providers.kimi as { envVar: string }).envVar).toBe('KIMI_KEY');
+  });
+
+  it('marks oauth providers separately + stashes refresh/expires', () => {
+    const registry = { providers: { google: { base_url: 'http://g', models: [] } } };
+    const auth = {
+      google: { auth: 'oauth', apiKey: 'ya29.X', refresh: '1//R', expires: 1234 },
+    };
+    Providers.enrichWithAuth(registry, auth);
+    const g = registry.providers.google as {
+      auth: string;
+      apiKey: string;
+      refreshToken: string;
+      tokenExpires: number;
+    };
+    expect(g.auth).toBe('oauth');
+    expect(g.apiKey).toBe('ya29.X');
+    expect(g.refreshToken).toBe('1//R');
+    expect(g.tokenExpires).toBe(1234);
+  });
+
+  it('leaves non-matching providers alone', () => {
+    const registry = { providers: { x: { base_url: 'http://x', models: [] } } };
+    Providers.enrichWithAuth(registry, { y: { auth: 'bearer', apiKey: 'z' } });
+    expect((registry.providers.x as { apiKey?: string }).apiKey).toBeUndefined();
+  });
+
+  it('handles null / non-object inputs defensively', () => {
+    expect(Providers.enrichWithAuth(null, {})).toBeNull();
+    expect(Providers.enrichWithAuth({ providers: {} }, null)).toEqual({ providers: {} });
+  });
+});
+
+describe('plugin/providers.js — enrichWithCatalog', () => {
+  it('fills in contextWindow + canReason on existing models', () => {
+    const registry = {
+      providers: {
+        nvidia: {
+          base_url: 'http://n',
+          models: [{ id: 'gpt-5' }], // no context_window
+        },
+      },
+    };
+    const catalog = { 'gpt-5': { name: 'GPT-5', contextWindow: 400000, canReason: true } };
+    Providers.enrichWithCatalog(registry, catalog);
+    const m = (registry.providers.nvidia as { models: Array<{ context_window: number; can_reason: boolean }> })
+      .models[0];
+    expect(m?.context_window).toBe(400000);
+    expect(m?.can_reason).toBe(true);
+  });
+
+  it('does not overwrite an existing context_window (user values win)', () => {
+    const registry = {
+      providers: { p: { models: [{ id: 'm', context_window: 8192 }] } },
+    };
+    const catalog = { m: { name: 'M', contextWindow: 999999, canReason: true } };
+    Providers.enrichWithCatalog(registry, catalog);
+    const m = (registry.providers.p as { models: Array<{ context_window: number }> }).models[0];
+    expect(m?.context_window).toBe(8192);
+  });
+
+  it('surfaces orphan catalog entries into a synthetic _orphan provider', () => {
+    const registry = { providers: { known: { base_url: 'http://x', models: [{ id: 'foo' }] } } };
+    const catalog = {
+      foo: { name: 'Foo', contextWindow: 1000, canReason: false, supportsAttachments: false },
+      bar: { name: 'Bar', contextWindow: 2000, canReason: true, supportsAttachments: true },
+      baz: { name: 'Baz', contextWindow: 3000, canReason: false, supportsAttachments: false },
+    };
+    Providers.enrichWithCatalog(registry, catalog);
+    const orphan = registry.providers._orphan as {
+      models: Array<{ id: string; can_reason: boolean }>;
+      _orphan: boolean;
+    };
+    expect(orphan._orphan).toBe(true);
+    expect(orphan.models).toHaveLength(2); // bar + baz, not foo
+    expect(orphan.models.map((m) => m.id).sort()).toEqual(['bar', 'baz']);
+    expect(orphan.models[0]?.can_reason).toBe(true);
+  });
+
+  it('caps orphan entries at 100 to avoid noisy catalogs spamming the panel', () => {
+    const registry = { providers: {} };
+    const catalog: Record<string, { name: string; contextWindow: number }> = {};
+    for (let i = 0; i < 500; i++) {
+      catalog['model-' + i] = { name: 'Model ' + i, contextWindow: 1000 };
+    }
+    Providers.enrichWithCatalog(registry, catalog);
+    const orphan = registry.providers._orphan as { models: unknown[] };
+    expect(orphan.models).toHaveLength(100);
+  });
+
+  it('handles null / non-object inputs defensively', () => {
+    expect(Providers.enrichWithCatalog(null, {})).toBeNull();
+    expect(Providers.enrichWithCatalog({ providers: {} }, null)).toEqual({ providers: {} });
+  });
+});
+
+describe('plugin/providers.js — loadAll multi-source merge', () => {
+  let opencodePath: string;
+  let crushPath: string;
+  let authPath: string;
+  let catalogPath: string;
+
+  beforeEach(() => {
+    opencodePath = path.join(tmpRoot, 'opencode', 'opencode.json');
+    crushPath = path.join(tmpRoot, 'crush', 'providers.json');
+    authPath = path.join(tmpRoot, 'auth.json');
+    catalogPath = path.join(tmpRoot, 'model_catalog.json');
+    fs.mkdirSync(path.dirname(opencodePath), { recursive: true });
+    fs.mkdirSync(path.dirname(crushPath), { recursive: true });
+  });
+
+  it('merges pi + opencode + crush into a single registry', () => {
+    fs.writeFileSync(piPath, JSON.stringify({ providers: { maveros: { base_url: 'http://m' } } }));
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: { nvidia: { options: { baseURL: 'http://n' }, models: { 'gpt-5': {} } } },
+      }),
+    );
+    fs.writeFileSync(
+      crushPath,
+      JSON.stringify([{ id: 'gemini', api_endpoint: 'http://g', models: [{ id: 'gemini-3' }] }]),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath,
+      opencodePath,
+      crushPath,
+      authPath: noPath('no-auth.json'),
+      catalogPath: noPath('no-catalog.json'),
+    });
+    expect(Object.keys(out.registry.providers).sort()).toEqual(['gemini', 'maveros', 'nvidia']);
+    expect(out.sources.map((s) => s.name).sort()).toEqual(['crush', 'opencode', 'pi']);
+    expect(out.providerCount).toBe(3);
+  });
+
+  it('chatgml file wins over every external source on name collision', () => {
+    fs.writeFileSync(piPath, JSON.stringify({ providers: { nvidia: { base_url: 'http://pi' } } }));
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: { nvidia: { options: { baseURL: 'http://oc' }, models: {} } },
+      }),
+    );
+    fs.writeFileSync(
+      chatgmlPath,
+      JSON.stringify({ providers: { nvidia: { base_url: 'http://mine' } } }),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath,
+      opencodePath,
+      crushPath: noPath('no-crush.json'),
+      authPath: noPath('no-auth.json'),
+      catalogPath: noPath('no-catalog.json'),
+    });
+    expect((out.registry.providers.nvidia as { base_url: string }).base_url).toBe('http://mine');
+  });
+
+  it('injects API keys from auth.json into matching providers', () => {
+    fs.writeFileSync(piPath, JSON.stringify({ providers: { nvidia: { base_url: 'http://n' } } }));
+    fs.writeFileSync(authPath, JSON.stringify({ nvidia: { type: 'api_key', key: 'nvapi-XYZ' } }));
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath,
+      opencodePath: noPath('no-opencode.json'),
+      crushPath: noPath('no-crush.json'),
+      authPath,
+      catalogPath: noPath('no-catalog.json'),
+    });
+    expect((out.registry.providers.nvidia as { apiKey: string }).apiKey).toBe('nvapi-XYZ');
+    // Ensure the auth-source isn't itself listed in sources (it's metadata, not a registry).
+    expect(out.sources.find((s) => s.name === 'auth')).toBeUndefined();
+  });
+
+  it('fills context_window from model_catalog.json for known models', () => {
+    fs.writeFileSync(
+      piPath,
+      JSON.stringify({ providers: { x: { base_url: 'http://x', models: [{ id: 'gpt-5' }] } } }),
+    );
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify([{ id: 'gpt-5', name: 'GPT-5', context_window: 400000 }]),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath,
+      opencodePath: noPath('no-opencode.json'),
+      crushPath: noPath('no-crush.json'),
+      authPath: noPath('no-auth.json'),
+      catalogPath,
+    });
+    const m = (out.registry.providers.x as { models: Array<{ context_window: number }> }).models[0];
+    expect(m?.context_window).toBe(400000);
+  });
+
+  it('surfaces orphan catalog models in a synthetic _orphan provider', () => {
+    fs.writeFileSync(
+      piPath,
+      JSON.stringify({ providers: { known: { base_url: 'http://k', models: [{ id: 'foo' }] } } }),
+    );
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify([
+        { id: 'foo', name: 'Foo', context_window: 1000 },
+        { id: 'orphan-model', name: 'Orphan', context_window: 2000 },
+      ]),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath,
+      opencodePath: noPath('no-opencode.json'),
+      crushPath: noPath('no-crush.json'),
+      authPath: noPath('no-auth.json'),
+      catalogPath,
+    });
+    expect(out.registry.providers._orphan).toBeDefined();
+    // providerCount excludes the synthetic orphan row so the badge shows real provider count.
+    expect(out.providerCount).toBe(1);
+  });
+
+  it('returns warnings for malformed external files but keeps the load alive', () => {
+    fs.writeFileSync(piPath, JSON.stringify({ providers: { ok: { base_url: 'http://x' } } }));
+    fs.writeFileSync(opencodePath, '{ broken');
+    fs.writeFileSync(crushPath, '[] broken');
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath,
+      opencodePath,
+      crushPath,
+      authPath: noPath('no-auth.json'),
+      catalogPath: noPath('no-catalog.json'),
+    });
+    expect(out.warnings.length).toBeGreaterThan(0);
+    expect((out.registry.providers.ok as { base_url: string }).base_url).toBe('http://x');
+  });
+
+  it('all sources missing → empty registry, no warnings, no errors', () => {
+    const out = Providers.loadAll({
+      chatgmlPath: path.join(tmpRoot, 'no-chatgml.json'),
+      piPath: path.join(tmpRoot, 'no-pi.json'),
+      opencodePath: path.join(tmpRoot, 'no-opencode.json'),
+      crushPath: path.join(tmpRoot, 'no-crush.json'),
+      authPath: path.join(tmpRoot, 'no-auth.json'),
+      catalogPath: path.join(tmpRoot, 'no-catalog.json'),
+    });
+    expect(out.providers).toEqual([]);
+    expect(out.sources).toEqual([]);
+    expect(out.providerCount).toBe(0);
+    expect(out.warnings).toEqual([]);
+  });
+
+  it('sources array reports counts per source for transparency in the panel badge', () => {
+    fs.writeFileSync(
+      piPath,
+      JSON.stringify({ providers: { a: { base_url: 'http://a' }, b: { base_url: 'http://b' } } }),
+    );
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: { c: { options: { baseURL: 'http://c' }, models: {} } },
+      }),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath,
+      opencodePath,
+      crushPath: noPath('no-crush.json'),
+      authPath: noPath('no-auth.json'),
+      catalogPath: noPath('no-catalog.json'),
+    });
+    const pi = out.sources.find((s) => s.name === 'pi');
+    const oc = out.sources.find((s) => s.name === 'opencode');
+    expect(pi?.count).toBe(2);
+    expect(oc?.count).toBe(1);
   });
 });
 

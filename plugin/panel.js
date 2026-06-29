@@ -986,14 +986,31 @@
     var cbs = callbacks || {};
     var self = this;
 
-    // Header (left): count + bootstrap indicator + any warnings.
+    // Header (left): count + source badges + bootstrap indicator + any warnings.
     var headerLeft = this.settingsHeaderEl.firstChild;
     while (headerLeft.firstChild) headerLeft.removeChild(headerLeft.firstChild);
-    var count = (loadResult.providers || []).length;
+    var count = loadResult.providerCount || (loadResult.providers || []).length;
     var countLabel = document.createElement('span');
     countLabel.className = 'chatgml-settings-providers-count';
     countLabel.textContent = count + ' provider' + (count === 1 ? '' : 's');
     headerLeft.appendChild(countLabel);
+
+    // Source badges — show which external config files contributed entries (pi / opencode /
+    // crush / catalog). The chatgml-owned file isn't surfaced since it's where the user
+    // customizes; showing it as a "source" would be confusing. Each badge has a tooltip with the
+    // file path so the user can investigate.
+    var sources = Array.isArray(loadResult.sources) ? loadResult.sources : [];
+    for (var si = 0; si < sources.length; si++) {
+      (function (src) {
+        var srcBadge = document.createElement('span');
+        srcBadge.className = 'chatgml-settings-providers-source';
+        srcBadge.textContent = src.name + '·' + (src.count || 0);
+        srcBadge.title = src.path + '  (' + (src.count || 0) + ' provider' +
+          ((src.count || 0) === 1 ? '' : 's') + ')';
+        headerLeft.appendChild(srcBadge);
+      })(sources[si]);
+    }
+
     if (loadResult.bootstrapped) {
       var bootBadge = document.createElement('span');
       bootBadge.className = 'chatgml-settings-providers-badge';

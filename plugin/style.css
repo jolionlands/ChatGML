@@ -1608,6 +1608,12 @@ button[disabled],
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  /* The panel itself is `display: flex; flex-direction: column; max-height: min(70vh, 720px)` —
+     we need this wrapper to consume all remaining height (NOT grow to content), otherwise the
+     scroll never engages. `flex: 1 1 auto` + `min-height: 0` is the standard "fill remaining
+     flex space and shrink past content size" recipe. */
+  flex: 1 1 auto;
+  min-height: 0;
   /* Reserve space for the scrollbar so the form doesn't jump when content appears/disappears. */
   scrollbar-gutter: stable;
   /* Custom scrollbar — match the GMEdit surface tokens so the panel doesn't look out of place. */
@@ -1689,6 +1695,28 @@ button[disabled],
   border-radius: 999px;
   padding: 0 6px;
   line-height: 16px;
+}
+
+/* Source attribution badge — one per external config file that contributed providers
+   (pi / opencode / crush / catalog). Compact muted styling so they don't compete with the
+   primary "N providers" count. Hover reveals the full file path via tooltip. */
+.chatgml-settings-providers-source {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--chatgml-muted);
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+  cursor: help;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.chatgml-settings-providers-source:hover {
+  color: var(--chatgml-fg);
+  border-color: var(--chatgml-accent);
 }
 
 .chatgml-settings-action-btn {
