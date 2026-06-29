@@ -14,6 +14,7 @@
 // (never instructions); edits require an explicit user request. `auto` is opt-in only.
 import type {
   AgentEvent,
+  ChatLane,
   ChatMessage,
   Citation,
   Config,
@@ -28,6 +29,8 @@ import type {
   EditorContext,
   Mention,
   Mode,
+  TierName,
+  Tiers,
 } from './types.js';
 import { LlmError } from './llm.js';
 import type { ChatRequest, StreamDelta, ChatResult } from './llm.js';
@@ -309,6 +312,90 @@ export function buildSystemPrompt(config: Config, registry?: ToolRegistry): stri
   return sections.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Tier resolution (Cline-style Plan/Act).
+//
+// Each tier (`planner` / `implementer` / `reviewer`) is a PARTIAL override of the global chat lane
+// in `config.tiers`. resolveTier picks which tier a given turn should use:
+//
+//  - An explicit `useTier` override (per-turn from the protocol, or from `--use-tier`) ALWAYS wins.
+//  - Otherwise, the turn's `mode` maps: 'ask' -> planner; 'code'|'architect'|'debug' -> implementer.
+//  - The 'reviewer' tier is NOT auto-dispatched (it's reserved for future auto-review hooks); it's
+//    only reachable via an explicit override.
+//  - If the chosen tier isn't configured (or its model is missing), the resolver falls back to the
+//    GLOBAL chat lane — same endpoint + key, same temperature, but no special badge. The returned
+//    `name` is `null` in that case so the UI knows NOT to show a tier badge.
+//  - A tier WITH a partial override (e.g. just `model`) inherits `baseURL`/`apiKey`/etc. from the
+//    global chat lane so a user can route through one endpoint and swap models per tier.
+//
+// The function is PURE — no IO, no globals — so the unit tests can pin the mode→tier mapping
+// behavior without spinning up a real config.
+// ---------------------------------------------------------------------------
+export type ResolvedTier = { lane: ChatLane; name: TierName | null };
+
+/** Map an AgentMode + optional override to the tier name that should serve it. */
+export function tierForMode(mode: Mode, override?: TierName | null): TierName | null {
+  if (override !== undefined && override !== null) return override;
+  switch (mode) {
+    case 'ask':
+      return 'planner';
+    case 'architect':
+    case 'code':
+    case 'debug':
+      return 'implementer';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Resolve the chat lane + tier name for a turn.
+ *
+ * @param config        The resolved Config (carries the global lane + the optional `tiers` block).
+ * @param mode          The agent's current Mode (the per-system-prompt Mode, NOT the tier name).
+ * @param useTier       Optional per-turn override (e.g. from a `user` command's `tier` field).
+ *
+ * @returns The ChatLane the agent should call for this turn AND the tier name that produced it
+ *          (`null` ⇒ global lane, no badge). The lane is ALWAYS concrete: it is either the tier's
+ *          merged override OR a clone of the global lane — never undefined.
+ */
+export function resolveTier(
+  config: Config,
+  mode: Mode,
+  useTier?: TierName | null,
+): ResolvedTier {
+  const name = tierForMode(mode, useTier);
+  if (name === null) {
+    // No tier chosen at all; just return the global lane.
+    return { lane: config.chat, name: null };
+  }
+  const tier = config.tiers?.[name];
+  if (!tier || !tier.model) {
+    // Tier is configured for this mode but the operator hasn't set a model for it — fall back to
+    // the GLOBAL lane (so a missing-tier turn still works). The returned `name` is null so the UI
+    // does NOT show a misleading badge.
+    return { lane: config.chat, name: null };
+  }
+  // Merge: tier field wins; otherwise inherit from the global chat lane.
+  const lane: ChatLane = {
+    baseURL: tier.baseURL ?? config.chat.baseURL,
+    model: tier.model,
+    temperature: tier.temperature ?? config.chat.temperature,
+  };
+  if (tier.apiKey !== undefined) lane.apiKey = tier.apiKey;
+  if (tier.maxTokens !== undefined) lane.maxTokens = tier.maxTokens;
+  if (tier.maxTokens === undefined && config.chat.maxTokens !== undefined) {
+    lane.maxTokens = config.chat.maxTokens;
+  }
+  return { lane, name };
+}
+
+/** Read-only view of the configured tiers (used for `state.tiers` in the plugin). Returns
+ * undefined when no tiers are configured so the plugin can omit the section cleanly. */
+export function snapshotTiers(config: Config): Tiers | undefined {
+  return config.tiers;
+}
+
 /** Load per-mode rule snippets from .chatgml/rules-{mode}/ (recursive, alphabetical) or the legacy
  * single-file fallback .chatgml-rules-{mode}.md. Returns an array of non-empty lines. */
 function loadModeRules(root: string, mode: Mode): string[] {
@@ -372,6 +459,14 @@ export interface AgentDeps {
   approvals: ApprovalGate;
   signal?: AbortSignal;
   ignore?: IgnoreFilter;
+  /**
+   * Per-turn LLM dispatcher (Cline-style Plan/Act). Returns the LLM the turn should call AND the
+   * tier name that produced it (null ⇒ global lane, no badge). Optional — when absent the agent
+   * uses `deps.llm` for the whole turn and records no tier. The CLI passes a factory that maps
+   * each configured tier to an `LlmClient` so 'ask' runs on the planner and 'code' runs on the
+   * implementer. See `resolveTier`.
+   */
+  resolveLlmForTurn?: (useTier?: TierName) => { llm: LlmLike; name: TierName | null };
 }
 
 export interface AgentOptions {
@@ -392,6 +487,11 @@ export interface AgentOptions {
   idleMs?: number;
   /** Optional task/workspace id the client attaches to correlate this turn with a persisted task. */
   taskId?: string;
+  /**
+   * Per-turn tier override (mirrors the inbound `user` command's `tier` field). When set, the
+   * dispatcher routes the turn to that tier's lane. Absent ⇒ auto-dispatch from mode.
+   */
+  useTier?: TierName;
 }
 
 export interface AgentRunResult {
@@ -399,6 +499,8 @@ export interface AgentRunResult {
   history: ChatMessage[];
   sources: Citation[];
   taskId?: string;
+  /** Which tier produced this turn (null when the global lane was used; null is THE default). */
+  tier: TierName | null;
 }
 
 /**
@@ -443,6 +545,15 @@ export async function runAgent(
 
   let finalMessage: ChatMessage = { role: 'assistant', content: null };
 
+  // TIER DISPATCH (Cline-style Plan/Act). When the deps provide a tier-aware dispatcher we consult
+  // it ONCE at turn start; if absent, we use deps.llm and record null (no badge). The chosen tier
+  // is propagated through every AgentRunResult so turn_end can stamp the bubble correctly.
+  const tierPick = deps.resolveLlmForTurn
+    ? deps.resolveLlmForTurn(opts.useTier)
+    : { llm: deps.llm, name: null as TierName | null };
+  const turnLlm: LlmLike = tierPick.llm;
+  const turnTier: TierName | null = tierPick.name;
+
   // TERMINAL-EVENT CONTRACT (see docs/agent-api.md): every turn ends with EXACTLY ONE of
   // {answer, error}. The success path returns from inside the loop after emitting `answer`. Every
   // non-answer exit (abort/cancel, LlmError, maxSteps, stuck tool) flows through `errorExit`, which
@@ -450,7 +561,13 @@ export async function runAgent(
   // emitted once on abort (for UI), but it is NOT the terminator — the terminal `error{aborted}` is.
   const errorExit = (message: string, code: string): AgentRunResult => {
     deps.emit({ type: 'error', message, code });
-    return { message: finalMessage, history: messages, sources, taskId: opts.taskId };
+    return {
+      message: finalMessage,
+      history: messages,
+      sources,
+      taskId: opts.taskId,
+      tier: turnTier,
+    };
   };
 
   // Stuck-loop tracking: the fingerprint of the last tool call that returned ok:false, and how many
@@ -470,7 +587,11 @@ export async function runAgent(
     let result: ChatResult;
     try {
       result = await streamTurn(
-        deps.llm,
+        // TIER DISPATCH (Cline Plan/Act): use the tier-resolved LLM for this turn. When no
+        // dispatcher is wired (or the resolver falls back to the global lane) turnLlm === deps.llm
+        // and behavior is unchanged. Cached once at turn start so every step in a single turn
+        // hits the same model.
+        turnLlm,
         { messages, tools: toolSpecs, signal },
         deps.emit,
         opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {},
@@ -494,7 +615,7 @@ export async function runAgent(
       const answer: AgentEvent = { type: 'answer', text: answerText, sources };
       if (result.usage) answer.usage = result.usage;
       deps.emit(answer);
-      return { message: finalMessage, history: messages, sources, taskId: opts.taskId };
+      return { message: finalMessage, history: messages, sources, taskId: opts.taskId, tier: turnTier };
     }
 
     // Execute each tool call, append a role:'tool' result keyed to its id. Track consecutive
@@ -814,6 +935,17 @@ export interface AgentLikeDeps {
    * keep-alive on a known-slow upstream; <=0 disables the watchdog.
    */
   idleMs?: number;
+  /**
+   * Optional per-turn LLM dispatcher (Cline-style Plan/Act). Given the inbound turn's `useTier`
+   * (or null when auto-dispatching from mode), return the LLM the turn should call AND the tier
+   * name the run should be stamped with on `turn_end`. The CLI wires a factory that maps each
+   * configured `config.tiers.<name>` slot to a freshly-constructed `LlmClient` on that lane; tests
+   * inject their own or omit the field (in which case the global `deps.llm` is used for every
+   * turn and `result.tier` is always null).
+   *
+   * See src/agent.ts:resolveTier + src/agent.ts:tierForMode for the default mode→tier mapping.
+   */
+  resolveLlmForTurn?: (useTier?: TierName) => { llm: LlmLike; name: TierName | null };
 }
 
 /**
@@ -973,6 +1105,15 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
       // Extract editor context and task id for both the agent run and the turn_end record.
       const ctx = command.context as EditorContext | undefined;
       const taskId = command.taskId;
+      // TIER DISPATCH (Cline Plan/Act): forward the inbound per-turn override (e.g. set by a
+      // request with {type:'user', tier:'planner'}). When absent, runAgent auto-dispatches from
+      // the configured mode (planner for ask, implementer for code/architect/debug, null for
+      // everything else). The mode mapping lives in src/agent.ts:tierForMode.
+      const inboundTier = (command as { tier?: TierName }).tier;
+      const useTier: TierName | undefined =
+        inboundTier === 'planner' || inboundTier === 'implementer' || inboundTier === 'reviewer'
+          ? inboundTier
+          : undefined;
       // user command: run the agent, draining emitted events as they arrive.
       const runResult = runAgent(
         command.text,
@@ -985,12 +1126,18 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
           approvals: gate,
           signal: controller.signal,
           ...(deps.ignore ? { ignore: deps.ignore } : {}),
+          // Per-turn tier dispatcher. Returns the LLM the turn should use AND the resolved tier
+          // name (so the UI can stamp the bubble). buildAgent wires a factory that maps each
+          // configured tier to a fresh LlmClient on its lane; legacy callers (tests, REPL) inject
+          // their own or omit it (no per-turn routing).
+          ...(deps.resolveLlmForTurn ? { resolveLlmForTurn: deps.resolveLlmForTurn } : {}),
         },
         {
           ...(deps.idleMs !== undefined ? { idleMs: deps.idleMs } : {}),
           history: turnHistory,
           context: ctx,
           taskId,
+          ...(useTier !== undefined ? { useTier } : {}),
         },
       )
         .then((result) => {
@@ -1010,6 +1157,10 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
             sources: result.sources,
             ...(ctx ? { context: ctx } : {}),
             ...(taskId ? { taskId } : {}),
+            // TIER DISPATCH stamp: which lane produced this turn. null means the global chat lane
+            // was used (no tier was configured for the active mode). Plugin badgers the bubble
+            // when this is set.
+            tier: result.tier,
           });
           finalize();
         })

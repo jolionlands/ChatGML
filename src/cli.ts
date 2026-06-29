@@ -23,6 +23,8 @@ import {
 } from './config.js';
 import type { Config } from './types.js';
 import { LlmClient } from './llm.js';
+import { tierForMode, resolveTier } from './agent.js';
+import type { ChatLane, TierName } from './types.js';
 import { OpenAIEmbeddings, type Embeddings } from './index/embeddings.js';
 import { createMemoryProvider, type MemoryProvider } from './memory/provider.js';
 import { runIndexCommand } from './index/run-index.js';
@@ -95,6 +97,23 @@ interface GlobalFlags {
   minScore?: string;
   color?: boolean;
   trustProjectConfig?: boolean;
+  /**
+   * Cline-style Plan/Act override for the CLI session. When set, every `user` turn in this
+   * session routes to the configured tier's lane regardless of the active mode. Absent ⇒
+   * auto-dispatch from mode (ask → planner, code/architect/debug → implementer, else global).
+   * Field is populated by `--use-tier <name>` below.
+   */
+  useTier?: TierName;
+  /** Per-tier partial overrides. Each maps to `tiers.<planner|implementer|reviewer>.{model,baseURL,apiKey}`. */
+  tierPlannerModel?: string;
+  tierPlannerBaseUrl?: string;
+  tierPlannerApiKey?: string;
+  tierImplementerModel?: string;
+  tierImplementerBaseUrl?: string;
+  tierImplementerApiKey?: string;
+  tierReviewerModel?: string;
+  tierReviewerBaseUrl?: string;
+  tierReviewerApiKey?: string;
 }
 
 function buildConfig(root: string, flags: GlobalFlags, io: CliIo): Config {
@@ -110,6 +129,59 @@ function buildConfig(root: string, flags: GlobalFlags, io: CliIo): Config {
 function makeLlm(deps: CliDeps, config: Config): LlmLike {
   if (deps.makeLlm) return deps.makeLlm(config);
   return new LlmClient(config.chat);
+}
+
+/**
+ * Build a fresh `LlmClient` from a partial ChatLane. Used by the tier-resolver to instantiate one
+ * LLM per configured tier (planner/implementer/reviewer); each one gets its own baseURL / apiKey /
+ * model that may differ from the global chat lane. The base shape is `ChatLane`, so any future
+ * lane-shaped config can pass through unchanged. Missing required fields (baseURL / model) fall
+ * back to the global lane — same fallback as `resolveTier`, so the resolver and the factory never
+ * disagree about which endpoint a turn will hit.
+ */
+function makeLlmFromLane(deps: CliDeps, config: Config, lane: ChatLane): LlmLike {
+  if (deps.makeLlm) {
+    // Tests can intercept the global lane, but for tier lanes we honor a dedicated hook too so a
+    // test fixture can simulate per-tier model routing.
+    const tierHook = (deps as CliDeps & { makeTierLlm?: (lane: ChatLane) => LlmLike })
+      .makeTierLlm;
+    if (tierHook) return tierHook(lane);
+  }
+  // Fallback: tests that only set `makeLlm` (no `makeTierLlm`) get the same fake LLM for every
+  // tier. Production code reaches the `new LlmClient(lane)` line below when neither hook is set.
+  if (deps.makeLlm) return deps.makeLlm(config);
+  return new LlmClient(lane);
+}
+
+/**
+ * Build the per-turn LLM dispatcher wired into `createAgentLike` (Cline Plan/Act). Given the
+ * inbound turn's `useTier` (or null when the inbound `user` command omitted it / set a value the
+ * protocol doesn't recognize), resolve to the matching tier's lane OR the global lane, and
+ * construct a fresh `LlmClient` for it. The result is cached per tier name so the same tier
+ * doesn't reallocate per turn. The returned `name` is the tier that produced the turn (null when
+ * the resolver fell back to the global lane — no badge in that case).
+ */
+function buildTierDispatcher(
+  deps: CliDeps,
+  config: Config,
+  activeMode: Config['mode'],
+  cliUseTier?: TierName | null,
+): (useTier?: TierName | null) => { llm: LlmLike; name: TierName | null } {
+  const cache = new Map<TierName | 'global', LlmLike>();
+  cache.set('global', makeLlmFromLane(deps, config, config.chat));
+  return (useTier?: TierName | null) => {
+    // CLI-side `--use-tier` wins over the inbound `command.tier` when the latter is unset. When
+    // both are present the inbound wins (deeper in the stack). Null clears the override.
+    const effective = useTier ?? cliUseTier ?? null;
+    const resolved = resolveTier(config, activeMode, effective);
+    const key = resolved.name ?? 'global';
+    let llm = cache.get(key);
+    if (!llm) {
+      llm = makeLlmFromLane(deps, config, resolved.lane);
+      cache.set(key, llm);
+    }
+    return { llm, name: resolved.name };
+  };
 }
 
 function makeEmbeddings(deps: CliDeps, config: Config): Embeddings {
@@ -210,6 +282,11 @@ async function buildAgent(
   // or empty value is ignored (keeps the default).
   const idleEnv = Number(io.env['CHATGML_IDLE_MS']);
   const idleMs = io.env['CHATGML_IDLE_MS'] && Number.isFinite(idleEnv) ? idleEnv : undefined;
+  // TIER DISPATCH (Cline Plan/Act): build the per-turn LLM factory from the resolved Config. The
+  // dispatcher is constructed here (not lazily) so the CLI doesn't have to plumb a Config into
+  // serve.ts; serve just forwards `useTier` through to the dispatcher. CliDeps may inject
+  // `makeTierLlm` to swap the lane's LLM in tests; otherwise a fresh LlmClient per tier is built.
+  const resolveLlmForTurn = buildTierDispatcher(deps, config, config.mode ?? 'code', flags.useTier);
   const agent = createAgentLike({
     llm,
     tools: buildToolRegistry(),
@@ -217,6 +294,7 @@ async function buildAgent(
     memory,
     ignore,
     ...(idleMs !== undefined ? { idleMs } : {}),
+    resolveLlmForTurn,
     runReindex: async function* () {
       yield { type: 'status', phase: 'indexing' };
       const result = await runIndexCommand(config, { embeddings });

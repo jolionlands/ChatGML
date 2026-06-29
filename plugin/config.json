@@ -6,6 +6,7 @@
     "child-process.js",
     "diff-view.js",
     "markdown.js",
+    "settings-tasks.js",
     "panel.js",
     "config-bridge.js",
     "client.js",

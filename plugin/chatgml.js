@@ -24,10 +24,13 @@
   const DiffViewApi = globalThis.ChatGmlDiffView || require('./diff-view.js');
   const ConfigBridgeApi = globalThis.ChatGmlConfigBridge || require('./config-bridge.js');
   const State = globalThis.ChatGmlState || require('./state.js');
+  const SettingsTasks =
+    globalThis.ChatGmlSettingsTasks || require('./settings-tasks.js');
   // Resolve markdown.js so the renderer global is populated (config.json loads it before
   // panel.js, but the require fallback is also fine in Node-based test contexts).
   const MarkdownApi = globalThis.ChatGmlMarkdown || require('./markdown.js');
   void MarkdownApi;
+  const FuzzyApi = globalThis.ChatGmlFuzzy || require('./fuzzy.js');
 
   const PLUGIN_NAME = 'chatgml';
   const SESSION_DIR = join(__dirname, 'chatgml-sessions');
@@ -44,6 +47,73 @@
   let terminalOutput = '';
   let currentTaskId = 'default';
   const configBridge = new ConfigBridgeApi.ConfigBridge(__dirname);
+
+  // File index for @file autocomplete: cached list of project files, lazily scanned, invalidated
+  // when projectDirectory changes. Capped at FILE_INDEX_MAX to keep autocomplete snappy on huge
+  // projects. We skip obvious noise directories (node_modules, .git, .cache, .vscode, build, dist)
+  // and skip hidden files / large binaries by extension. Each entry is a POSIX-style path relative
+  // to projectDirectory so the panel can show short labels and insert full relative paths into
+  // the input.
+  const FILE_INDEX_MAX = 5000;
+  const FILE_INDEX_SKIP_DIRS = new Set([
+    'node_modules', '.git', '.cache', '.vscode', 'build', 'dist', 'out', 'target', '.next', '.nuxt',
+  ]);
+  const FILE_INDEX_SKIP_EXTS = new Set([
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.pdf', '.zip', '.tar', '.gz', '.7z', '.rar',
+    '.mp3', '.mp4', '.mov', '.wav', '.ogg', '.ttf', '.otf', '.woff', '.woff2', '.exe', '.dll',
+    '.so', '.dylib', '.class', '.o', '.obj', '.lib', '.a', '.pdb',
+  ]);
+  let fileIndexCache = { cwd: null, files: null };
+
+  function normalizeToPosixForIndex(p) {
+    if (!p) return p;
+    return p.split(path.sep).join('/');
+  }
+
+  async function scanProjectFiles(cwd, opts) {
+    opts = opts || {};
+    const max = opts.max || FILE_INDEX_MAX;
+    if (!cwd) return [];
+    if (fileIndexCache.cwd === cwd && fileIndexCache.files) return fileIndexCache.files;
+    const out = [];
+    const root = normalizeToPosixForIndex(cwd);
+    async function walk(dir, relPrefix) {
+      if (out.length >= max) return;
+      let entries;
+      try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+      } catch (e) {
+        return; // permission denied, etc -- skip
+      }
+      for (const ent of entries) {
+        if (out.length >= max) return;
+        const name = ent.name;
+        if (name.startsWith('.')) continue; // skip hidden
+        const childAbs = join(dir, name);
+        const childRel = relPrefix ? relPrefix + '/' + name : name;
+        if (ent.isDirectory()) {
+          if (FILE_INDEX_SKIP_DIRS.has(name)) continue;
+          await walk(childAbs, childRel);
+        } else if (ent.isFile()) {
+          const ext = path.extname(name).toLowerCase();
+          if (FILE_INDEX_SKIP_EXTS.has(ext)) continue;
+          out.push(childRel);
+        }
+        // symlinks, sockets, etc -- skip
+      }
+    }
+    try {
+      await walk(root, '');
+    } catch (e) {
+      console.warn('chatgml: file index scan failed', e);
+    }
+    fileIndexCache = { cwd: cwd, files: out };
+    return out;
+  }
+
+  function invalidateFileIndex() {
+    fileIndexCache = { cwd: null, files: null };
+  }
 
   // -------------------------------------------------------------------------
   // Editor context (opencode-style "current file" awareness). Best-effort + guarded: GMEdit
@@ -832,6 +902,7 @@
         void deleteTask(name);
       },
       getMentions: getMentions,
+      getProjectFiles: function () { return scanProjectFiles(projectDirectory); },
       onSendWithContext: function (text, context) {
         if (client) client.sendUser(text, Object.assign({}, context, { taskId: currentTaskId }));
       },
@@ -918,13 +989,19 @@
       },
       onSaveSettings: function (settings) {
         void (async function () {
-          var tasks = [];
-          if (settings.model) tasks.push(['chat.model', settings.model]);
-          if (settings.baseURL) tasks.push(['chat.baseURL', settings.baseURL]);
-          if (settings.mode) tasks.push(['mode', settings.mode]);
-          if (settings.approval) tasks.push(['approval', settings.approval]);
-          if (settings.scope) configBridge.setScope(settings.scope);
-          // Write each config field sequentially, then restart the core.
+          // Decide which `chatgml config set` commands to run (and whether to also set the
+          // plugin-local scope pref). The helper drops empty fields so an accidental blank
+          // submit never overwrites an existing value; in particular `apiKey` is a no-op when
+          // empty. The core itself additionally refuses to persist a literal secret for any
+          // SECRET_FIELD_PATHS field (chat.apiKey, embed.apiKey, memory.hippo.key) — only an
+          // `env:NAME` reference is accepted — and that's exactly what the help text under the
+          // input tells the user to paste.
+          var plan = SettingsTasks.buildSettingsCommands(settings);
+          var tasks = plan.commands;
+          // Write each config field sequentially, then restart the core. Scope is a plugin pref
+          // (it must precede the serve argv on restart, NOT a user-global config field) so it
+          // goes through configBridge.setScope, not configBridge.setConfigField.
+          if (plan.scope !== null) configBridge.setScope(plan.scope);
           var i = 0;
           function next() {
             if (i >= tasks.length) {
@@ -944,6 +1021,9 @@
         })();
       },
     });
+    // Wire the fuzzy filter for the @file autocomplete dropdown.
+    panel._fileFilter = FuzzyApi.filter;
+
 
     sizer = document.createElement('div');
     sizer.setAttribute('splitter-element', '#chatgml_editor');
@@ -1018,6 +1098,7 @@
     );
 
     GMEdit.on('projectOpen', function (e) {
+      invalidateFileIndex(); // new project -> rescan file list for @file autocomplete
       projectDirectory = e.project.dir; // the on-disk directory (NOT e.project.path / the .yyp)
       console.info('chatgml: project opened', projectDirectory);
       if (panel) {

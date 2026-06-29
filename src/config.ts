@@ -12,8 +12,18 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { z } from 'zod';
 
-import type { Config, ChatLane, EmbedLane, MemoryConfig, Mode, McpServerConfig } from './types.js';
-export type { Config, ChatLane, EmbedLane, MemoryConfig, McpServerConfig };
+import type {
+  Config,
+  ChatLane,
+  EmbedLane,
+  MemoryConfig,
+  Mode,
+  McpServerConfig,
+  Tier,
+  Tiers,
+  TierName,
+} from './types.js';
+export type { Config, ChatLane, EmbedLane, MemoryConfig, McpServerConfig, Tier, Tiers, TierName };
 
 // ---------------------------------------------------------------------------
 // The ONE defaults object.
@@ -187,6 +197,28 @@ const McpServerConfigSchema = z
   .partial()
   .strict();
 
+// A single Tier: model required; baseURL/apiKey optional; temperature/maxTokens optional numeric
+// overrides. `.strict()` so an unknown key (e.g. `tier.kind`) is rejected loudly.
+const PartialTierSchema = z
+  .object({
+    model: z.string(),
+    baseURL: z.string(),
+    apiKey: z.string(),
+    temperature: z.number(),
+    maxTokens: z.number(),
+  })
+  .partial()
+  .strict();
+
+const PartialTiersSchema = z
+  .object({
+    planner: PartialTierSchema,
+    implementer: PartialTierSchema,
+    reviewer: PartialTierSchema,
+  })
+  .partial()
+  .strict();
+
 const PartialConfigSchema = z
   .object({
     chat: PartialChatSchema,
@@ -199,6 +231,7 @@ const PartialConfigSchema = z
     index: PartialIndexSchema,
     search: PartialSearchSchema,
     mcpServers: z.record(z.string(), McpServerConfigSchema),
+    tiers: PartialTiersSchema,
   })
   .partial()
   .strict();
@@ -250,6 +283,14 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+/** Canonical tier names — single source of truth for the schema, flag/env names, and `set` paths. */
+export const TIER_NAMES: readonly TierName[] = ['planner', 'implementer', 'reviewer'] as const;
+
+/** 'planner' -> 'Planner'; used to build flag keys like `tierPlannerModel`. */
+function cap(name: TierName): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 /** Build a partial-config layer from CLI flags (camelCase keys). */
 function layerFromFlags(flags: Record<string, unknown>): PartialConfig {
   const out: PartialConfig = {};
@@ -272,7 +313,41 @@ function layerFromFlags(flags: Record<string, unknown>): PartialConfig {
   }
   const minScore = num(flags['minScore']);
   if (minScore !== undefined) out.search = { minScore };
+
+  // Tier flags: --tier-{planner,implementer,reviewer}-{model,base-url,api-key} set only the
+  // matching sub-field of each tier (preserving the others from lower-precedence layers).
+  const tiers = layerFromTierFlags(flags);
+  if (tiers) out.tiers = tiers;
+
   return out;
+}
+
+/** Extract a partial-tiers layer from CLI flags. Returns undefined when no tier flag was set. */
+function layerFromTierFlags(flags: Record<string, unknown>): PartialConfig['tiers'] | undefined {
+  const out: NonNullable<NonNullable<PartialConfig['tiers']>> = {};
+  let any = false;
+  for (const name of TIER_NAMES) {
+    const tier: NonNullable<PartialConfig['tiers']>[TierName] = {};
+    const model = str(flags[`tier${cap(name)}Model`]);
+    const baseURL = str(flags[`tier${cap(name)}BaseUrl`]);
+    const apiKey = str(flags[`tier${cap(name)}ApiKey`]);
+    if (model !== undefined) {
+      tier.model = model;
+      any = true;
+    }
+    if (baseURL !== undefined) {
+      tier.baseURL = baseURL;
+      any = true;
+    }
+    if (apiKey !== undefined) {
+      tier.apiKey = apiKey;
+      any = true;
+    }
+    if (tier.model !== undefined || tier.baseURL !== undefined || tier.apiKey !== undefined) {
+      (out as Record<string, unknown>)[name] = tier;
+    }
+  }
+  return any ? out : undefined;
 }
 
 /** Build a partial-config layer from CHATGML_* env vars. */
@@ -295,7 +370,40 @@ function layerFromEnv(env: NodeJS.ProcessEnv): PartialConfig {
   if (approval === 'gated' || approval === 'auto') out.approval = approval;
   const minScore = num(env['CHATGML_SEARCH_MIN_SCORE']);
   if (minScore !== undefined) out.search = { minScore };
+
+  const tiers = layerFromTierEnv(env);
+  if (tiers) out.tiers = tiers;
+
   return out;
+}
+
+/** Extract a partial-tiers layer from CHATGML_TIER_*_MODEL / _BASE_URL / _API_KEY env vars. */
+function layerFromTierEnv(env: NodeJS.ProcessEnv): PartialConfig['tiers'] | undefined {
+  const out: NonNullable<NonNullable<PartialConfig['tiers']>> = {};
+  let any = false;
+  for (const name of TIER_NAMES) {
+    const upper = name.toUpperCase();
+    const tier: NonNullable<PartialConfig['tiers']>[TierName] = {};
+    const model = str(env[`CHATGML_TIER_${upper}_MODEL`]);
+    const baseURL = str(env[`CHATGML_TIER_${upper}_BASE_URL`]);
+    const apiKey = str(env[`CHATGML_TIER_${upper}_API_KEY`]);
+    if (model !== undefined) {
+      tier.model = model;
+      any = true;
+    }
+    if (baseURL !== undefined) {
+      tier.baseURL = baseURL;
+      any = true;
+    }
+    if (apiKey !== undefined) {
+      tier.apiKey = apiKey;
+      any = true;
+    }
+    if (tier.model !== undefined || tier.baseURL !== undefined || tier.apiKey !== undefined) {
+      (out as Record<string, unknown>)[name] = tier;
+    }
+  }
+  return any ? out : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +468,19 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
     envLayer.mcpServers,
     flagLayer.mcpServers,
   );
+  const tiers = mergeTiers(fileLayer.tiers, envLayer.tiers, flagLayer.tiers);
+
+  // Tier secret resolution: same scheme as chat.apiKey — `env:NAME` references are resolved into
+  // the actual key from the env, literal values pass through unchanged. The untrusted-config
+  // guard below runs on the RAW references, so it can't be defeated by resolution here.
+  if (tiers) {
+    for (const name of TIER_NAMES) {
+      const tier = tiers[name];
+      if (!tier) continue;
+      const resolved = resolveSecret(tier.apiKey, env);
+      if (resolved !== undefined) tier.apiKey = resolved;
+    }
+  }
 
   // --- Required-field validation (paths only in error messages, never values).
   if (chat.baseURL === undefined) {
@@ -419,6 +540,12 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
     if (hasLiteralSecret(fileLayerRaw.chat?.apiKey)) literals.push('chat.apiKey');
     if (hasLiteralSecret(fileLayerRaw.embed?.apiKey)) literals.push('embed.apiKey');
     if (hasLiteralSecret(fileLayerRaw.memory?.key)) literals.push('memory.hippo.key');
+    // Tier secrets are surfaced too — a project file literally storing a tier's key is the same
+    // leak class.
+    for (const name of TIER_NAMES) {
+      const tier = fileLayerRaw.tiers?.[name];
+      if (hasLiteralSecret(tier?.apiKey)) literals.push(`tiers.${name}.apiKey`);
+    }
     if (literals.length > 0) {
       args.warn(
         `WARNING: ${loaded.path} contains a literal secret for [${literals.join(', ')}]. ` +
@@ -439,6 +566,7 @@ export function resolveConfig(args: ResolveConfigArgs): Config {
     index,
     search,
     ...(mcpServers !== undefined ? { mcpServers } : {}),
+    ...(tiers !== undefined ? { tiers } : {}),
   };
   return config;
 }
@@ -552,6 +680,51 @@ function mergeToolApproval(
 }
 
 /**
+ * Merge the tiered-model lane (flags > env > file). Each tier is itself merged per-field (model /
+ * baseURL / apiKey / temperature / maxTokens) so a flag can override JUST the model of a tier
+ * configured in the file without dropping the file's baseURL. Only tiers whose model is set end
+ * up in the result; tiers whose model is missing across every layer are dropped (they would be
+ * useless to resolveTier).
+ */
+function mergeTiers(
+  file: PartialConfig['tiers'],
+  env: PartialConfig['tiers'],
+  flags: PartialConfig['tiers'],
+): Tiers | undefined {
+  let any = false;
+  const out: Tiers = {};
+  for (const name of TIER_NAMES) {
+    const merged: { model: string; baseURL?: string; apiKey?: string; temperature?: number; maxTokens?: number } = {
+      model: '',
+    };
+    const f = flags?.[name];
+    const e = env?.[name];
+    const fl = file?.[name];
+    merged.model = pick(f?.model, e?.model, fl?.model) ?? '';
+    merged.baseURL = pick(f?.baseURL, e?.baseURL, fl?.baseURL);
+    merged.apiKey = pick(f?.apiKey, e?.apiKey, fl?.apiKey);
+    if (f?.temperature !== undefined || e?.temperature !== undefined || fl?.temperature !== undefined) {
+      merged.temperature = pick(f?.temperature, e?.temperature, fl?.temperature);
+    }
+    if (f?.maxTokens !== undefined || e?.maxTokens !== undefined || fl?.maxTokens !== undefined) {
+      merged.maxTokens = pick(f?.maxTokens, e?.maxTokens, fl?.maxTokens);
+    }
+    if (merged.model !== '') {
+      // Drop the field when absent so the Tier type matches (optional means "not set", not
+      // "explicitly undefined"). The Tier type uses `?:` so `delete` is the right semantics.
+      const cleaned: Tier = { model: merged.model };
+      if (merged.baseURL !== undefined) cleaned.baseURL = merged.baseURL;
+      if (merged.apiKey !== undefined) cleaned.apiKey = merged.apiKey;
+      if (merged.temperature !== undefined) cleaned.temperature = merged.temperature;
+      if (merged.maxTokens !== undefined) cleaned.maxTokens = merged.maxTokens;
+      out[name] = cleaned;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
+}
+
+/**
  * Merge MCP server configs (flags > env > file). Only the file layer is typically used; flags/env
  * are accepted for completeness but currently have no extraction path.
  */
@@ -593,6 +766,19 @@ function assertNoUntrustedSecretEndpoint(
     pick(flags.memory?.key, env.memory?.key),
     processEnv,
   );
+  // Tier lanes: a project file may not set a tier's baseURL while the matching tier's apiKey OR the
+  // global chat apiKey is env-sourced — same secret-bearing-endpoint rule as the chat lane.
+  const globalKey = pick(flags.chat?.apiKey, env.chat?.apiKey);
+  for (const name of TIER_NAMES) {
+    const ft = file.tiers?.[name];
+    if (!ft) continue;
+    checkPair(
+      `tiers.${name}.baseURL`,
+      ft.baseURL,
+      pick(flags.tiers?.[name]?.apiKey, env.tiers?.[name]?.apiKey, globalKey),
+      processEnv,
+    );
+  }
 }
 
 function checkPair(
@@ -650,8 +836,27 @@ export function redact(config: Config): unknown {
     ...(config.search.minScore !== undefined ? { search: config.search } : {}),
     // Surface MCP server config but mask any env values (they may contain secrets).
     ...(config.mcpServers !== undefined ? { mcpServers: redactMcpServers(config.mcpServers) } : {}),
+    // Tiered model overrides: emit a redacted view when configured so the operator can see WHICH
+    // model each tier is set to without exposing any tier override keys.
+    ...(config.tiers !== undefined ? { tiers: redactTiers(config.tiers) } : {}),
   };
   return out;
+}
+
+/** Redact a Tiers block: keep model/baseURL, drop apiKey presence (replace with REDACTED). */
+function redactTiers(tiers: Tiers): Record<TierName, unknown> {
+  const out: Partial<Record<TierName, unknown>> = {};
+  for (const name of TIER_NAMES) {
+    const tier = tiers[name];
+    if (!tier) continue;
+    const r: Record<string, unknown> = { model: tier.model };
+    if (tier.baseURL !== undefined) r['baseURL'] = tier.baseURL;
+    if (tier.apiKey !== undefined) r['apiKey'] = REDACTED;
+    if (tier.temperature !== undefined) r['temperature'] = tier.temperature;
+    if (tier.maxTokens !== undefined) r['maxTokens'] = tier.maxTokens;
+    out[name] = r;
+  }
+  return out as Record<TierName, unknown>;
 }
 
 function redactMcpServers(
@@ -679,12 +884,20 @@ function redactMcpServers(
 // ---------------------------------------------------------------------------
 
 /** The dotted field paths that carry a secret; only an `env:NAME` reference is persistable. */
-export const SECRET_FIELD_PATHS = new Set(['chat.apiKey', 'embed.apiKey', 'memory.hippo.key']);
+export const SECRET_FIELD_PATHS = new Set([
+  'chat.apiKey',
+  'embed.apiKey',
+  'memory.hippo.key',
+  'tiers.planner.apiKey',
+  'tiers.implementer.apiKey',
+  'tiers.reviewer.apiKey',
+]);
 
 /**
  * The dotted field paths `config set` understands, mapped to where they live in the partial-config
  * object. `memory.hippo.url`/`memory.hippo.key` write to `memory.url`/`memory.key` (the provider is
- * implied). Anything else is rejected as an unknown field.
+ * implied). Anything else is rejected as an unknown field. Tier paths are generated dynamically
+ * from TIER_NAMES so adding a tier requires zero edits here.
  */
 const SETTABLE_FIELDS: Record<string, { path: string[]; type: 'string' | 'number' }> = {
   'chat.baseURL': { path: ['chat', 'baseURL'], type: 'string' },
@@ -707,6 +920,22 @@ const SETTABLE_FIELDS: Record<string, { path: string[]; type: 'string' | 'number
   'index.root': { path: ['index', 'root'], type: 'string' },
   'search.minScore': { path: ['search', 'minScore'], type: 'number' },
 };
+
+// Tier paths: built from TIER_NAMES so the catalog above never lags the runtime list.
+for (const name of TIER_NAMES) {
+  SETTABLE_FIELDS[`tiers.${name}.model`] = {
+    path: ['tiers', name, 'model'],
+    type: 'string',
+  };
+  SETTABLE_FIELDS[`tiers.${name}.baseURL`] = {
+    path: ['tiers', name, 'baseURL'],
+    type: 'string',
+  };
+  SETTABLE_FIELDS[`tiers.${name}.apiKey`] = {
+    path: ['tiers', name, 'apiKey'],
+    type: 'string',
+  };
+}
 
 /** The dotted field names `config set` accepts (sorted), for help text and validation hints. */
 export const SETTABLE_FIELD_NAMES: readonly string[] = [

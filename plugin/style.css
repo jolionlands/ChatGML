@@ -884,6 +884,26 @@ button[disabled],
   color: var(--chatgml-del-fg);
 }
 
+/* =========================================================================
+ * Trim notice (turns/activity capped by the reducer)
+ * =========================================================================
+ * Small dim line above the transcript shown when the reducer had to evict turns or activity rows
+ * to stay under TURN_CAP / ACTIVITY_CAP. Distinct from .chatgml-flash (info) and
+ * .chatgml-flash-error (error): neutral muted color, no left border accent so it reads as a
+ * passive status rather than an alert.
+ */
+.chatgml-trim-notice {
+  font-family: var(--chatgml-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  margin: 2px 0 0 0;
+  color: var(--chatgml-muted);
+  background-color: var(--chatgml-card-bg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  opacity: 0.85;
+}
+
 .chatgml-help,
 .chatgml-help .chatgml-flash {
   font-family: var(--chatgml-mono);
@@ -1600,6 +1620,34 @@ button[disabled],
 .chatgml-settings-save {
   align-self: flex-end;
   margin-top: 4px;
+}
+
+/* Help text shown beneath sensitive fields (api key) — same row flex layout, but full width and
+   smaller/muted. Keeps the security warning inline so users see it before pasting a literal key. */
+.chatgml-settings-help {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--chatgml-muted);
+  padding: 2px 0 4px 78px; /* indent past the 70px label column + 8px row gap */
+  word-break: break-word;
+}
+
+/* Password-type api key input. Same visual style as the other settings inputs but the
+   -webkit-text-security rule (already declared on .chatgml-settings-input[type="password"]) hides
+   the typed characters on supported browsers. We additionally ensure monospace-ish dot spacing so
+   the user can see they are typing something even when the field is short. */
+.chatgml-settings-input.chatgml-settings-input-secret {
+  font-family: var(--chatgml-mono);
+  letter-spacing: 1px;
+}
+
+/* Optional: a subtle warning tint when the api key placeholder is the redaction glyph
+   (i.e. the user already has a key set). Keeps the placeholder visible against a busy panel. */
+.chatgml-settings-input.chatgml-settings-input-secret::placeholder {
+  color: var(--chatgml-muted);
+  opacity: 0.85;
+  letter-spacing: 0; /* the placeholder glyphs read better without forced spacing */
 }
 
 /* =========================================================================

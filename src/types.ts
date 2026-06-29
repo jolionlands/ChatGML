@@ -40,6 +40,13 @@ export interface UserCommand {
   text: string;
   context?: EditorContext;
   taskId?: string;
+  /**
+   * Optional per-turn tier override. When set, the agent uses the configured lane for this tier
+   * (planner | implementer | reviewer) instead of the default mode-based dispatch. A tier name that
+   * isn't configured falls back to the global chat lane silently. Absent ⇒ auto-dispatch from
+   * mode. Mirrors the `--use-tier` CLI flag for the serve protocol.
+   */
+  tier?: TierName;
 }
 
 // OpenAI wire shape; arguments is a JSON STRING (the agent parses it).
@@ -143,6 +150,8 @@ export type AgentEvent =
   // to resume a conversation after a restart persists these records and replays them via a
   // `resume` inbound command (see protocol.ts). The reducer treats it as a no-op side signal; it
   // does NOT change the running/answer/phase state (those were already set by the answer event).
+  // `tier` records which tier (planner/implementer/reviewer) produced the turn; null/absent means
+  // the global chat lane was used.
   | {
       type: 'turn_end';
       userText: string;
@@ -150,6 +159,7 @@ export type AgentEvent =
       sources: Citation[];
       context?: EditorContext;
       taskId?: string;
+      tier?: TierName | null;
     }
   // Protocol v3 events: command execution lifecycle, checkpointing, and tool catalog.
   | { type: 'pong'; id: string }
@@ -332,6 +342,33 @@ export interface McpServerConfig {
   disabled?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Tiered model system (Cline-style Plan/Act). Each tier is a PARTIAL override of the global
+// `chat` lane: at minimum `model` is required; `baseURL` / `apiKey` default to the global lane's.
+// A tier that is omitted OR has only `model` defined uses the global chat endpoint+key with the
+// tier's model. This means a user can route ALL traffic at one endpoint and just swap models per
+// tier, OR point each tier at a different endpoint entirely. (See docs/agent-api.md — Tiered
+// models.)
+// ---------------------------------------------------------------------------
+export type TierName = 'planner' | 'implementer' | 'reviewer';
+
+/** Single tier: a partial override of the chat lane. `model` is required; the rest default. */
+export interface Tier {
+  model: string;
+  baseURL?: string;
+  apiKey?: string;
+  /** Optional temperature/maxTokens overrides; absent ⇒ inherit from the global chat lane. */
+  temperature?: number;
+  maxTokens?: number;
+}
+
+/** All configured tiers. Any slot left undefined uses the global chat lane for that role. */
+export interface Tiers {
+  planner?: Tier;
+  implementer?: Tier;
+  reviewer?: Tier;
+}
+
 export interface Config {
   chat: ChatLane;
   embed: EmbedLane;
@@ -344,4 +381,9 @@ export interface Config {
   search: SearchConfig;
   /** External MCP servers whose tools/resources ChatGML can use. */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Tiered model overrides. When unset or a tier within it is unset, the agent falls back to the
+   * global `chat` lane for that role. Resolution is in src/agent.ts (resolveTier).
+   */
+  tiers?: Tiers;
 }

@@ -94,6 +94,30 @@
   }
 
   // --- 5. PluginState + reducePluginState ----------------------------------------------------
+  // Cap knobs for `turns` and `activity`. Tuned for long sessions: turns cap keeps the chat
+  // transcript bounded (200 user/assistant bubble pairs is plenty of context for /resume and the
+  // visible scroll); activity cap keeps the tool/MCP log bounded without losing recent work.
+  // Both are applied inside the reducer (NOT in the renderer) so render logic can stay dumb.
+  const TURN_CAP = 200;
+  const ACTIVITY_CAP = 500;
+
+  /**
+   * Append `item` to `arr` and cap the result at `max` items (dropping from the FRONT so the
+   * most-recent items are kept — chat is append-only and the newest turns belong at the end of
+   * the array). Returns `[newArr, newEvictedCount]` where `newEvictedCount` is incremented by the
+   * number of items actually trimmed (zero when nothing was trimmed). Pure: no I/O, no
+   * Date.now() — safe to call inside the reducer.
+   *
+   * Parity-critical: the same function (byte-for-byte equivalent behavior) lives in
+   * src/plugin-runtime.ts as `pushCapped`.
+   */
+  function pushCapped(arr, item, max, evictedCount) {
+    const combined = arr.concat([item]);
+    const dropped = combined.length - max;
+    if (dropped <= 0) return [combined, evictedCount || 0];
+    return [combined.slice(combined.length - max), (evictedCount || 0) + dropped];
+  }
+
   function initialPluginState() {
     return {
       ready: false,
@@ -108,6 +132,12 @@
       catalog: null,
       checkpoints: [],
       turns: [],
+      // Counts of items dropped from `turns` / `activity` because they exceeded their cap.
+      // Surfaced to the UI so the panel can show "Showing last N turns (X trimmed from earlier
+      // history)" without re-deriving it from the array lengths (which would lose the running
+      // total across /clear-free runs).
+      turnsEvicted: 0,
+      activityEvicted: 0,
       pendingUserText: null,
     };
   }
@@ -126,6 +156,8 @@
       catalog: state.catalog,
       checkpoints: state.checkpoints,
       turns: state.turns,
+      turnsEvicted: state.turnsEvicted,
+      activityEvicted: state.activityEvicted,
       pendingUserText: state.pendingUserText,
     };
     switch (event.type) {
@@ -141,8 +173,9 @@
         next.transcript = state.transcript + event.text;
         next.answer = (state.answer || '') + event.text;
         return next;
-      case 'tool_call':
-        next.activity = state.activity.concat([
+      case 'tool_call': {
+        const capped = pushCapped(
+          state.activity,
           {
             id: event.id,
             kind: 'tool',
@@ -151,8 +184,13 @@
             content: undefined,
             error: undefined,
           },
-        ]);
+          ACTIVITY_CAP,
+          state.activityEvicted,
+        );
+        next.activity = capped[0];
+        next.activityEvicted = capped[1];
         return next;
+      }
       case 'tool_result':
         next.activity = state.activity.map(function (a) {
           if (a.id !== event.id) return a;
@@ -165,8 +203,9 @@
           return copy;
         });
         return next;
-      case 'command_request':
-        next.activity = state.activity.concat([
+      case 'command_request': {
+        const capped = pushCapped(
+          state.activity,
           {
             id: event.id,
             kind: 'command',
@@ -176,8 +215,13 @@
             cwd: event.cwd,
             output: '',
           },
-        ]);
+          ACTIVITY_CAP,
+          state.activityEvicted,
+        );
+        next.activity = capped[0];
+        next.activityEvicted = capped[1];
         return next;
+      }
       case 'command_output': {
         const MAX_OUTPUT = 8192;
         next.activity = state.activity.map(function (a) {
@@ -211,8 +255,9 @@
           };
         });
         return next;
-      case 'mcp_tool_call':
-        next.activity = state.activity.concat([
+      case 'mcp_tool_call': {
+        const capped = pushCapped(
+          state.activity,
           {
             id: event.id,
             kind: 'mcp',
@@ -222,8 +267,13 @@
             content: undefined,
             error: undefined,
           },
-        ]);
+          ACTIVITY_CAP,
+          state.activityEvicted,
+        );
+        next.activity = capped[0];
+        next.activityEvicted = capped[1];
         return next;
+      }
       case 'mcp_tool_result':
         next.activity = state.activity.map(function (a) {
           if (a.id !== event.id || a.kind !== 'mcp') return a;
@@ -242,8 +292,9 @@
           return copy;
         });
         return next;
-      case 'mcp_resource':
-        next.activity = state.activity.concat([
+      case 'mcp_resource': {
+        const capped = pushCapped(
+          state.activity,
           {
             id: event.id,
             kind: 'mcp',
@@ -258,16 +309,26 @@
                   })()
                 : undefined,
           },
-        ]);
+          ACTIVITY_CAP,
+          state.activityEvicted,
+        );
+        next.activity = capped[0];
+        next.activityEvicted = capped[1];
         return next;
+      }
       case 'turn_end':
         if (event.userText != null || event.assistantText != null) {
-          next.turns = (state.turns || []).concat([
+          const capped = pushCapped(
+            state.turns || [],
             {
               userText: event.userText || '',
               assistantText: event.assistantText != null ? event.assistantText : state.answer || '',
             },
-          ]);
+            TURN_CAP,
+            state.turnsEvicted,
+          );
+          next.turns = capped[0];
+          next.turnsEvicted = capped[1];
         }
         next.answer = null; // the streaming answer is now captured in the turn
         next.pendingUserText = null;
@@ -484,6 +545,9 @@
     resolveServeBinary: resolveServeBinary,
     initialPluginState: initialPluginState,
     reducePluginState: reducePluginState,
+    pushCapped: pushCapped,
+    TURN_CAP: TURN_CAP,
+    ACTIVITY_CAP: ACTIVITY_CAP,
     settleProposal: settleProposal,
     matchApproval: matchApproval,
     parseSlashCommand: parseSlashCommand,

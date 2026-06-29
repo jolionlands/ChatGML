@@ -159,6 +159,50 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
       ...tsState.pendingProposals.entries(),
     ]);
     expect(jsState.checkpoints).toEqual(tsState.checkpoints);
+    // Cap-eviction counters (audit gap #21) must agree field-for-field on both copies.
+    expect(jsState.turnsEvicted).toBe(tsState.turnsEvicted);
+    expect(jsState.activityEvicted).toBe(tsState.activityEvicted);
+  });
+
+  it('reducePluginState: turn_cap + activity_cap apply identically on both copies (over-cap stress)', () => {
+    // Generate TURN_CAP + 50 turn_ends and ACTIVITY_CAP + 50 tool_calls; both copies must agree on
+    // the resulting `turns`/`activity` length, the *content* (latest items retained), and the
+    // cumulative evicted counters.
+    const events: AgentEvent[] = [];
+    const turnCount = ts.TURN_CAP + 50;
+    const activityCount = ts.ACTIVITY_CAP + 50;
+    for (let i = 0; i < activityCount; i++) {
+      events.push({ type: 'tool_call', id: 'a' + i, name: 'tool_' + i, args: {} });
+    }
+    for (let i = 0; i < turnCount; i++) {
+      events.push({
+        type: 'turn_end',
+        userText: 'q' + i,
+        assistantText: 'a' + i,
+        sources: [],
+      });
+    }
+    let tsState = ts.initialPluginState();
+    let jsState = js.initialPluginState();
+    for (const e of events) {
+      tsState = ts.reducePluginState(e as AgentEvent, tsState);
+      jsState = js.reducePluginState(e as AgentEvent, jsState);
+    }
+    // Both must cap at exactly the configured size with the most-recent 200/500 retained.
+    expect(tsState.turns.length).toBe(ts.TURN_CAP);
+    expect(jsState.turns.length).toBe(ts.TURN_CAP);
+    expect(tsState.activity.length).toBe(ts.ACTIVITY_CAP);
+    expect(jsState.activity.length).toBe(ts.ACTIVITY_CAP);
+    // Identical content (FIFO drop from the front) on both copies.
+    expect(jsState.turns).toEqual(tsState.turns);
+    expect(jsState.activity.map((a) => a.id)).toEqual(
+      tsState.activity.map((a) => a.id),
+    );
+    // Identical evicted totals.
+    expect(jsState.turnsEvicted).toBe(tsState.turnsEvicted);
+    expect(jsState.activityEvicted).toBe(tsState.activityEvicted);
+    expect(tsState.turnsEvicted).toBe(turnCount - ts.TURN_CAP);
+    expect(tsState.activityEvicted).toBe(activityCount - ts.ACTIVITY_CAP);
   });
 
   it('reducePluginState: command lifecycle is identical on both copies', () => {

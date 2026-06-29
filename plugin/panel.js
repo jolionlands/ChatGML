@@ -6,6 +6,7 @@
   'use strict';
 
   const State = root.ChatGmlState || require('./state.js');
+  const SettingsTasks = root.ChatGmlSettingsTasks || require('./settings-tasks.js');
   const DiffView = root.ChatGmlDiffView || require('./diff-view.js');
 
   /**
@@ -192,6 +193,15 @@
     c.appendChild(this.catalogEl);
 
     // Transcript (streamed tokens) + final answer.
+    // Trim notice: a small dim line shown ABOVE the transcript whenever the reducer had to evict
+    // turns or activity rows because they exceeded their cap. Hidden by default; the renderer
+    // toggles its display + text from `s.turnsEvicted` / `s.activityEvicted`. The reducer is the
+    // single source of truth (the renderer never computes this from array lengths).
+    this.trimNoticeEl = document.createElement('div');
+    this.trimNoticeEl.className = 'chatgml-trim-notice';
+    this.trimNoticeEl.style.display = 'none';
+    c.appendChild(this.trimNoticeEl);
+
     this.transcriptEl = document.createElement('div');
     this.transcriptEl.className = 'chatgml-transcript';
     c.appendChild(this.transcriptEl);
@@ -271,6 +281,14 @@
       if (pos > 0 && val.charAt(pos - 1) === '@' && (pos === 1 || /\s/.test(val.charAt(pos - 2)))) {
         self._mentionTriggerPos = pos - 1;
         self._showMentionDropdown();
+        return;
+      }
+      // If we are inside a "@file " mention (typed or pasted), show the file autocomplete.
+      var fctx = self._fileMentionContext();
+      if (fctx) {
+        self._showFileMentionDropdown(fctx.query);
+      } else {
+        self._hideFileMentionDropdown();
       }
     });
     this.mentionDropdownEl = document.createElement('div');
@@ -314,7 +332,8 @@
     this._buildSettingsPanel();
   };
 
-  /** Build the inline settings dropdown (model, base URL, mode, approval, scope + Save&Restart). */
+  /** Build the inline settings dropdown (model, base URL, api key, embed model, embed base URL,
+   * mode, approval, scope + Save&Restart). */
   ChatPanel.prototype._buildSettingsPanel = function () {
     var self = this;
     this.settingsPanelEl = document.createElement('div');
@@ -331,6 +350,13 @@
       return row;
     }
 
+    function makeHelpRow(text) {
+      var help = document.createElement('div');
+      help.className = 'chatgml-settings-help';
+      help.textContent = text;
+      return help;
+    }
+
     // Model
     this.settingsModelInput = document.createElement('input');
     this.settingsModelInput.type = 'text';
@@ -344,6 +370,38 @@
     this.settingsUrlInput.className = 'chatgml-settings-input';
     this.settingsUrlInput.placeholder = 'chat endpoint URL';
     this.settingsPanelEl.appendChild(makeRow('Base URL', this.settingsUrlInput));
+
+    // API key — password-type input so the value is never echoed on screen. When a key is already
+    // set (the redacted `cfg.chat.apiKey` from `chatgml config show` is truthy), the placeholder
+    // shows the redaction glyph; the actual value is NEVER round-tripped into the UI. Empty submit
+    // is intentionally a no-op so the user does not accidentally blank their saved key.
+    this.settingsApiKeyInput = document.createElement('input');
+    this.settingsApiKeyInput.type = 'password';
+    this.settingsApiKeyInput.className = 'chatgml-settings-input chatgml-settings-input-secret';
+    this.settingsApiKeyInput.placeholder = SettingsTasks.API_KEY_PLACEHOLDER;
+    this.settingsApiKeyInput.autocomplete = 'off';
+    this.settingsApiKeyInput.spellcheck = false;
+    this.settingsPanelEl.appendChild(makeRow('API Key', this.settingsApiKeyInput));
+    this.settingsPanelEl.appendChild(
+      makeHelpRow(
+        'Stored in ~/.config/chatgml/config.json. For production, set CHATGML_CHAT_KEY in your ' +
+          'environment and paste  env:CHATGML_CHAT_KEY  here — only env references are persisted.',
+      ),
+    );
+
+    // Embed Model (separate lane; the chat model does NOT fall back to the embed model).
+    this.settingsEmbedModelInput = document.createElement('input');
+    this.settingsEmbedModelInput.type = 'text';
+    this.settingsEmbedModelInput.className = 'chatgml-settings-input';
+    this.settingsEmbedModelInput.placeholder = 'embed model id';
+    this.settingsPanelEl.appendChild(makeRow('Embed Model', this.settingsEmbedModelInput));
+
+    // Embed Base URL.
+    this.settingsEmbedUrlInput = document.createElement('input');
+    this.settingsEmbedUrlInput.type = 'text';
+    this.settingsEmbedUrlInput.className = 'chatgml-settings-input';
+    this.settingsEmbedUrlInput.placeholder = 'embed endpoint URL';
+    this.settingsPanelEl.appendChild(makeRow('Embed Base URL', this.settingsEmbedUrlInput));
 
     // Mode select
     this.settingsModeSelect = document.createElement('select');
@@ -385,6 +443,12 @@
       var settings = {
         model: self.settingsModelInput.value.trim(),
         baseURL: self.settingsUrlInput.value.trim(),
+        // Note: we do NOT pre-trim the api key value here; SettingsTasks.buildSettingsCommands will
+        // trim it AND treat empty/whitespace as a no-op so an accidental blank submit leaves the
+        // saved key intact.
+        apiKey: self.settingsApiKeyInput.value,
+        embedModel: self.settingsEmbedModelInput.value.trim(),
+        embedBaseURL: self.settingsEmbedUrlInput.value.trim(),
         mode: self.settingsModeSelect.value,
         approval: self.settingsApprovalSelect.value,
         scope: self.settingsScopeInput.value.trim(),
@@ -392,6 +456,9 @@
       if (typeof self.opts.onSaveSettings === 'function') {
         self.opts.onSaveSettings(settings);
       }
+      // Reset the password field after save so the raw value doesn't linger in the DOM. Empty
+      // submit is already a no-op on the wire (see SettingsTasks.buildSettingsCommands).
+      self.settingsApiKeyInput.value = '';
       self.settingsPanelEl.style.display = 'none';
     });
     this.settingsPanelEl.appendChild(saveBtn);
@@ -400,13 +467,26 @@
     this.opts.container.insertBefore(this.settingsPanelEl, this.statusEl);
   };
 
-  /** Populate settings inputs from a config object (from `chatgml config show`). */
+  /** Populate settings inputs from a config object (from `chatgml config show`). The api key is
+   * never echoed: when the redacted `cfg.chat.apiKey` is truthy (the core masks it to `***`), the
+   * password input keeps its redaction-glyph placeholder so the user knows a key is set without
+   * revealing it. */
   ChatPanel.prototype.setSettingsValues = function (cfg) {
     if (!cfg) return;
     if (cfg.chat && cfg.chat.model && this.settingsModelInput)
       this.settingsModelInput.value = cfg.chat.model;
     if (cfg.chat && cfg.chat.baseURL && this.settingsUrlInput)
       this.settingsUrlInput.value = cfg.chat.baseURL;
+    if (cfg.embed && cfg.embed.model && this.settingsEmbedModelInput)
+      this.settingsEmbedModelInput.value = cfg.embed.model;
+    if (cfg.embed && cfg.embed.baseURL && this.settingsEmbedUrlInput)
+      this.settingsEmbedUrlInput.value = cfg.embed.baseURL;
+    if (cfg.chat && this.settingsApiKeyInput) {
+      // Reflect whether a key is already set without revealing the value. The redacted `***`
+      // placeholder is the visual cue; we never assign the redacted value into `value`.
+      var placeholder = SettingsTasks.apiKeyDisplayPlaceholder(cfg.chat.apiKey);
+      this.settingsApiKeyInput.placeholder = placeholder || SettingsTasks.API_KEY_PLACEHOLDER;
+    }
     if (cfg.mode && this.settingsModeSelect) this.settingsModeSelect.value = cfg.mode;
     if (cfg.approval && this.settingsApprovalSelect)
       this.settingsApprovalSelect.value = cfg.approval;
@@ -520,6 +600,120 @@
     this.mentionDropdownEl.style.display = 'block';
   };
 
+  /**
+   * Detect whether the cursor is currently inside a "@file " mention. Returns the query
+   * (the substring typed after "@file ") and the absolute start position of the @ so the panel
+   * knows where to splice the selected path back in. Returns null if the cursor is not in a
+   * @file mention.
+   */
+  ChatPanel.prototype._fileMentionContext = function () {
+    var val = this.inputEl.value;
+    var pos = this.inputEl.selectionStart;
+    if (pos == null) return null;
+    // Walk backwards from the cursor to find an '@file ' that starts at a word boundary.
+    var i = pos;
+    while (i > 0) {
+      var ch = val.charAt(i - 1);
+      if (ch === '\n') break; // newline ends a line
+      if (ch === '@') {
+        // Check the prefix is '@file ' or '@file<not-space>' (so '@filename' does NOT match).
+        var after = val.slice(i, i + 4);
+        if (after.toLowerCase() === 'file' && (i + 4 >= val.length || /\s/.test(val.charAt(i + 4)))) {
+          // Cursor must be within or at the end of the file mention. We allow the cursor to be
+          // anywhere in "after @file" up to the next whitespace.
+          var j = i + 4;
+          while (j < val.length && !/\s/.test(val.charAt(j))) j++;
+          if (pos >= i && pos <= j + (val.charAt(j) === ' ' ? 1 : 0)) {
+            return { start: i, end: j, query: val.slice(i + 5, pos) };
+          }
+          return null;
+        }
+        return null;
+      }
+      i--;
+    }
+    return null;
+  };
+
+  /** Show the @file autocomplete dropdown with fuzzy-filtered project files. */
+  ChatPanel.prototype._showFileMentionDropdown = function (query) {
+    var self = this;
+    if (typeof this.opts.getProjectFiles !== 'function') return; // no project dir
+    var promise = this.opts.getProjectFiles();
+    if (!promise || typeof promise.then !== 'function') return; // not a promise
+    var token = ++this._fileDropdownToken;
+    promise.then(function (files) {
+      if (token !== self._fileDropdownToken) return; // stale (user kept typing)
+      if (!files || files.length === 0) {
+        self._hideFileMentionDropdown();
+        return;
+      }
+      var matches = (self._fileFilter || function (all, q) { return all.slice(0, 8); })(files, query);
+      if (!matches || matches.length === 0) {
+        self._hideFileMentionDropdown();
+        return;
+      }
+      self._renderFileDropdown(matches, query);
+    }).catch(function (e) {
+      console.warn('chatgml: file index failed', e);
+      self._hideFileMentionDropdown();
+    });
+  };
+
+  /** Render the file dropdown contents (called by _showFileMentionDropdown once files are ready). */
+  ChatPanel.prototype._renderFileDropdown = function (matches, query) {
+    this.mentionDropdownEl.innerHTML = '';
+    this._mentionItems = matches.map(function (m) {
+      return { type: 'file-result', label: m, insert: m + ' ' };
+    });
+    this._mentionActiveIndex = 0;
+    for (var i = 0; i < matches.length; i++) {
+      var item = matches[i];
+      var div = document.createElement('div');
+      div.className = 'chatgml-mention-autocomplete-item';
+      if (i === 0) div.classList.add('chatgml-mention-active');
+      div.textContent = item.label;
+      div.addEventListener('click', (function (insert) {
+        return function () {
+          self._insertFileResult(insert);
+          self._hideMentionDropdown();
+        };
+      })(item.label));
+      this.mentionDropdownEl.appendChild(div);
+    }
+    this.mentionDropdownEl.style.display = 'block';
+  };
+
+  /** Insert a file result at the cursor (replaces the @file + query with the chosen path). */
+  ChatPanel.prototype._insertFileResult = function (path) {
+    var ctx = this._fileMentionContext();
+    var val = this.inputEl.value;
+    if (ctx) {
+      // Replace from '@' through the typed query with the chosen path.
+      var insertPos = ctx.start; // position of '@'
+      var before = val.slice(0, insertPos);
+      // Re-add a leading @ so the file mention is preserved verbatim in the sent text.
+      var after = val.slice(insertPos + 5 + ctx.query.length);
+      this.inputEl.value = before + '@file ' + path + after;
+      var newPos = before.length + 6 + path.length;
+      this.inputEl.selectionStart = newPos;
+      this.inputEl.selectionEnd = newPos;
+    } else {
+      // Fallback: append at cursor.
+      var start2 = this.inputEl.selectionStart;
+      var end2 = this.inputEl.selectionEnd;
+      this.inputEl.value = val.slice(0, start2) + path + val.slice(end2);
+      this.inputEl.selectionStart = start2 + path.length;
+      this.inputEl.selectionEnd = start2 + path.length;
+    }
+    this._renderMentionChips();
+  };
+
+  /** Hide the file dropdown if it's showing file completions. */
+  ChatPanel.prototype._hideFileMentionDropdown = function () {
+    this._fileDropdownToken = (this._fileDropdownToken || 0) + 1; // invalidate in-flight
+  };
+
   /** Move the mention autocomplete selection up or down. */
   ChatPanel.prototype._moveMentionSelection = function (delta) {
     if (!this._mentionItems || this._mentionItems.length === 0) return;
@@ -543,6 +737,11 @@
   ChatPanel.prototype._hideMentionDropdown = function () {
     if (this.mentionDropdownEl) this.mentionDropdownEl.style.display = 'none';
     this._mentionTriggerPos = null;
+    this._fileDropdownToken = 0;
+    // Fuzzy filter for the @file autocomplete. Defaults to null; chatgml.js sets
+    // this._fileFilter to the real fuzzy scorer at panel construction time.
+    this._fileFilter = null;
+    if (this._fileDropdownToken != null) this._fileDropdownToken++; // invalidate in-flight file dropdown
   };
 
   /** Insert a mention keyword at the trigger position (replacing the typed '@'). */
@@ -718,6 +917,11 @@
       this.sendBtn.setAttribute('disabled', 'disabled');
       this.reindexBtn.setAttribute('disabled', 'disabled');
       this.state.pendingUserText = null;
+      // Reset the eviction counters and the trim-notice element so a Stop+Launch doesn't leave a
+      // stale "Showing last N turns (X trimmed)" line behind for a fresh session.
+      this.state.turnsEvicted = 0;
+      this.state.activityEvicted = 0;
+      if (this.trimNoticeEl) this.trimNoticeEl.style.display = 'none';
       this._renderedTurnsCount = 0;
       this._streamingBubbleEl = null;
       this._pendingBubbleEl = null;
@@ -777,10 +981,16 @@
     this.state.error = null;
     this.state.checkpoints = [];
     this.state.turns = [];
+    // /clear is a user-initiated reset of the in-memory history — drop the eviction counters too
+    // so the trim notice disappears immediately (a still-positive count would otherwise render
+    // "Showing last N turns (0 trimmed)" against an empty transcript, which is meaningless).
+    this.state.turnsEvicted = 0;
+    this.state.activityEvicted = 0;
     this.state.pendingUserText = null;
     this.lastWrittenPaths.clear();
     this.selectedCheckpointId = null;
     this.diffView.clear();
+    if (this.trimNoticeEl) this.trimNoticeEl.style.display = 'none';
     this.render();
   };
 
@@ -1053,6 +1263,36 @@
           }
           this.catalogEl.appendChild(row);
         }
+      }
+    }
+
+    // Trim notice: shown only when the reducer's eviction counters are > 0. We render a single
+    // composed sentence ("⚠ Showing last N turns (X trimmed from earlier history)" + an
+    // optional activity phrase) so a user can see at a glance how much of the session is missing
+    // without leaving the panel. Text content is set via textContent (never innerHTML) — these
+    // counters are integers so XSS is impossible, but the project rule is textContent only.
+    if (this.trimNoticeEl) {
+      var turnCap = (State.TURN_CAP || 200);
+      var actCap = (State.ACTIVITY_CAP || 500);
+      var turnEvicted = s.turnsEvicted | 0;
+      var actEvicted = s.activityEvicted | 0;
+      if (turnEvicted > 0 || actEvicted > 0) {
+        var parts = [];
+        if (turnEvicted > 0) {
+          parts.push(
+            '⚠ Showing last ' + turnCap + ' turns (' + turnEvicted + ' trimmed from earlier history)',
+          );
+        }
+        if (actEvicted > 0) {
+          parts.push(
+            'activity log capped at ' + actCap + ' (' + actEvicted + ' older entries dropped)',
+          );
+        }
+        this.trimNoticeEl.textContent = parts.join(' • ');
+        this.trimNoticeEl.style.display = '';
+      } else {
+        this.trimNoticeEl.textContent = '';
+        this.trimNoticeEl.style.display = 'none';
       }
     }
 

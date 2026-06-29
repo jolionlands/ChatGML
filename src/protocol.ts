@@ -45,6 +45,16 @@ export const InEventSchema = z.discriminatedUnion('type', [
     text: z.string(),
     context: EditorContextSchema,
     taskId: z.string().max(64).optional(),
+    /**
+     * Optional tier override (Cline-style Plan/Act). When set, the run dispatches to the lane
+     * configured for that tier (`config.tiers.<name>`) and stamps the turn with that tier name.
+     * Absent ⇒ auto-dispatch from mode (ask → planner, code/architect/debug → implementer,
+     * anything else → global chat lane). Mirrors the `--use-tier` CLI flag for the inline REPL
+     * and the per-turn override exposed by the plugin. The value is one of the four
+     * tier names; an unknown value is silently ignored (treated as absent) so an older client
+     * talking to a newer server keeps working.
+     */
+    tier: z.enum(['planner', 'implementer', 'reviewer']).optional(),
   }),
   z.object({
     type: z.literal('approve'),

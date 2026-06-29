@@ -230,6 +230,11 @@ export interface TurnRecord {
   assistantText: string;
 }
 
+/** Cap on `turns` — only the most recent TURN_CAP user/assistant bubble pairs are kept in state. */
+export const TURN_CAP = 200;
+/** Cap on `activity` — only the most recent ACTIVITY_CAP tool/command/MCP rows are kept in state. */
+export const ACTIVITY_CAP = 500;
+
 export interface PluginState {
   /** True once the ready handshake arrived; gates Send/Approve. */
   ready: boolean;
@@ -253,14 +258,42 @@ export interface PluginState {
   /**
    * Per-turn conversation bubbles, accumulated as `turn_end` events arrive. The user message and
    * the assistant text are kept together so the chat panel can render a chronological transcript.
+   * Capped at TURN_CAP entries — older turns are dropped from the FRONT and counted in
+   * `turnsEvicted` so the UI can show "Showing last N turns (M trimmed from earlier history)".
    */
   turns: TurnRecord[];
+  /** Cumulative count of turns dropped from the front of `turns` because the cap was hit. */
+  turnsEvicted: number;
+  /** Cumulative count of activity rows dropped from the front of `activity` because the cap was hit. */
+  activityEvicted: number;
   /**
    * The user's text for the CURRENT (in-flight) turn, set by the client before any token events
    * arrive so the chat panel can render the user's bubble immediately. Cleared by `turn_end` so
    * the next turn starts clean.
    */
   pendingUserText: string | null;
+}
+
+/**
+ * Append `item` to `arr` and cap the result at `max` items (dropping from the FRONT so the
+ * most-recent items are kept — chat is append-only and the newest entries belong at the tail of
+ * the array). Returns `[newArr, newEvictedCount]` where `newEvictedCount` is incremented by the
+ * number of items actually trimmed (zero when nothing was trimmed). Pure: no I/O, no Date.now() —
+ * safe to call inside the reducer.
+ *
+ * Parity-critical: the same function (byte-for-byte equivalent behavior) is hand-ported into
+ * plugin/state.js as `pushCapped`; the parity test enforces they stay in lock-step.
+ */
+export function pushCapped<T>(
+  arr: readonly T[],
+  item: T,
+  max: number,
+  evictedCount: number,
+): [T[], number] {
+  const combined = [...arr, item];
+  const dropped = combined.length - max;
+  if (dropped <= 0) return [combined, evictedCount || 0];
+  return [combined.slice(combined.length - max), (evictedCount || 0) + dropped];
 }
 
 export function initialPluginState(): PluginState {
@@ -277,6 +310,8 @@ export function initialPluginState(): PluginState {
     catalog: null,
     checkpoints: [],
     turns: [],
+    turnsEvicted: 0,
+    activityEvicted: 0,
     pendingUserText: null,
   };
 }
@@ -293,6 +328,8 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     activity: state.activity,
     pendingProposals: state.pendingProposals,
     turns: state.turns,
+    turnsEvicted: state.turnsEvicted,
+    activityEvicted: state.activityEvicted,
     pendingUserText: state.pendingUserText,
   };
   switch (event.type) {
@@ -312,8 +349,8 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       return next;
     }
     case 'tool_call': {
-      next.activity = [
-        ...state.activity,
+      const capped = pushCapped(
+        state.activity,
         {
           id: event.id,
           kind: 'tool',
@@ -322,7 +359,11 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
           content: undefined,
           error: undefined,
         },
-      ];
+        ACTIVITY_CAP,
+        state.activityEvicted,
+      );
+      next.activity = capped[0];
+      next.activityEvicted = capped[1];
       return next;
     }
     case 'tool_result': {
@@ -349,8 +390,8 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       return next;
     }
     case 'command_request': {
-      next.activity = [
-        ...state.activity,
+      const capped = pushCapped(
+        state.activity,
         {
           id: event.id,
           kind: 'command',
@@ -360,7 +401,11 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
           cwd: event.cwd,
           output: '',
         },
-      ];
+        ACTIVITY_CAP,
+        state.activityEvicted,
+      );
+      next.activity = capped[0];
+      next.activityEvicted = capped[1];
       return next;
     }
     case 'command_output': {
@@ -382,8 +427,8 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       return next;
     }
     case 'mcp_tool_call': {
-      next.activity = [
-        ...state.activity,
+      const capped = pushCapped(
+        state.activity,
         {
           id: event.id,
           kind: 'mcp',
@@ -393,7 +438,11 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
           content: undefined,
           error: undefined,
         },
-      ];
+        ACTIVITY_CAP,
+        state.activityEvicted,
+      );
+      next.activity = capped[0];
+      next.activityEvicted = capped[1];
       return next;
     }
     case 'mcp_tool_result': {
@@ -417,8 +466,8 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       return next;
     }
     case 'mcp_resource': {
-      next.activity = [
-        ...state.activity,
+      const capped = pushCapped(
+        state.activity,
         {
           id: event.id,
           kind: 'mcp',
@@ -432,7 +481,11 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
                 : String(event.content)
               : undefined,
         },
-      ];
+        ACTIVITY_CAP,
+        state.activityEvicted,
+      );
+      next.activity = capped[0];
+      next.activityEvicted = capped[1];
       return next;
     }
     case 'edit_proposal': {
@@ -461,14 +514,19 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       // A persistence side-channel (emitted after the terminal answer/error). The reducer
       // accumulates the turn so the chat panel can render it as a completed message bubble; the
       // streaming `answer` text is also cleared so the next user turn starts clean.
+      // Cap: a long session would otherwise grow `turns` unbounded and inflate the resume payload.
       if (event.userText != null || event.assistantText != null) {
-        next.turns = [
-          ...state.turns,
+        const capped = pushCapped(
+          state.turns,
           {
             userText: event.userText ?? '',
             assistantText: event.assistantText != null ? event.assistantText : (state.answer ?? ''),
           },
-        ];
+          TURN_CAP,
+          state.turnsEvicted,
+        );
+        next.turns = capped[0];
+        next.turnsEvicted = capped[1];
       }
       next.answer = null;
       next.pendingUserText = null;
