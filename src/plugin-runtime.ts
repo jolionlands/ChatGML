@@ -302,6 +302,7 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
         next.ready = true;
         const mode = (event as { mode?: Mode }).mode;
         if (mode) next.mode = mode;
+        next.error = null; // clear any stale error on a successful (re)connect
       }
       return next;
     }

@@ -39,6 +39,7 @@
     // map a proposal id back to the path that was actually written). Keyed by proposal id -> path.
     this.lastWrittenPaths = new Map();
     this._build();
+    this._detectTheme();
     this.setTask('default');
   }
 
@@ -139,6 +140,19 @@
     this.taskWrapEl.appendChild(this.taskDeleteBtn);
     controls.appendChild(this.taskWrapEl);
 
+    // Clear conversation button (mirrors the /clear slash command).
+    this.clearBtn = document.createElement('button');
+    this.clearBtn.className = 'run-button chatgml-clear-btn';
+    this.clearBtn.textContent = 'Clear';
+    this.clearBtn.title = 'Clear conversation';
+    this.clearBtn.addEventListener('click', function () {
+      if (typeof self.opts.onClear === 'function') self.opts.onClear();
+      self.clear();
+    });
+    this.clearBtn.style.fontSize = '11px';
+    this.clearBtn.style.padding = '4px 10px';
+    controls.appendChild(this.clearBtn);
+
     c.appendChild(controls);
 
     // Status line.
@@ -228,15 +242,36 @@
         submit();
         return;
       }
+      // Mention autocomplete keyboard navigation
+      var dropdownVisible = self.mentionDropdownEl && self.mentionDropdownEl.style.display !== 'none';
       if (ev.key === '@') {
         self._mentionTriggerPos = self.inputEl.selectionStart;
         self._showMentionDropdown();
+      } else if (ev.key === 'ArrowDown' && dropdownVisible) {
+        ev.preventDefault();
+        self._moveMentionSelection(1);
+      } else if (ev.key === 'ArrowUp' && dropdownVisible) {
+        ev.preventDefault();
+        self._moveMentionSelection(-1);
+      } else if ((ev.key === 'Enter' || ev.key === 'Tab') && dropdownVisible) {
+        ev.preventDefault();
+        self._selectMentionItem();
+      } else if (ev.key === 'Escape' && dropdownVisible) {
+        ev.preventDefault();
+        self._hideMentionDropdown();
       } else if (ev.key === 'Escape') {
         self._hideMentionDropdown();
       }
     });
     this.inputEl.addEventListener('input', function () {
       self._renderMentionChips();
+      // Check if '@' was just typed or pasted (triggers on paste, not just keydown)
+      var val = self.inputEl.value;
+      var pos = self.inputEl.selectionStart;
+      if (pos > 0 && val.charAt(pos - 1) === '@' && (pos === 1 || /\s/.test(val.charAt(pos - 2)))) {
+        self._mentionTriggerPos = pos - 1;
+        self._showMentionDropdown();
+      }
     });
     this.mentionDropdownEl = document.createElement('div');
     this.mentionDropdownEl.className = 'chatgml-mention-autocomplete';
@@ -255,6 +290,17 @@
     this.sendBtn.setAttribute('disabled', 'disabled');
     inputRow.appendChild(this.inputEl);
     inputRow.appendChild(this.sendBtn);
+    // Stop-generating button: visible only while the agent is streaming or running a tool. Inserted
+    // BEFORE the send button so it lands to its left in the input row.
+    this.stopGenBtn = document.createElement('button');
+    this.stopGenBtn.className = 'run-button chatgml-stop-btn';
+    this.stopGenBtn.textContent = '⏹';
+    this.stopGenBtn.title = 'Stop generating';
+    this.stopGenBtn.style.display = 'none';
+    this.stopGenBtn.addEventListener('click', function () {
+      if (typeof self.opts.onStopGenerate === 'function') self.opts.onStopGenerate();
+    });
+    inputRow.insertBefore(this.stopGenBtn, this.sendBtn);
     c.appendChild(inputRow);
   };
 
@@ -452,10 +498,13 @@
       { type: 'url', label: 'url', insert: 'url ' },
       { type: 'image', label: 'image', insert: 'image ' },
     ];
+    this._mentionItems = items;
+    this._mentionActiveIndex = 0;
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const div = document.createElement('div');
       div.className = 'chatgml-mention-autocomplete-item';
+      if (i === 0) div.classList.add('chatgml-mention-active');
       div.textContent = item.label;
       div.addEventListener(
         'click',
@@ -469,6 +518,25 @@
       this.mentionDropdownEl.appendChild(div);
     }
     this.mentionDropdownEl.style.display = 'block';
+  };
+
+  /** Move the mention autocomplete selection up or down. */
+  ChatPanel.prototype._moveMentionSelection = function (delta) {
+    if (!this._mentionItems || this._mentionItems.length === 0) return;
+    this._mentionActiveIndex =
+      (this._mentionActiveIndex + delta + this._mentionItems.length) % this._mentionItems.length;
+    var items = this.mentionDropdownEl.querySelectorAll('.chatgml-mention-autocomplete-item');
+    for (var i = 0; i < items.length; i++) {
+      if (i === this._mentionActiveIndex) items[i].classList.add('chatgml-mention-active');
+      else items[i].classList.remove('chatgml-mention-active');
+    }
+  };
+
+  /** Confirm the currently selected mention item. */
+  ChatPanel.prototype._selectMentionItem = function () {
+    if (!this._mentionItems || this._mentionItems.length === 0) return;
+    this._insertMention(this._mentionItems[this._mentionActiveIndex].insert);
+    this._hideMentionDropdown();
   };
 
   /** Hide the @mention autocomplete dropdown. */
@@ -565,7 +633,9 @@
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
   };
 
-  /** Apply one AgentEvent: reduce state, then re-render. */
+  /** Apply one AgentEvent: reduce state, then re-render. Token events are debounced to ~60fps
+   * via requestAnimationFrame so a fast model streaming 500+ tokens/s doesn't trigger 500 full
+   * re-renders (which would freeze the panel on longer conversations). */
   ChatPanel.prototype.handleEvent = function (event) {
     this.state = State.reducePluginState(event, this.state);
     if (event.type === 'edit_proposal') {
@@ -582,7 +652,60 @@
         // persistence must never break the live panel
       }
     }
-    this.render();
+    if (event.type === 'token') {
+      this._scheduleTokenRender();
+    } else {
+      this.render();
+    }
+  };
+
+  /** Debounce token rendering to ~60fps (16ms) using requestAnimationFrame. Multiple token
+   * events arriving within one frame are coalesced into a single render. */
+  ChatPanel.prototype._scheduleTokenRender = function () {
+    var self = this;
+    if (this._tokenRafScheduled) return;
+    this._tokenRafScheduled = true;
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(function () {
+        self._tokenRafScheduled = false;
+        self.render();
+      });
+    } else {
+      setTimeout(function () {
+        self._tokenRafScheduled = false;
+        self.render();
+      }, 16);
+    }
+  };
+
+  /** Detect GMEdit's theme (light/dark) and set data-theme on the panel container so CSS
+   * variables adapt. Checks document.documentElement class/attribute first, then falls back to
+   * computing the luminance of the main editor's background color. */
+  ChatPanel.prototype._detectTheme = function () {
+    var isLight = false;
+    try {
+      var root = document.documentElement;
+      if (root.classList.contains('light') || root.getAttribute('data-theme') === 'light') {
+        isLight = true;
+      }
+      var mainEl = document.getElementById('main') || document.querySelector('.ace_editor');
+      if (mainEl) {
+        var bg = window.getComputedStyle(mainEl).backgroundColor;
+        var m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(bg);
+        if (m) {
+          var lum = parseInt(m[1]) * 0.299 + parseInt(m[2]) * 0.587 + parseInt(m[3]) * 0.114;
+          if (lum > 128) isLight = true;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    this.opts.container.setAttribute('data-theme', isLight ? 'light' : 'dark');
+  };
+
+  /** Check if the transcript is scrolled to (or near) the bottom — used to decide whether
+   * auto-scrolling on new content would yank the user away from what they're reading. */
+  ChatPanel.prototype._isNearBottom = function () {
+    var el = this.transcriptEl;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
   };
 
   ChatPanel.prototype.setRunning = function (running, error) {
@@ -595,11 +718,19 @@
       this.sendBtn.setAttribute('disabled', 'disabled');
       this.reindexBtn.setAttribute('disabled', 'disabled');
       this.state.pendingUserText = null;
+      this._renderedTurnsCount = 0;
+      this._streamingBubbleEl = null;
+      this._pendingBubbleEl = null;
       this.diffView.clear();
+      if (this.stopGenBtn) this.stopGenBtn.style.display = 'none';
       if (error) this.showRestart();
       else this.hideRestart();
     } else {
       this.hideRestart();
+      // Until the ready handshake arrives the status line should read "phase: connecting" (not the
+      // stale "stopped" from initialPluginState()), so the user sees something useful while the
+      // child is booting.
+      this.state.phase = 'connecting';
     }
     this.render();
   };
@@ -634,6 +765,10 @@
 
   /** Clear the visible transcript/activity/proposals without resetting ready/mode. */
   ChatPanel.prototype.clear = function () {
+    if (this.stopGenBtn) this.stopGenBtn.style.display = 'none';
+    this._renderedTurnsCount = 0;
+    this._streamingBubbleEl = null;
+    this._pendingBubbleEl = null;
     this.state.transcript = '';
     this.state.answer = null;
     this.state.sources = [];
@@ -704,7 +839,27 @@
   ChatPanel.prototype.render = function () {
     const self = this;
     const s = this.state;
+    // Periodically re-detect GMEdit's theme (every 50 renders) to catch theme switches.
+    this._renderCount = (this._renderCount || 0) + 1;
+    if (this._renderCount % 50 === 1) this._detectTheme();
+    // Track scroll position before re-rendering so we can avoid yanking the user back to bottom.
+    var wasNearBottom = this._isNearBottom();
     this.statusEl.textContent = this.running ? 'phase: ' + s.phase : 'stopped';
+
+    // Working/connecting indicator: pulse the status line while the agent is streaming, running
+    // a tool, or the core is still booting.
+    var isWorking =
+      (s.answer != null && String(s.answer).length > 0) ||
+      (s.activity && s.activity.some(function (a) {
+        return a.status === 'running' || a.status === 'waiting';
+      }));
+    this.statusEl.classList.remove('chatgml-status--working');
+    this.statusEl.classList.remove('chatgml-status--connecting');
+    if (isWorking && this.running) {
+      this.statusEl.classList.add('chatgml-status--working');
+    } else if (s.phase === 'connecting') {
+      this.statusEl.classList.add('chatgml-status--connecting');
+    }
 
     // Sync mode segmented control active state.
     if (this.modeBtns) {
@@ -905,35 +1060,54 @@
     // is rendered as a streaming bubble while it accumulates. Falls back to the legacy flat
     // transcript text only when no turns and no answer are present (so a stale display survives
     // /clear's transient state).
-    this.transcriptEl.innerHTML = '';
-
-    // Pending user message (sent but not yet finalized into a turn) — shows immediately.
-    if (s.pendingUserText && String(s.pendingUserText).trim() !== '') {
-      var pendBubble = document.createElement('div');
-      pendBubble.className = 'chatgml-turn chatgml-turn-user';
-      var pendLabel = document.createElement('div');
-      pendLabel.className = 'chatgml-turn-label';
-      pendLabel.textContent = 'You';
-      pendBubble.appendChild(pendLabel);
-      var pendBody = document.createElement('div');
-      pendBody.className = 'chatgml-turn-body';
-      pendBody.textContent = s.pendingUserText;
-      pendBubble.appendChild(pendBody);
-      this.transcriptEl.appendChild(pendBubble);
-    }
-
+    //
+    // Incremental render: finalized turns (s.turns) are immutable once added, so we only append
+    // NEW turns (those at index >= _renderedTurnsCount) instead of rebuilding the entire DOM on
+    // every token event. The streaming bubble is updated in-place (its body element is reused).
+    // This prevents O(n²) DOM creation on long conversations with many tokens.
     var MarkdownApi =
-      typeof root !== 'undefined' && root.ChatGmlMarkdown
+      typeof root !== "undefined" && root.ChatGmlMarkdown
         ? root.ChatGmlMarkdown
-        : typeof ChatGmlMarkdown !== 'undefined'
+        : typeof ChatGmlMarkdown !== "undefined"
           ? ChatGmlMarkdown
           : null;
     var turns = s.turns || [];
-    var hasTurns = turns.length > 0;
     var hasStreamingAnswer = s.answer != null && String(s.answer).length > 0;
 
-    if (hasTurns) {
-      for (var ti = 0; ti < turns.length; ti++) {
+    // If turns were cleared (e.g. /clear), reset everything.
+    if (turns.length < (this._renderedTurnsCount || 0)) {
+      this.transcriptEl.innerHTML = '';
+      this._renderedTurnsCount = 0;
+      this._streamingBubbleEl = null;
+      this._pendingBubbleEl = null;
+    }
+
+    // Pending user message (sent but not yet finalized into a turn) — shows immediately.
+    var hasPending = s.pendingUserText && String(s.pendingUserText).trim() !== '';
+    if (hasPending) {
+      if (!this._pendingBubbleEl || this._pendingBubbleEl.parentNode !== this.transcriptEl) {
+        var pendBubble = document.createElement('div');
+        pendBubble.className = 'chatgml-turn chatgml-turn-user';
+        var pendLabel = document.createElement('div');
+        pendLabel.className = 'chatgml-turn-label';
+        pendLabel.textContent = 'You';
+        pendBubble.appendChild(pendLabel);
+        var pendBody = document.createElement('div');
+        pendBody.className = 'chatgml-turn-body';
+        pendBubble.appendChild(pendBody);
+        this.transcriptEl.appendChild(pendBubble);
+        this._pendingBubbleEl = pendBubble;
+      }
+      this._pendingBubbleEl.querySelector('.chatgml-turn-body').textContent = s.pendingUserText;
+    } else if (this._pendingBubbleEl) {
+      // Remove the pending bubble once the turn is finalized.
+      if (this._pendingBubbleEl.parentNode) this._pendingBubbleEl.parentNode.removeChild(this._pendingBubbleEl);
+      this._pendingBubbleEl = null;
+    }
+
+    // Append only NEW finalized turns (those not yet rendered as DOM nodes).
+    if (turns.length > (this._renderedTurnsCount || 0)) {
+      for (var ti = this._renderedTurnsCount || 0; ti < turns.length; ti++) {
         var turn = turns[ti];
         if (turn.userText && String(turn.userText).trim() !== '') {
           var userBubble = document.createElement('div');
@@ -971,38 +1145,53 @@
           this.transcriptEl.appendChild(asstBubble);
         }
       }
+      this._renderedTurnsCount = turns.length;
     }
 
+    // Streaming bubble: update in-place if it exists, create if needed, remove if no answer.
     if (hasStreamingAnswer) {
-      var streamBubble = document.createElement('div');
-      streamBubble.className = 'chatgml-turn chatgml-turn-assistant chatgml-turn-streaming';
-      var streamLabel = document.createElement('div');
-      streamLabel.className = 'chatgml-turn-label';
-      streamLabel.textContent = 'Assistant';
-      streamBubble.appendChild(streamLabel);
-      var streamBody = document.createElement('div');
-      streamBody.className = 'chatgml-turn-body chatgml-md-body';
+      if (!this._streamingBubbleEl || this._streamingBubbleEl.parentNode !== this.transcriptEl) {
+        var streamBubble = document.createElement('div');
+        streamBubble.className = 'chatgml-turn chatgml-turn-assistant chatgml-turn-streaming';
+        var streamLabel = document.createElement('div');
+        streamLabel.className = 'chatgml-turn-label';
+        streamLabel.textContent = 'Assistant';
+        streamBubble.appendChild(streamLabel);
+        var streamBody = document.createElement('div');
+        streamBody.className = 'chatgml-turn-body chatgml-md-body';
+        streamBubble.appendChild(streamBody);
+        this.transcriptEl.appendChild(streamBubble);
+        this._streamingBubbleEl = streamBubble;
+      }
+      var sb = this._streamingBubbleEl.querySelector('.chatgml-turn-body');
       if (MarkdownApi && typeof MarkdownApi.renderMarkdown === 'function') {
         try {
-          MarkdownApi.renderMarkdown(s.answer, streamBody);
+          MarkdownApi.renderMarkdown(s.answer, sb);
         } catch (e) {
-          streamBody.textContent = s.answer;
+          sb.textContent = s.answer;
         }
       } else {
-        streamBody.textContent = s.answer;
+        sb.textContent = s.answer;
       }
-      streamBubble.appendChild(streamBody);
-      this.transcriptEl.appendChild(streamBubble);
+    } else if (this._streamingBubbleEl) {
+      // Streaming done — remove the streaming bubble (the turn is now in s.turns).
+      if (this._streamingBubbleEl.parentNode) this._streamingBubbleEl.parentNode.removeChild(this._streamingBubbleEl);
+      this._streamingBubbleEl = null;
     }
 
-    if (!hasTurns && !hasStreamingAnswer && s.transcript) {
-      var fallbackPre = document.createElement('pre');
-      fallbackPre.className = 'chatgml-transcript-legacy';
-      fallbackPre.textContent = s.transcript;
-      this.transcriptEl.appendChild(fallbackPre);
+    // Legacy fallback: if no turns and no streaming answer, show the raw transcript.
+    if (turns.length === 0 && !hasStreamingAnswer && s.transcript) {
+      var existingFallback = this.transcriptEl.querySelector('.chatgml-transcript-legacy');
+      if (!existingFallback) {
+        var fallbackPre = document.createElement('pre');
+        fallbackPre.className = 'chatgml-transcript-legacy';
+        fallbackPre.textContent = s.transcript;
+        this.transcriptEl.appendChild(fallbackPre);
+      }
     }
 
-    this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+    // Auto-scroll only if the user was near the bottom (prevents yanking them back while reading).
+    if (wasNearBottom) this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
 
     // Sources.
     this.sourcesEl.innerHTML = '';
@@ -1016,6 +1205,13 @@
         const row = document.createElement('div');
         row.className = 'chatgml-source';
         row.textContent = src.path || src.snippet || '(memory)';
+        if (src.path) {
+          row.style.cursor = 'pointer';
+          row.title = 'Click to open: ' + src.path;
+          row.addEventListener('click', function () {
+            if (typeof self.opts.onOpenSource === 'function') self.opts.onOpenSource(src);
+          });
+        }
         this.sourcesEl.appendChild(row);
       }
     }
@@ -1026,6 +1222,66 @@
       err.className = 'chatgml-error';
       err.textContent = 'error: ' + s.error;
       this.statusEl.appendChild(err);
+    }
+
+    // Stop-button visibility: show while the agent is actively working (streaming answer or a
+    // tool/command is running or awaiting approval). Re-evaluated on every render so a state
+    // change during a turn flips the button without an extra round-trip.
+    var isWorking =
+      (s.answer != null && String(s.answer).length > 0) ||
+      s.activity.some(function (a) {
+        return a.status === 'running' || a.status === 'waiting';
+      });
+    if (this.stopGenBtn) this.stopGenBtn.style.display = isWorking ? '' : 'none';
+
+    // Hook copy buttons onto any newly rendered code blocks (idempotent).
+    this._addCopyButtons();
+  };
+
+  /**
+   * Add a "Copy" button to every markdown code block in the transcript. Idempotent: blocks that
+   * already have a copy button (marked with .chatgml-copy-btn-added) are skipped. Each button
+   * copies the textContent of the inner <code> (or the pre itself when no <code> child exists) to
+   * the clipboard, then briefly flips its label to a checkmark before resetting.
+   */
+  ChatPanel.prototype._addCopyButtons = function () {
+    var blocks = this.transcriptEl.querySelectorAll(
+      'pre.chatgml-md-code-block:not(.chatgml-copy-btn-added)',
+    );
+    for (var i = 0; i < blocks.length; i++) {
+      (function (block) {
+        block.classList.add('chatgml-copy-btn-added');
+        var btn = document.createElement('button');
+        btn.className = 'chatgml-copy-btn';
+        btn.textContent = 'Copy';
+        btn.style.cssText =
+          'position:absolute; top:4px; right:4px; font-size:10px; padding:2px 8px; cursor:pointer; ' +
+          'background:var(--chatgml-surface-2); color:var(--chatgml-fg); border:1px solid ' +
+          'var(--chatgml-border); border-radius:3px; opacity:0; transition:opacity 0.15s;';
+        block.style.position = 'relative';
+        block.addEventListener('mouseenter', function () {
+          btn.style.opacity = '1';
+        });
+        block.addEventListener('mouseleave', function () {
+          btn.style.opacity = '0';
+        });
+        btn.addEventListener('click', function () {
+          var code = block.querySelector('code');
+          var text = code ? code.textContent : block.textContent;
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text);
+              btn.textContent = '✓';
+              setTimeout(function () {
+                btn.textContent = 'Copy';
+              }, 1500);
+            }
+          } catch (e) {
+            /* ignore */
+          }
+        });
+        block.appendChild(btn);
+      })(blocks[i]);
     }
   };
 

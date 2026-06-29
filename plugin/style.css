@@ -1601,3 +1601,97 @@ button[disabled],
   align-self: flex-end;
   margin-top: 4px;
 }
+
+/* =========================================================================
+ * Stop-generating, Clear, Working indicator, Copy buttons, Mention nav,
+ * Theme detection, Clickable sources (audit gap fixes)
+ * ========================================================================= */
+
+/* Stop-generating button */
+.chatgml-stop-btn {
+  background: var(--chatgml-del-bg) !important;
+  color: var(--chatgml-del-fg) !important;
+  border: 1px solid var(--chatgml-del-fg) !important;
+  padding: 6px 10px !important;
+  font-size: 14px !important;
+  box-shadow: none !important;
+}
+.chatgml-stop-btn:hover:not([disabled]) {
+  background: var(--chatgml-del-fg) !important;
+  color: #fff !important;
+}
+
+/* Clear conversation button */
+.chatgml-clear-btn {
+  background: var(--chatgml-surface-1) !important;
+  color: var(--chatgml-muted) !important;
+  border: 1px solid var(--chatgml-border) !important;
+  box-shadow: none !important;
+  padding: 4px 10px !important;
+  font-size: 11px !important;
+}
+.chatgml-clear-btn:hover:not([disabled]) {
+  color: var(--chatgml-del-fg) !important;
+  border-color: var(--chatgml-del-fg) !important;
+  background: var(--chatgml-del-bg) !important;
+}
+
+/* Working status indicator (pulsing dot) */
+.chatgml-status--working::before {
+  background: var(--chatgml-accent);
+  animation: chatgml-status-pulse 1s ease-in-out infinite;
+}
+@keyframes chatgml-status-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* Connecting phase status */
+.chatgml-status--connecting::before {
+  background: var(--chatgml-muted);
+  animation: chatgml-status-pulse 1.5s ease-in-out infinite;
+}
+
+/* Copy button on code blocks */
+.chatgml-copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 1;
+}
+.chatgml-md-code-block:hover .chatgml-copy-btn,
+pre.chatgml-md-code-block:hover .chatgml-copy-btn {
+  opacity: 1;
+}
+
+/* Mention autocomplete keyboard navigation */
+.chatgml-mention-autocomplete-item.chatgml-mention-active {
+  background: var(--chatgml-surface-active);
+  color: var(--chatgml-accent-hover);
+}
+
+/* Settings panel: password-type input */
+.chatgml-settings-input[type="password"] {
+  -webkit-text-security: disc;
+  letter-spacing: 2px;
+}
+
+/* Clickable sources */
+.chatgml-source {
+  cursor: default;
+  transition: background-color 0.12s ease, border-left-color 0.12s ease;
+}
+.chatgml-source[style*="cursor: pointer"]:hover,
+.chatgml-source:hover {
+  background: var(--chatgml-surface-hover);
+  border-left-color: var(--chatgml-accent);
+}

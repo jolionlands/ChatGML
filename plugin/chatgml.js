@@ -11,7 +11,8 @@
 (function () {
   'use strict';
 
-  const { join } = require('path');
+  const path = require('path');
+  const { join } = path;
   const fsp = require('fs/promises');
   const fs = require('fs');
   const crypto = require('crypto');
@@ -847,6 +848,23 @@
       },
       onLaunch: launch,
       onStop: stop,
+      onStopGenerate: function () {
+        if (client) client.cancel();
+      },
+      onClear: function () {
+        if (client) client.sendClear();
+        void clearSessionFile();
+      },
+      onOpenSource: function (src) {
+        try {
+          if (!src || !src.path || !projectDirectory) return;
+          var abs = join(projectDirectory, src.path);
+          var file = $gmedit['file.File'].read(abs, null);
+          if (file) GMEdit.openFile(file);
+        } catch (e) {
+          console.info('chatgml: could not open source', e);
+        }
+      },
       onRestart: function () {
         stop();
         setTimeout(function () {

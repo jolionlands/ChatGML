@@ -146,13 +146,32 @@
     let ready = false;
     let lastActivityAt = Date.now();
     let watchdog = null;
+    let connectionTimer = null;
     const heartbeatMs = opts.heartbeatMs ?? 60000;
     const killBackstopMs = opts.killBackstopMs ?? (opts.longLived ? 1000 : 500);
+    const connectionTimeoutMs = opts.connectionTimeoutMs ?? 15000;
+
+    // Connection timeout: if the core spawns but hangs before sending the ready handshake, the
+    // panel would otherwise sit on "stopped" forever. Fire onError after connectionTimeoutMs so the
+    // UI surfaces a real failure (and the watchdog is torn down via stop()).
+    if (connectionTimeoutMs > 0) {
+      connectionTimer = setTimeout(function () {
+        if (!ready) {
+          var err = new Error('ChatGML core did not start within ' + connectionTimeoutMs + 'ms');
+          stop();
+          if (opts.onError) opts.onError(err);
+        }
+      }, connectionTimeoutMs);
+    }
 
     const clearWatchdog = () => {
       if (watchdog) {
         clearInterval(watchdog);
         watchdog = null;
+      }
+      if (connectionTimer) {
+        clearTimeout(connectionTimer);
+        connectionTimer = null;
       }
     };
 
@@ -165,6 +184,10 @@
         if (!ready && State.isReadyHandshake(ev)) {
           ready = true;
           lastActivityAt = Date.now();
+          if (connectionTimer) {
+            clearTimeout(connectionTimer);
+            connectionTimer = null;
+          }
           if (opts.onReady) opts.onReady(ev);
           if (heartbeatMs > 0) {
             clearWatchdog();

@@ -170,7 +170,9 @@
       var headerMatch = /^(#{1,4})\s+(.*)/.exec(line);
       if (headerMatch) {
         var level = headerMatch[1].length;
-        var headerText = stripHtmlTags(headerMatch[2]);
+        // DOM path uses createTextNode which is XSS-safe, so we don't need to strip HTML here.
+        // The HTML string path (blocksToHtml) escapes via escapeHtml anyway.
+        var headerText = headerMatch[2];
         blocks.push({
           type: 'header',
           level: level,
@@ -383,7 +385,8 @@
         case 'blockquote': {
           var bq = document.createElement('blockquote');
           bq.className = 'chatgml-md-blockquote';
-          appendInlineToDom(bq, stripHtmlTags(block.content));
+          // DOM path is XSS-safe via createTextNode — do not strip (would corrupt GML comparisons).
+          appendInlineToDom(bq, block.content);
           nodes.push(bq);
           break;
         }
@@ -392,7 +395,8 @@
           ul.className = 'chatgml-md-ul';
           for (var j = 0; j < block.items.length; j++) {
             var li = document.createElement('li');
-            appendInlineToDom(li, stripHtmlTags(block.items[j]));
+            // DOM path is XSS-safe via createTextNode — do not strip.
+            appendInlineToDom(li, block.items[j]);
             ul.appendChild(li);
           }
           nodes.push(ul);
@@ -403,7 +407,8 @@
           ol.className = 'chatgml-md-ol';
           for (var k = 0; k < block.items.length; k++) {
             var li2 = document.createElement('li');
-            appendInlineToDom(li2, stripHtmlTags(block.items[k]));
+            // DOM path is XSS-safe via createTextNode — do not strip.
+            appendInlineToDom(li2, block.items[k]);
             ol.appendChild(li2);
           }
           nodes.push(ol);
@@ -412,7 +417,8 @@
         case 'paragraph': {
           var p = document.createElement('p');
           p.className = 'chatgml-md-p';
-          var paraContent = stripHtmlTags(block.content);
+          // DOM path is XSS-safe via createTextNode — do not strip (would corrupt GML comparisons).
+          var paraContent = block.content;
           var paraLines3 = paraContent.split('\n');
           for (var p2 = 0; p2 < paraLines3.length; p2++) {
             if (p2 > 0) {
@@ -439,7 +445,10 @@
       var t = tokens[j];
       switch (t.type) {
         case 'text': {
-          parent.appendChild(document.createTextNode(escapeHtml(t.value)));
+          // createTextNode renders its argument as literal text (no HTML parsing), so we must
+          // NOT pre-escape here — escapeHtml would turn '<' into the literal '&lt;' string and
+          // the user would see "&lt;5" instead of "<5". The DOM path is XSS-safe by construction.
+          parent.appendChild(document.createTextNode(t.value));
           break;
         }
         case 'code': {

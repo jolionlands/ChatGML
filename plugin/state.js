@@ -134,6 +134,7 @@
         if (event.phase === 'ready') {
           next.ready = true;
           if (event.mode) next.mode = event.mode;
+          next.error = null; // clear any stale error on a successful (re)connect
         }
         return next;
       case 'token':
