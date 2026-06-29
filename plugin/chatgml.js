@@ -1364,11 +1364,84 @@
     out.appendChild(reloadRow);
   }
 
+  // -------------------------------------------------------------------------
+  // Keyboard shortcuts + command palette (GMEdit exposes AceCommands to plugins).
+  //
+  // Bindings (Win / Linux):
+  //   Ctrl-Shift-A   → toggle the ChatGML side panel
+  //   Ctrl-Shift-I   → ask about current selection (opens panel + sends prompt)
+  //   Ctrl-Shift-K   → focus the chat input (panel must already be visible)
+  //
+  // The "ask selection" binding mirrors the context-menu entry: if nothing is selected, it sends
+  // "Explain this file." with the current file as context. We schedule the prompt on a microtask
+  // so the panel's host element has a chance to mount before client.sendUser runs.
+  // -------------------------------------------------------------------------
+  if (typeof AceCommands !== 'undefined' && AceCommands && AceCommands.add) {
+    AceCommands.add({
+      name: 'chatgmlTogglePanel',
+      bindKey: { win: 'Ctrl-Shift-A', mac: 'Command-Shift-A' },
+      exec: function () {
+        show();
+      },
+    });
+    AceCommands.add({
+      name: 'chatgmlAskSelection',
+      bindKey: { win: 'Ctrl-Shift-I', mac: 'Command-Shift-I' },
+      exec: function () {
+        show();
+        setTimeout(function () {
+          if (!panel || !client) return;
+          const selection = (typeof aceEditor !== 'undefined' && aceEditor && aceEditor.getSelectedText) ? (aceEditor.getSelectedText() || '') : '';
+          const prompt =
+            selection.trim() !== ''
+              ? 'Explain this selection and suggest improvements.'
+              : 'Explain this file.';
+          const ctx = currentEditorContext();
+          client.sendUser(prompt, ctx);
+        }, 0);
+      },
+    });
+    AceCommands.add({
+      name: 'chatgmlFocusInput',
+      bindKey: { win: 'Ctrl-Shift-K', mac: 'Command-Shift-K' },
+      exec: function () {
+        show();
+        setTimeout(function () {
+          if (panel && typeof panel.focusInput === 'function') panel.focusInput();
+        }, 0);
+      },
+    });
+    // Add all three to the command palette (Ctrl+Shift+P) so they're discoverable.
+    if (typeof AceCommands.addToPalette === 'function') {
+      AceCommands.addToPalette({
+        name: 'ChatGML: Toggle Panel',
+        exec: 'chatgmlTogglePanel',
+        title: 'Open or focus the ChatGML side panel',
+      });
+      AceCommands.addToPalette({
+        name: 'ChatGML: Ask about selection',
+        exec: 'chatgmlAskSelection',
+        title: 'Ask the agent about the current selection (or file)',
+      });
+      AceCommands.addToPalette({
+        name: 'ChatGML: Focus chat input',
+        exec: 'chatgmlFocusInput',
+        title: 'Focus the ChatGML panel input',
+      });
+    }
+  }
+
   GMEdit.register(PLUGIN_NAME, {
     init: init,
     cleanup: function () {
       stop();
       hide();
+      // Tear down keyboard shortcuts + palette entries. Idempotent.
+      if (typeof AceCommands !== 'undefined' && AceCommands && AceCommands.remove) {
+        AceCommands.remove({ name: 'chatgmlTogglePanel' });
+        AceCommands.remove({ name: 'chatgmlAskSelection' });
+        AceCommands.remove({ name: 'chatgmlFocusInput' });
+      }
     },
   });
 })();

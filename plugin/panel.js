@@ -1153,6 +1153,17 @@
     this.render();
   };
 
+  /** Focus the chat input (no-op if input element isn't mounted yet). */
+  ChatPanel.prototype.focusInput = function () {
+    if (this.inputEl && typeof this.inputEl.focus === 'function') {
+      this.inputEl.focus();
+      if (typeof this.inputEl.setSelectionRange === 'function') {
+        const len = (this.inputEl.value || '').length;
+        try { this.inputEl.setSelectionRange(len, len); } catch (_) { /* ignore */ }
+      }
+    }
+  };
+
   /** Clear the visible transcript/activity/proposals without resetting ready/mode. */
   ChatPanel.prototype.clear = function () {
     if (this.stopGenBtn) this.stopGenBtn.style.display = 'none';
