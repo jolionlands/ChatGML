@@ -19,6 +19,7 @@ export interface ChatRequest {
 
 export type StreamDelta =
   | { kind: 'text'; text: string }
+  | { kind: 'thinking'; text: string }
   | { kind: 'tool_call'; index: number; id?: string; name?: string; argsFragment?: string }
   | { kind: 'finish'; reason: string; usage?: Usage };
 
@@ -63,6 +64,16 @@ interface RawDelta {
     type?: string;
     function?: { name?: string; arguments?: string };
   }>;
+  /**
+   * Model reasoning / chain-of-thought text. Emitted by reasoning-capable models on the
+   * first delta before any `content` arrives. Different providers pick different field
+   * names:
+   *  - `reasoning_content` - DeepSeek R1, some OpenAI o-series proxies, OpenRouter
+   *  - `reasoning` - newer OpenAI o-series on chat-completions, Kimi k2.5+ thinking
+   * Both shapes are mapped to the same `StreamDelta { kind: 'thinking' }` below.
+   */
+  reasoning_content?: string | null;
+  reasoning?: string | null;
 }
 
 interface RawChoice {
@@ -277,11 +288,26 @@ export class LlmClient {
     }
     const chunk = json as RawChunk;
     const choice = chunk.choices?.[0];
-    const rawMessage = choice?.message;
+    const rawMessage = choice?.message as
+      | (Record<string, unknown> & { content?: string | null; tool_calls?: unknown })
+      | undefined;
+    // Reasoning content may be lifted to the top level (`reasoning_content`) or hidden inside
+    // the message body as `reasoning` (Kimi/GLM thinking models). Pick whichever is set and
+    // non-empty. Empty strings are skipped so the panel never sees a phantom empty block.
+    const reasoningText = rawMessage
+      ? (typeof rawMessage['reasoning_content'] === 'string' &&
+          (rawMessage['reasoning_content'] as string).length > 0
+          ? (rawMessage['reasoning_content'] as string)
+          : typeof rawMessage['reasoning'] === 'string' &&
+            (rawMessage['reasoning'] as string).length > 0
+          ? (rawMessage['reasoning'] as string)
+          : null)
+      : null;
     const message: ChatMessage = {
       role: 'assistant',
       content: typeof rawMessage?.content === 'string' ? rawMessage.content : null,
     };
+    if (reasoningText) message.thinking = reasoningText;
     if (Array.isArray(rawMessage?.tool_calls) && rawMessage.tool_calls.length > 0) {
       message.tool_calls = normalizeToolCalls(rawMessage.tool_calls);
     }
@@ -309,6 +335,12 @@ export class LlmClient {
     const toolDeltas: Array<{ index: number; id?: string; name?: string; argsFragment?: string }> =
       [];
     let textBuffer = '';
+    /**
+     * Accumulated model thinking (chain-of-thought) text. Populated by `thinking` deltas and
+     * attached to the final ChatMessage so the agent loop can surface it as a `thinking`
+     * event before `turn_end`.
+     */
+    let thinkingBuffer = '';
     let finishReason = 'stop';
     let usage: Usage | undefined;
     const decoder = new TextDecoder();
@@ -331,6 +363,7 @@ export class LlmClient {
           if (evt === DONE) continue;
           for (const delta of consumeChunk(evt as RawChunk, toolDeltas)) {
             if (delta.kind === 'text') textBuffer += delta.text;
+            if (delta.kind === 'thinking') thinkingBuffer += delta.text;
             if (delta.kind === 'finish') {
               finishReason = delta.reason;
               if (delta.usage) usage = delta.usage;
@@ -358,6 +391,9 @@ export class LlmClient {
       role: 'assistant',
       content: textBuffer.length > 0 ? textBuffer : null,
     };
+    if (thinkingBuffer.length > 0) {
+      message.thinking = thinkingBuffer;
+    }
     if (toolDeltas.length > 0) {
       message.tool_calls = assembleToolCalls(toolDeltas);
     }
@@ -379,6 +415,20 @@ function consumeChunk(
     const delta = choice.delta;
     if (delta?.content) {
       out.push({ kind: 'text', text: delta.content });
+    }
+    // Reasoning / thinking extraction. Both `reasoning_content` (DeepSeek R1, OpenAI o-series
+    // via OpenRouter) and `reasoning` (newer o-series, Kimi k2.5+ thinking) map to the same
+    // `thinking` delta kind so the agent accumulates them in one place. Empty strings and nulls
+    // are skipped so a stream with no reasoning never produces phantom events.
+    const reasoningText =
+      (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0
+        ? delta.reasoning_content
+        : null) ??
+      (typeof delta?.reasoning === 'string' && delta.reasoning.length > 0
+        ? delta.reasoning
+        : null);
+    if (reasoningText) {
+      out.push({ kind: 'thinking', text: reasoningText });
     }
     if (Array.isArray(delta?.tool_calls)) {
       for (const tc of delta.tool_calls) {

@@ -210,6 +210,7 @@ const AGENT_EVENT_TYPES = new Set([
   'mcp_tool_call',
   'mcp_tool_result',
   'mcp_resource',
+  'thinking',
 ]);
 
 /** Narrow an unknown to an AgentEvent (structural, by `type` discriminant). */

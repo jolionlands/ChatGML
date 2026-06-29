@@ -62,6 +62,15 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string; // required when role === 'tool'
   name?: string;
+  /**
+   * Model-internal reasoning / chain-of-thought text emitted before the answer. Populated by the
+   * LLM client when the upstream exposes a `reasoning_content` or `reasoning` field on the delta
+   * (OpenAI o-series, DeepSeek R1, Kimi k2.5+ thinking, etc.). Carried on the assistant message so
+   * providers that echo it back in conversation history get it intact, and so the agent loop can
+   * surface it as a `thinking` AgentEvent before `turn_end`. Absent when the model never emits
+   * anything (most providers) - the agent treats it as opaque text-only on arrival.
+   */
+  thinking?: string;
 }
 
 // What we send in request.tools[].
@@ -120,6 +129,22 @@ export interface Usage {
 // THE single outbound NDJSON union.
 export type AgentEvent =
   | {
+      /**
+       * Model-internal reasoning / chain-of-thought text, surfaced so a UI can render a
+       * collapsible "model thinking..." block. The agent emits at most ONE `thinking{final}`
+       * event per turn - placed immediately before `turn_end` so the panel can append it above
+       * the assistant bubble in correct chronological order. A `mode: 'streamed'` variant exists
+       * for clients that want a live progress indicator, but the reference agent emits `final`
+       * only.
+       *
+       * When `text` is empty/absent the panel should hide the block; this is the normal case for
+       * models that don't expose reasoning (most non-reasoning models).
+       */
+      type: 'thinking';
+      text: string;
+      mode: 'streamed' | 'final';
+    }
+  | {
       type: 'status';
       // `streaming` is the IDLE HEARTBEAT (GAP5): a slow upstream whose body chunks undici batches on
       // Node25/Win-ARM64 can stall the token read for seconds; the streaming-turn watchdog emits this
@@ -160,6 +185,11 @@ export type AgentEvent =
       context?: EditorContext;
       taskId?: string;
       tier?: TierName | null;
+      /**
+       * Model thinking text for this turn (only set when the model emitted reasoning
+       * content). Mirrored onto the panel via the `thinking` event right before this one.
+       */
+      thinking?: string;
     }
   // Protocol v3 events: command execution lifecycle, checkpointing, and tool catalog.
   | { type: 'pong'; id: string }

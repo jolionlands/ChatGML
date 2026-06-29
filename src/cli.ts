@@ -23,7 +23,7 @@ import {
 } from './config.js';
 import type { Config } from './types.js';
 import { LlmClient } from './llm.js';
-import { tierForMode, resolveTier } from './agent.js';
+import { resolveTier } from './agent.js';
 import type { ChatLane, TierName } from './types.js';
 import { OpenAIEmbeddings, type Embeddings } from './index/embeddings.js';
 import { createMemoryProvider, type MemoryProvider } from './memory/provider.js';

@@ -49,6 +49,8 @@ describe('shared types', () => {
         case 'mcp_tool_result':
         case 'mcp_resource':
           return e.server;
+        case 'thinking':
+          return e.text;
         default: {
           const _exhaustive: never = e;
           return _exhaustive;

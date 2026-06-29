@@ -376,15 +376,19 @@ export function resolveTier(
     // does NOT show a misleading badge.
     return { lane: config.chat, name: null };
   }
-  // Merge: tier field wins; otherwise inherit from the global chat lane.
+  // Merge: tier field wins; otherwise inherit from the global chat lane. The apiKey / maxTokens
+  // inheritance is intentional - this lets a user point every tier at one endpoint+key (the global
+  // one) and only override `model` per tier. The cold path: `tier.maxTokens` set overrides the
+  // global maxTokens; `tier.apiKey` set overrides the global apiKey; absent fields inherit.
   const lane: ChatLane = {
     baseURL: tier.baseURL ?? config.chat.baseURL,
     model: tier.model,
+    apiKey: tier.apiKey ?? config.chat.apiKey,
     temperature: tier.temperature ?? config.chat.temperature,
   };
-  if (tier.apiKey !== undefined) lane.apiKey = tier.apiKey;
-  if (tier.maxTokens !== undefined) lane.maxTokens = tier.maxTokens;
-  if (tier.maxTokens === undefined && config.chat.maxTokens !== undefined) {
+  if (tier.maxTokens !== undefined) {
+    lane.maxTokens = tier.maxTokens;
+  } else if (config.chat.maxTokens !== undefined) {
     lane.maxTokens = config.chat.maxTokens;
   }
   return { lane, name };
@@ -501,6 +505,16 @@ export interface AgentRunResult {
   taskId?: string;
   /** Which tier produced this turn (null when the global lane was used; null is THE default). */
   tier: TierName | null;
+  /**
+   * Model thinking / chain-of-thought text the model emitted during this turn. Populated
+   * from the final assistant message's `thinking` field, which the LLM client accumulates
+   * across any reasoning-capable `StreamDelta { kind: 'thinking' }` deltas it receives
+   * (DeepSeek R1, OpenAI o-series via OpenRouter, Kimi k2.5+ thinking). Absent (undefined)
+   * when the model produced no reasoning text. The agent emits this as a `thinking`
+   * AgentEvent right before `turn_end` so the panel can show a collapsible "model thinking"
+   * block above the assistant bubble.
+   */
+  thinking?: string;
 }
 
 /**
@@ -615,7 +629,22 @@ export async function runAgent(
       const answer: AgentEvent = { type: 'answer', text: answerText, sources };
       if (result.usage) answer.usage = result.usage;
       deps.emit(answer);
-      return { message: finalMessage, history: messages, sources, taskId: opts.taskId, tier: turnTier };
+      // THINKING propagation: lift the accumulated reasoning text from the assistant message
+      // onto AgentRunResult so the queue consumer (createAgentLike) can emit a single
+      // `thinking{final}` event right before `turn_end`. Empty / undefined collapses to
+      // undefined so the panel never sees a phantom block.
+      const turnThinking =
+        typeof finalMessage.thinking === 'string' && finalMessage.thinking.length > 0
+          ? finalMessage.thinking
+          : undefined;
+      return {
+        message: finalMessage,
+        history: messages,
+        sources,
+        taskId: opts.taskId,
+        tier: turnTier,
+        ...(turnThinking !== undefined ? { thinking: turnThinking } : {}),
+      };
     }
 
     // Execute each tool call, append a role:'tool' result keyed to its id. Track consecutive
@@ -1145,6 +1174,20 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
           // history is the full messages array from inside runAgent; stripping the leading system
           // message(s) avoids re-prepending the system prompt on the next run.
           history = stripLeadingSystem(result.history);
+          // THINKING PROPAGATION (Cline/Cursor-style model-thinking block). When the model
+          // emitted any reasoning text during this turn (`result.thinking` is set), emit a
+          // single `thinking{final}` event BEFORE `turn_end` so the plugin prepends the
+          // collapsible "model thinking..." block above the assistant bubble in correct
+          // chronological order. We emit final-only (not streamed) for simplicity; the agent
+          // already finished streaming by the time we reach this point. Empty/undefined
+          // thinking never produces an event.
+          const turnThinking =
+            typeof result.thinking === 'string' && result.thinking.length > 0
+              ? result.thinking
+              : null;
+          if (turnThinking !== null) {
+            queue.push({ type: 'thinking', text: turnThinking, mode: 'final' });
+          }
           // turn_end: a persistence side-channel for resumable conversations. Emitted AFTER the
           // terminal answer/error (so the running/answer state was already finalized by those
           // events) and right before the queue closes. Carries the ORIGINAL user text (not the
@@ -1161,6 +1204,10 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
             // was used (no tier was configured for the active mode). Plugin badgers the bubble
             // when this is set.
             tier: result.tier,
+            // THINKING PROPAGATION (mirror of the `thinking` event for late-joining clients;
+            // the plugin can ignore this since it already saw the `thinking` event, but a
+            // replayed turn_end from /resume gets the block too).
+            ...(turnThinking !== null ? { thinking: turnThinking } : {}),
           });
           finalize();
         })
