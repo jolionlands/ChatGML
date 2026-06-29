@@ -19,17 +19,23 @@
 
   const MenuItem = Electron_MenuItem;
   const Preferences = $gmedit['ui.Preferences'];
-  const ClientApi = globalThis.ChatGmlClient || require('./client.js');
-  const PanelApi = globalThis.ChatGmlPanel || require('./panel.js');
-  const DiffViewApi = globalThis.ChatGmlDiffView || require('./diff-view.js');
-  const ConfigBridgeApi = globalThis.ChatGmlConfigBridge || require('./config-bridge.js');
-  const State = globalThis.ChatGmlState || require('./state.js');
-  const SettingsTasks = globalThis.ChatGmlSettingsTasks || require('./settings-tasks.js');
+  // GMEdit's renderer loads plugin scripts via <script> tags, so the relative-require resolution
+  // base is the index.html directory, not the plugin's __dirname. Pass absolute paths so the
+  // modules resolve correctly. The `globalThis.*` short-circuit still wins when the script is
+  // preloaded by config.json (the normal case) and lets Node-based tests require this file
+  // directly without a custom loader.
+  const _abs = function (mod) { return require(path.join(__dirname, mod)); };
+  const ClientApi = globalThis.ChatGmlClient || _abs('client.js');
+  const PanelApi = globalThis.ChatGmlPanel || _abs('panel.js');
+  const DiffViewApi = globalThis.ChatGmlDiffView || _abs('diff-view.js');
+  const ConfigBridgeApi = globalThis.ChatGmlConfigBridge || _abs('config-bridge.js');
+  const State = globalThis.ChatGmlState || _abs('state.js');
+  const SettingsTasks = globalThis.ChatGmlSettingsTasks || _abs('settings-tasks.js');
   // Resolve markdown.js so the renderer global is populated (config.json loads it before
   // panel.js, but the require fallback is also fine in Node-based test contexts).
-  const MarkdownApi = globalThis.ChatGmlMarkdown || require('./markdown.js');
+  const MarkdownApi = globalThis.ChatGmlMarkdown || _abs('markdown.js');
   void MarkdownApi;
-  const FuzzyApi = globalThis.ChatGmlFuzzy || require('./fuzzy.js');
+  const FuzzyApi = globalThis.ChatGmlFuzzy || _abs('fuzzy.js');
 
   const PLUGIN_NAME = 'chatgml';
   const SESSION_DIR = join(__dirname, 'chatgml-sessions');
