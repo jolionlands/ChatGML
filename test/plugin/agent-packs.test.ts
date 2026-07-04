@@ -13,11 +13,17 @@ const AgentPacks = require('../../plugin/agent-packs.js') as {
     providersPath?: string;
     agentPacksDir?: string;
     manifestDir?: string;
+    pluginsDir?: string;
   }) => Array<{ id: string; kind: string; installed: boolean; prompt: string }>;
   installMarketplace: (
     id: string,
-    opts?: { providersPath?: string; agentPacksDir?: string; manifestDir?: string },
-  ) => { id: string; installed: boolean };
+    opts?: {
+      providersPath?: string;
+      agentPacksDir?: string;
+      manifestDir?: string;
+      pluginsDir?: string;
+    },
+  ) => { id: string; installed: boolean; installMessage?: string };
 };
 
 let tmp: string | null = null;
@@ -39,7 +45,12 @@ describe('plugin/agent-packs.js', () => {
       expect.arrayContaining(['agent-pack', 'skill', 'plugin', 'provider']),
     );
     expect(entries.map((p) => p.id)).toEqual(
-      expect.arrayContaining(['ponytail', 'review-current-file', 'chatgml-gmloop', 'provider-kimi-coding']),
+      expect.arrayContaining([
+        'ponytail',
+        'review-current-file',
+        'chatgml-gmloop',
+        'provider-kimi-coding',
+      ]),
     );
   });
 
@@ -66,6 +77,21 @@ describe('plugin/agent-packs.js', () => {
     expect(
       AgentPacks.listMarketplace({ providersPath }).find((p) => p.id === 'provider-kimi-coding')
         ?.installed,
+    ).toBe(true);
+  });
+
+  it('installs marketplace GMEdit plugins as real plugin folders', () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), 'chatgml-marketplace-plugins-'));
+    const pluginsDir = path.join(tmp, 'plugins');
+
+    const installed = AgentPacks.installMarketplace('chatgml-gmloop', { pluginsDir });
+
+    expect(installed).toMatchObject({ id: 'chatgml-gmloop', installed: true });
+    expect(readFileSync(path.join(pluginsDir, 'chatgml-gmloop', 'config.json'), 'utf8')).toContain(
+      'chatgml-gmloop',
+    );
+    expect(
+      AgentPacks.listMarketplace({ pluginsDir }).find((p) => p.id === 'chatgml-gmloop')?.installed,
     ).toBe(true);
   });
 });

@@ -35,6 +35,7 @@
   const State = globalThis.ChatGmlState || _abs('state.js');
   const ChildProcessApi = globalThis.ChatGmlChildProcess || _abs('child-process.js');
   const SettingsTasks = globalThis.ChatGmlSettingsTasks || _abs('settings-tasks.js');
+  const AgentPacks = globalThis.ChatGmlAgentPacks || _abs('agent-packs.js');
   // Resolve markdown.js so the renderer global is populated (config.json loads it before
   // panel.js, but the require fallback is also fine in Node-based test contexts).
   const MarkdownApi = globalThis.ChatGmlMarkdown || _abs('markdown.js');
@@ -325,6 +326,22 @@
     };
   }
 
+  function companionPluginDiagnostics() {
+    const parts = [];
+    try {
+      const entries = AgentPacks.listMarketplace().filter(function (entry) {
+        return entry && entry.kind === 'plugin';
+      });
+      for (let i = 0; i < entries.length; i++) {
+        parts.push(entries[i].id + ':' + (entries[i].installed ? 'installed' : 'missing'));
+      }
+    } catch (e) {
+      parts.push('scan failed');
+    }
+    if (typeof window !== 'undefined' && window.ChatGmlGmloop) parts.push('chatgml-gmloop:loaded');
+    return parts.join(', ');
+  }
+
   function diagnosticsSnapshot() {
     const cfg = panel && panel._config ? panel._config : null;
     const provider =
@@ -348,6 +365,7 @@
       gmloop: gmloop.status,
       gmloopDir: gmloop.dir || '',
       gmloopRunner: gmloop.runner || '',
+      companionPlugins: companionPluginDiagnostics(),
       envFile: path.join(chatgmlUserDirForProviders(), '.env'),
       authState:
         lastLaunchAuthInfo && lastLaunchAuthInfo.authState
@@ -2039,7 +2057,14 @@
           // SECRET_FIELD_PATHS field (chat.apiKey, embed.apiKey, memory.hippo.key) — only an
           // `env:NAME` reference is accepted — and that's exactly what the help text under the
           // input tells the user to paste.
-          var plan = SettingsTasks.buildSettingsCommands(settings);
+          var plan;
+          try {
+            plan = SettingsTasks.buildSettingsCommands(settings);
+          } catch (e) {
+            recordDiagnostic('settings', 'save plan failed: ' + (e.message || e));
+            if (panel) panel.flash('settings save failed: ' + (e.message || e), true);
+            return;
+          }
           var tasks = plan.commands;
           // Write each config field sequentially, then restart the core. Scope is a plugin pref
           // (it must precede the serve argv on restart, NOT a user-global config field) so it

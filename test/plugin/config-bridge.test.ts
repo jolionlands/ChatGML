@@ -16,4 +16,9 @@ describe('plugin/config-bridge.js process spawning', () => {
     expect(SRC).toMatch(/try\s*\{[\s\S]*execFile/);
     expect(SRC).toMatch(/catch\s*\(err\)\s*\{\s*cb\(err,\s*'',\s*''\)/);
   });
+
+  it('mirrors MCP JSON through per-server config leaves, not a bare mcpServers field', () => {
+    expect(SRC).toMatch(/SettingsTasks\.mcpCommandsFromJson/);
+    expect(SRC).not.toMatch(/setConfigField\('mcpServers'/);
+  });
 });

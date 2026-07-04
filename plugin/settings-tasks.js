@@ -27,12 +27,16 @@
    * @param {string} [settings.model]         chat model id (non-empty => chat.model)
    * @param {string} [settings.baseURL]       chat endpoint URL (non-empty => chat.baseURL)
    * @param {string} [settings.embedModel]    embed model id (non-empty => embed.model)
+   * @param {string} [settings.temperature]   chat temperature (non-empty => chat.temperature)
+   * @param {string} [settings.maxTokens]     chat max tokens (non-empty => chat.maxTokens)
    * @param {string} [settings.embedBaseURL]  embed endpoint URL (non-empty => embed.baseURL)
+   * @param {string} [settings.embedApiKey]   embed API key env ref (non-empty => embed.apiKey)
+   * @param {string} [settings.embedBatchSize] embed batch size (non-empty => embed.batchSize)
    * @param {string} [settings.apiKey]        chat API key (non-empty => chat.apiKey; EMPTY IS NO-OP)
    * @param {string} [settings.mode]          mode (non-empty => mode)
    * @param {string} [settings.approval]      approval policy (non-empty => approval)
    * @param {string} [settings.scope]         memory scope (plugin pref, not a config field)
-   * @param {object} [settings.tiers]         per-tier overrides: { planner?: {model?,baseURL?}, implementer?: {...}, reviewer?: {...} }
+   * @param {object} [settings.tiers]         per-tier overrides: { planner?: {model?,baseURL?,apiKey?,temperature?,maxTokens?}, implementer?: {...}, reviewer?: {...} }
    *                                          Each non-empty leaf becomes a `tiers.X.<field>` config command.
    * @returns {{ commands: Array<[string,string]>, scope: string|null }}
    */
@@ -49,13 +53,37 @@
 
     pushIfNonEmpty('chat.model', s.model);
     pushIfNonEmpty('chat.baseURL', s.baseURL);
+    pushIfNonEmpty('chat.temperature', s.temperature);
+    pushIfNonEmpty('chat.maxTokens', s.maxTokens);
     pushIfNonEmpty('embed.model', s.embedModel);
     pushIfNonEmpty('embed.baseURL', s.embedBaseURL);
+    pushIfNonEmpty('embed.apiKey', s.embedApiKey);
+    pushIfNonEmpty('embed.batchSize', s.embedBatchSize);
     // apiKey: same no-empty rule, but called out separately because empty means "leave unchanged"
     // (NOT "blank it"). The core additionally refuses a literal secret (only env:NAME persists).
     pushIfNonEmpty('chat.apiKey', s.apiKey);
     pushIfNonEmpty('mode', s.mode);
     pushIfNonEmpty('approval', s.approval);
+    pushIfNonEmpty('memory.provider', s.memoryProvider);
+    pushIfNonEmpty('memory.hippo.url', s.memoryHippoUrl);
+    pushIfNonEmpty('memory.hippo.key', s.memoryHippoKey);
+    pushIfNonEmpty('index.chunkSize', s.indexChunkSize);
+    pushIfNonEmpty('index.chunkOverlap', s.indexChunkOverlap);
+    pushIfNonEmpty('index.root', s.indexRoot);
+    pushIfNonEmpty('search.minScore', s.searchMinScore);
+
+    if (s.toolApproval && typeof s.toolApproval === 'object') {
+      var toolNames = Object.keys(s.toolApproval).sort();
+      for (var ta = 0; ta < toolNames.length; ta++) {
+        var tool = toolNames[ta];
+        pushIfNonEmpty('toolApproval.' + tool, s.toolApproval[tool]);
+      }
+    }
+
+    if (typeof s.mcpServersJson === 'string' && s.mcpServersJson.trim() !== '') {
+      var mcpCommands = mcpCommandsFromJson(s.mcpServersJson);
+      for (var mc = 0; mc < mcpCommands.length; mc++) commands.push(mcpCommands[mc]);
+    }
 
     // Per-tier overrides: each tier slot (planner / implementer / reviewer) is a partial
     // override of the global chat lane. Each non-empty leaf becomes a `tiers.<name>.<field>`
@@ -64,7 +92,7 @@
     // caller can't smuggle in an arbitrary nested write.
     if (s.tiers && typeof s.tiers === 'object') {
       var tierNames = ['planner', 'implementer', 'reviewer'];
-      var leafFields = ['model', 'baseURL'];
+      var leafFields = ['model', 'baseURL', 'apiKey', 'temperature', 'maxTokens'];
       for (var ti = 0; ti < tierNames.length; ti++) {
         var tname = tierNames[ti];
         var slot = s.tiers[tname];
@@ -78,6 +106,42 @@
 
     const scope = typeof s.scope === 'string' ? s.scope.trim() : '';
     return { commands: commands, scope: scope === '' ? null : scope };
+  }
+
+  function mcpCommandsFromJson(jsonString) {
+    var parsed = JSON.parse(jsonString);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('MCP servers must be a JSON object');
+    }
+    var commands = [];
+    var names = Object.keys(parsed).sort();
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      var server = parsed[name];
+      if (!server || typeof server !== 'object' || Array.isArray(server)) continue;
+      pushMcp(commands, name, 'name', server.name);
+      pushMcp(commands, name, 'command', server.command);
+      if (Array.isArray(server.args)) pushMcp(commands, name, 'args', JSON.stringify(server.args));
+      pushMcp(commands, name, 'url', server.url);
+      if (server.timeout !== undefined) pushMcp(commands, name, 'timeout', String(server.timeout));
+      if (server.disabled !== undefined)
+        pushMcp(commands, name, 'disabled', String(!!server.disabled));
+      if (server.env && typeof server.env === 'object' && !Array.isArray(server.env)) {
+        var envKeys = Object.keys(server.env).sort();
+        for (var ei = 0; ei < envKeys.length; ei++) {
+          var key = envKeys[ei];
+          pushMcp(commands, name, 'env.' + key, server.env[key]);
+        }
+      }
+    }
+    return commands;
+  }
+
+  function pushMcp(commands, serverName, field, value) {
+    var trimmed =
+      typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim();
+    if (field.indexOf('env.') === 0 && trimmed === '***') return;
+    if (trimmed !== '') commands.push(['mcpServers.' + serverName + '.' + field, trimmed]);
   }
 
   /**
@@ -148,6 +212,7 @@
     hasApiKey: hasApiKey,
     hasProviderSelection: hasProviderSelection,
     providerDerivedCommands: providerDerivedCommands,
+    mcpCommandsFromJson: mcpCommandsFromJson,
     API_KEY_PLACEHOLDER: API_KEY_PLACEHOLDER,
   };
 

@@ -945,6 +945,14 @@ for (const name of TIER_NAMES) {
     path: ['tiers', name, 'apiKey'],
     type: 'string',
   };
+  SETTABLE_FIELDS[`tiers.${name}.temperature`] = {
+    path: ['tiers', name, 'temperature'],
+    type: 'number',
+  };
+  SETTABLE_FIELDS[`tiers.${name}.maxTokens`] = {
+    path: ['tiers', name, 'maxTokens'],
+    type: 'number',
+  };
 }
 
 /** The dotted field names `config set` accepts (sorted), for help text and validation hints. */
@@ -957,6 +965,7 @@ export const SETTABLE_FIELD_NAMES: readonly string[] = [
   'mcpServers.<name>.timeout',
   'mcpServers.<name>.disabled',
   'mcpServers.<name>.name',
+  'toolApproval.<tool>',
 ];
 
 interface McpSetField {

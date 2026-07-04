@@ -482,10 +482,12 @@
     this.diagnosticsBtn.className = 'run-button chatgml-diagnostics-btn';
     this.diagnosticsBtn.textContent = 'Diag';
     this.diagnosticsBtn.title = 'Show ChatGML diagnostics';
+    this.diagnosticsBtn.setAttribute('aria-expanded', 'false');
     this.diagnosticsBtn.addEventListener('click', function () {
       self.diagnosticsOpen = !self.diagnosticsOpen;
-      self.flash(self.diagnosticsOpen ? 'diagnostics opened' : 'diagnostics closed');
+      if (self.diagnosticsOpen) self.knowledgeOpen = false;
       self.render();
+      self._revealDrawer(self.diagnosticsEl);
     });
     secondaryControls.appendChild(this.diagnosticsBtn);
 
@@ -494,10 +496,12 @@
     this.knowledgeBtn.className = 'run-button chatgml-knowledge-btn';
     this.knowledgeBtn.textContent = 'Know';
     this.knowledgeBtn.title = 'Show knowledge map';
+    this.knowledgeBtn.setAttribute('aria-expanded', 'false');
     this.knowledgeBtn.addEventListener('click', function () {
       self.knowledgeOpen = !self.knowledgeOpen;
-      self.flash(self.knowledgeOpen ? 'knowledge map opened' : 'knowledge map closed');
+      if (self.knowledgeOpen) self.diagnosticsOpen = false;
       self.render();
+      self._revealDrawer(self.knowledgeEl);
     });
     secondaryControls.appendChild(this.knowledgeBtn);
 
@@ -564,6 +568,7 @@
     if (willOpen && typeof this.opts.onSettingsOpen === 'function') {
       this.opts.onSettingsOpen();
     }
+    if (willOpen) this._renderSettingsMarketplace();
     // First open after the panel was just built: pick up the providers load result that
     // chatgml.js stashed on `this._pendingProvidersLoad` during the bootstrap call. We use the
     // same callbacks the bootstrap uses so Refresh/Add/Export behave identically.
@@ -944,6 +949,62 @@
       return help;
     }
 
+    function makeInput(type, placeholder, extraClass) {
+      var input = document.createElement('input');
+      input.type = type || 'text';
+      input.className = 'chatgml-settings-input' + (extraClass ? ' ' + extraClass : '');
+      input.placeholder = placeholder || '';
+      return input;
+    }
+
+    function makeSelect(values) {
+      var select = document.createElement('select');
+      select.className = 'chatgml-settings-input';
+      for (var si = 0; si < values.length; si++) {
+        var opt = document.createElement('option');
+        opt.value = values[si][0];
+        opt.textContent = values[si][1];
+        select.appendChild(opt);
+      }
+      return select;
+    }
+
+    this.settingsTabsEl = document.createElement('div');
+    this.settingsTabsEl.className = 'chatgml-settings-tabs';
+    this.settingsScrollEl.appendChild(this.settingsTabsEl);
+    this.settingsSections = {};
+    this.settingsTabButtons = {};
+    function makeSection(id, label) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chatgml-settings-tab';
+      btn.textContent = label;
+      btn.addEventListener('click', function () {
+        self._showSettingsSection(id);
+      });
+      self.settingsTabsEl.appendChild(btn);
+      var section = document.createElement('section');
+      section.className = 'chatgml-settings-section';
+      section.setAttribute('data-settings-section', id);
+      section.style.display = 'none';
+      self.settingsSections[id] = section;
+      self.settingsTabButtons[id] = btn;
+      self.settingsScrollEl.appendChild(section);
+      return section;
+    }
+
+    makeSection('models', 'Models');
+    makeSection('behavior', 'Behavior');
+    makeSection('tools', 'Tools');
+    makeSection('memory', 'Memory');
+    makeSection('integrations', 'Integrations');
+    makeSection('marketplace', 'Marketplace');
+    makeSection('diagnostics', 'Diagnostics');
+    function appendSetting(id, node) {
+      (self.settingsSections[id] || self.settingsScrollEl).appendChild(node);
+      return node;
+    }
+
     // Model — text input bound to a `<datalist>` populated from the provider registry. Users can
     // still type any value (free text) but pick from the registry as autocomplete. The datalist
     // element is created here and re-populated whenever the providers list refreshes.
@@ -954,8 +1015,8 @@
     this.settingsModelInput.className = 'chatgml-settings-input';
     this.settingsModelInput.placeholder = 'chat model id';
     this.settingsModelInput.setAttribute('list', this.settingsModelDatalist.id);
-    this.settingsScrollEl.appendChild(makeRow('Model', this.settingsModelInput));
-    this.settingsScrollEl.appendChild(this.settingsModelDatalist);
+    appendSetting('models', makeRow('Model', this.settingsModelInput));
+    appendSetting('models', this.settingsModelDatalist);
 
     // Base URL — same datalist pattern, separate options array.
     this.settingsUrlDatalist = document.createElement('datalist');
@@ -965,8 +1026,8 @@
     this.settingsUrlInput.className = 'chatgml-settings-input';
     this.settingsUrlInput.placeholder = 'chat endpoint URL';
     this.settingsUrlInput.setAttribute('list', this.settingsUrlDatalist.id);
-    this.settingsScrollEl.appendChild(makeRow('Base URL', this.settingsUrlInput));
-    this.settingsScrollEl.appendChild(this.settingsUrlDatalist);
+    appendSetting('models', makeRow('Base URL', this.settingsUrlInput));
+    appendSetting('models', this.settingsUrlDatalist);
 
     // Provider-matched hint shown under the URL row when the typed value matches a registered
     // provider. Lets the user confirm at a glance "yes, this URL is registered as X". Cleared on
@@ -974,7 +1035,7 @@
     this.settingsUrlHintEl = document.createElement('div');
     this.settingsUrlHintEl.className = 'chatgml-settings-url-hint';
     this.settingsUrlHintEl.style.display = 'none';
-    this.settingsScrollEl.appendChild(this.settingsUrlHintEl);
+    appendSetting('models', this.settingsUrlHintEl);
 
     // API key — password-type input so the value is never echoed on screen. When a key is already
     // set (the redacted `cfg.chat.apiKey` from `chatgml config show` is truthy), the placeholder
@@ -986,13 +1047,23 @@
     this.settingsApiKeyInput.placeholder = SettingsTasks.API_KEY_PLACEHOLDER;
     this.settingsApiKeyInput.autocomplete = 'off';
     this.settingsApiKeyInput.spellcheck = false;
-    this.settingsScrollEl.appendChild(makeRow('API Key', this.settingsApiKeyInput));
-    this.settingsScrollEl.appendChild(
+    appendSetting('models', makeRow('API Key', this.settingsApiKeyInput));
+    appendSetting(
+      'models',
       makeHelpRow(
         'Stored in ~/.config/chatgml/config.json. For production, set CHATGML_CHAT_KEY in your ' +
           'environment and paste  env:CHATGML_CHAT_KEY  here — only env references are persisted.',
       ),
     );
+
+    this.settingsTemperatureInput = makeInput('number', '0.2');
+    this.settingsTemperatureInput.step = '0.1';
+    appendSetting('models', makeRow('Temperature', this.settingsTemperatureInput));
+
+    this.settingsMaxTokensInput = makeInput('number', 'max output tokens');
+    this.settingsMaxTokensInput.min = '1';
+    this.settingsMaxTokensInput.step = '1';
+    appendSetting('models', makeRow('Max Tokens', this.settingsMaxTokensInput));
 
     // Embed Model (separate lane; the chat model does NOT fall back to the embed model). Bound to
     // a datalist populated from the registry when available.
@@ -1003,8 +1074,8 @@
     this.settingsEmbedModelInput.className = 'chatgml-settings-input';
     this.settingsEmbedModelInput.placeholder = 'embed model id';
     this.settingsEmbedModelInput.setAttribute('list', this.settingsEmbedModelDatalist.id);
-    this.settingsScrollEl.appendChild(makeRow('Embed Model', this.settingsEmbedModelInput));
-    this.settingsScrollEl.appendChild(this.settingsEmbedModelDatalist);
+    appendSetting('models', makeRow('Embed Model', this.settingsEmbedModelInput));
+    appendSetting('models', this.settingsEmbedModelDatalist);
 
     // Embed Base URL.
     this.settingsEmbedUrlDatalist = document.createElement('datalist');
@@ -1014,8 +1085,22 @@
     this.settingsEmbedUrlInput.className = 'chatgml-settings-input';
     this.settingsEmbedUrlInput.placeholder = 'embed endpoint URL';
     this.settingsEmbedUrlInput.setAttribute('list', this.settingsEmbedUrlDatalist.id);
-    this.settingsScrollEl.appendChild(makeRow('Embed Base URL', this.settingsEmbedUrlInput));
-    this.settingsScrollEl.appendChild(this.settingsEmbedUrlDatalist);
+    appendSetting('models', makeRow('Embed Base URL', this.settingsEmbedUrlInput));
+    appendSetting('models', this.settingsEmbedUrlDatalist);
+
+    this.settingsEmbedApiKeyInput = makeInput(
+      'password',
+      SettingsTasks.API_KEY_PLACEHOLDER,
+      'chatgml-settings-input-secret',
+    );
+    this.settingsEmbedApiKeyInput.autocomplete = 'off';
+    this.settingsEmbedApiKeyInput.spellcheck = false;
+    appendSetting('models', makeRow('Embed Key', this.settingsEmbedApiKeyInput));
+
+    this.settingsEmbedBatchSizeInput = makeInput('number', '64');
+    this.settingsEmbedBatchSizeInput.min = '1';
+    this.settingsEmbedBatchSizeInput.step = '1';
+    appendSetting('models', makeRow('Embed Batch', this.settingsEmbedBatchSizeInput));
 
     // Mode select
     this.settingsModeSelect = document.createElement('select');
@@ -1027,7 +1112,7 @@
       opt.textContent = modes[i][0].toUpperCase() + modes[i].slice(1);
       this.settingsModeSelect.appendChild(opt);
     }
-    this.settingsScrollEl.appendChild(makeRow('Mode', this.settingsModeSelect));
+    appendSetting('behavior', makeRow('Mode', this.settingsModeSelect));
 
     // Approval select
     this.settingsApprovalSelect = document.createElement('select');
@@ -1040,14 +1125,118 @@
     autoOpt.textContent = 'auto';
     this.settingsApprovalSelect.appendChild(gatedOpt);
     this.settingsApprovalSelect.appendChild(autoOpt);
-    this.settingsScrollEl.appendChild(makeRow('Approval', this.settingsApprovalSelect));
+    appendSetting('behavior', makeRow('Approval', this.settingsApprovalSelect));
 
     // Scope
     this.settingsScopeInput = document.createElement('input');
     this.settingsScopeInput.type = 'text';
     this.settingsScopeInput.className = 'chatgml-settings-input';
     this.settingsScopeInput.placeholder = 'memory scope';
-    this.settingsScrollEl.appendChild(makeRow('Scope', this.settingsScopeInput));
+    appendSetting('behavior', makeRow('Scope', this.settingsScopeInput));
+
+    this.settingsToolApprovalInputs = {};
+    var approvalTools = [
+      'glob',
+      'grep',
+      'read_file',
+      'search_code',
+      'graph_neighbors',
+      'temporal_query',
+      'apply_patch',
+      'search_replace',
+      'execute_command',
+      'gmloop_check',
+      'gmloop_control',
+    ];
+    appendSetting(
+      'tools',
+      makeHelpRow('Per-tool policy: blank preserves the current/default setting.'),
+    );
+    for (var ati = 0; ati < approvalTools.length; ati++) {
+      (function (toolName) {
+        var sel = makeSelect([
+          ['', 'preserve'],
+          ['gated', 'gated'],
+          ['auto', 'auto'],
+        ]);
+        self.settingsToolApprovalInputs[toolName] = sel;
+        appendSetting('tools', makeRow(toolName, sel));
+      })(approvalTools[ati]);
+    }
+
+    this.settingsMemoryProviderSelect = makeSelect([
+      ['local', 'local'],
+      ['hippo', 'hippo'],
+    ]);
+    appendSetting('memory', makeRow('Memory', this.settingsMemoryProviderSelect));
+    this.settingsMemoryHippoUrlInput = makeInput('text', 'Hippo URL');
+    appendSetting('memory', makeRow('Hippo URL', this.settingsMemoryHippoUrlInput));
+    this.settingsMemoryHippoKeyInput = makeInput(
+      'password',
+      SettingsTasks.API_KEY_PLACEHOLDER,
+      'chatgml-settings-input-secret',
+    );
+    this.settingsMemoryHippoKeyInput.autocomplete = 'off';
+    this.settingsMemoryHippoKeyInput.spellcheck = false;
+    appendSetting('memory', makeRow('Hippo Key', this.settingsMemoryHippoKeyInput));
+    this.settingsIndexChunkSizeInput = makeInput('number', '1500');
+    this.settingsIndexChunkSizeInput.min = '1';
+    appendSetting('memory', makeRow('Chunk Size', this.settingsIndexChunkSizeInput));
+    this.settingsIndexChunkOverlapInput = makeInput('number', '200');
+    this.settingsIndexChunkOverlapInput.min = '0';
+    appendSetting('memory', makeRow('Overlap', this.settingsIndexChunkOverlapInput));
+    this.settingsIndexRootInput = makeInput('text', 'index root');
+    appendSetting('memory', makeRow('Index Root', this.settingsIndexRootInput));
+    this.settingsSearchMinScoreInput = makeInput('number', '0..1');
+    this.settingsSearchMinScoreInput.min = '0';
+    this.settingsSearchMinScoreInput.max = '1';
+    this.settingsSearchMinScoreInput.step = '0.01';
+    appendSetting('memory', makeRow('Min Score', this.settingsSearchMinScoreInput));
+
+    var gmloopBar = document.createElement('div');
+    gmloopBar.className = 'chatgml-settings-button-row';
+    var gmloopCommands = [
+      ['Status', '/gmloop'],
+      ['Lint', '/gmloop lint'],
+      ['Parse', '/gmloop parse'],
+      ['Format Check', '/gmloop format-check'],
+      ['Graph Doctor', '/gmloop graph-doctor'],
+    ];
+    for (var gi = 0; gi < gmloopCommands.length; gi++) {
+      (function (label, cmd) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'chatgml-settings-action-btn';
+        b.textContent = label;
+        b.addEventListener('click', function () {
+          self.inputEl.value = cmd;
+          self.inputEl.focus();
+          self.flash('queued command: ' + cmd);
+        });
+        gmloopBar.appendChild(b);
+      })(gmloopCommands[gi][0], gmloopCommands[gi][1]);
+    }
+    appendSetting(
+      'integrations',
+      makeHelpRow('GMLoop safe checks use the current project/file context.'),
+    );
+    appendSetting('integrations', gmloopBar);
+
+    this.settingsMcpServersTextarea = document.createElement('textarea');
+    this.settingsMcpServersTextarea.className = 'chatgml-settings-input chatgml-settings-textarea';
+    this.settingsMcpServersTextarea.spellcheck = false;
+    this.settingsMcpServersTextarea.placeholder =
+      '{ "fs": { "command": "npx", "args": [], "env": {}, "timeout": 30000 } }';
+    appendSetting('integrations', makeRow('MCP JSON', this.settingsMcpServersTextarea));
+
+    this.settingsMarketplaceEl = document.createElement('div');
+    this.settingsMarketplaceEl.className = 'chatgml-settings-marketplace';
+    appendSetting('marketplace', this.settingsMarketplaceEl);
+
+    this.settingsDiagnosticsPre = document.createElement('pre');
+    this.settingsDiagnosticsPre.className = 'chatgml-settings-diagnostics-pre';
+    this.settingsDiagnosticsPre.textContent = 'Open settings to load redacted effective config.';
+    appendSetting('diagnostics', this.settingsDiagnosticsPre);
 
     // Tier overrides subsection (Cline-style Plan/Act). Three collapsible groups — one per tier
     // (planner/implementer/reviewer) — each with `Model` + `Base URL` fields. Empty fields are
@@ -1058,7 +1247,7 @@
     var tierHeader = document.createElement('div');
     tierHeader.className = 'chatgml-settings-section-header';
     tierHeader.textContent = 'Tiers (per-role lane overrides)';
-    this.settingsScrollEl.appendChild(tierHeader);
+    appendSetting('models', tierHeader);
 
     this.settingsTierInputs = { planner: {}, implementer: {}, reviewer: {} };
     this.settingsTierDatalists = { planner: {}, implementer: {}, reviewer: {} };
@@ -1096,12 +1285,37 @@
         group.appendChild(makeRow('Base URL', urlInput));
         group.appendChild(urlDatalist);
 
-        self.settingsTierInputs[name] = { model: modelInput, baseURL: urlInput };
+        var keyInput = makeInput(
+          'password',
+          SettingsTasks.API_KEY_PLACEHOLDER,
+          'chatgml-settings-input-secret',
+        );
+        keyInput.autocomplete = 'off';
+        keyInput.spellcheck = false;
+        group.appendChild(makeRow('API Key', keyInput));
+
+        var tempInput = makeInput('number', 'temperature');
+        tempInput.step = '0.1';
+        group.appendChild(makeRow('Temperature', tempInput));
+
+        var maxInput = makeInput('number', 'max output tokens');
+        maxInput.min = '1';
+        maxInput.step = '1';
+        group.appendChild(makeRow('Max Tokens', maxInput));
+
+        self.settingsTierInputs[name] = {
+          model: modelInput,
+          baseURL: urlInput,
+          apiKey: keyInput,
+          temperature: tempInput,
+          maxTokens: maxInput,
+        };
         self.settingsTierDatalists[name] = { model: modelDatalist, baseURL: urlDatalist };
-        self.settingsScrollEl.appendChild(group);
+        appendSetting('models', group);
       })(tierNames[tni]);
     }
-    this.settingsScrollEl.appendChild(
+    appendSetting(
+      'models',
       makeHelpRow(
         'Empty fields are dropped (existing values are preserved). Each tier is a partial ' +
           'override of the global chat lane; unset leaves fall back to the global model/URL.',
@@ -1121,26 +1335,54 @@
         // trim it AND treat empty/whitespace as a no-op so an accidental blank submit leaves the
         // saved key intact.
         apiKey: self.settingsApiKeyInput.value,
+        temperature: self.settingsTemperatureInput.value.trim(),
+        maxTokens: self.settingsMaxTokensInput.value.trim(),
         embedModel: self.settingsEmbedModelInput.value.trim(),
         embedBaseURL: self.settingsEmbedUrlInput.value.trim(),
+        embedApiKey: self.settingsEmbedApiKeyInput.value,
+        embedBatchSize: self.settingsEmbedBatchSizeInput.value.trim(),
         mode: self.settingsModeSelect.value,
         approval: self.settingsApprovalSelect.value,
         scope: self.settingsScopeInput.value.trim(),
+        memoryProvider: self.settingsMemoryProviderSelect.value,
+        memoryHippoUrl: self.settingsMemoryHippoUrlInput.value.trim(),
+        memoryHippoKey: self.settingsMemoryHippoKeyInput.value,
+        indexChunkSize: self.settingsIndexChunkSizeInput.value.trim(),
+        indexChunkOverlap: self.settingsIndexChunkOverlapInput.value.trim(),
+        indexRoot: self.settingsIndexRootInput.value.trim(),
+        searchMinScore: self.settingsSearchMinScoreInput.value.trim(),
+        toolApproval: {},
+        mcpServersJson: self.settingsMcpServersTextarea.value.trim(),
         tiers: {
           planner: {
             model: self.settingsTierInputs.planner.model.value.trim(),
             baseURL: self.settingsTierInputs.planner.baseURL.value.trim(),
+            apiKey: self.settingsTierInputs.planner.apiKey.value,
+            temperature: self.settingsTierInputs.planner.temperature.value.trim(),
+            maxTokens: self.settingsTierInputs.planner.maxTokens.value.trim(),
           },
           implementer: {
             model: self.settingsTierInputs.implementer.model.value.trim(),
             baseURL: self.settingsTierInputs.implementer.baseURL.value.trim(),
+            apiKey: self.settingsTierInputs.implementer.apiKey.value,
+            temperature: self.settingsTierInputs.implementer.temperature.value.trim(),
+            maxTokens: self.settingsTierInputs.implementer.maxTokens.value.trim(),
           },
           reviewer: {
             model: self.settingsTierInputs.reviewer.model.value.trim(),
             baseURL: self.settingsTierInputs.reviewer.baseURL.value.trim(),
+            apiKey: self.settingsTierInputs.reviewer.apiKey.value,
+            temperature: self.settingsTierInputs.reviewer.temperature.value.trim(),
+            maxTokens: self.settingsTierInputs.reviewer.maxTokens.value.trim(),
           },
         },
       };
+      var toolNames = Object.keys(self.settingsToolApprovalInputs || {});
+      for (var tai = 0; tai < toolNames.length; tai++) {
+        var toolName = toolNames[tai];
+        var toolValue = self.settingsToolApprovalInputs[toolName].value;
+        if (toolValue) settings.toolApproval[toolName] = toolValue;
+      }
       // Stamp provider-selected metadata so SettingsTasks can choose to emit the registry-derived
       // metadata without trying to persist unsupported core fields. The panel set
       // `this._activeProviderEntry` when the user clicked a registry row.
@@ -1159,12 +1401,21 @@
       // Reset the password field after save so the raw value doesn't linger in the DOM. Empty
       // submit is already a no-op on the wire (see SettingsTasks.buildSettingsCommands).
       self.settingsApiKeyInput.value = '';
+      self.settingsEmbedApiKeyInput.value = '';
+      self.settingsMemoryHippoKeyInput.value = '';
+      var tierNamesToClear = ['planner', 'implementer', 'reviewer'];
+      for (var tci = 0; tci < tierNamesToClear.length; tci++) {
+        var tierSlot = self.settingsTierInputs[tierNamesToClear[tci]];
+        if (tierSlot && tierSlot.apiKey) tierSlot.apiKey.value = '';
+      }
       // Clear the active-provider marker so the next open of the panel starts fresh — the user
       // may pick a different entry next time.
       self._activeProviderEntry = null;
       self.settingsPanelEl.style.display = 'none';
     });
     this.settingsScrollEl.appendChild(saveBtn);
+
+    this._showSettingsSection('models');
 
     // Mount the scroll wrapper inside the panel, then the panel inside the container.
     this.settingsPanelEl.appendChild(this.settingsScrollEl);
@@ -1188,20 +1439,66 @@
       this.settingsModelInput.value = cfg.chat.model;
     if (cfg.chat && cfg.chat.baseURL && this.settingsUrlInput)
       this.settingsUrlInput.value = cfg.chat.baseURL;
+    if (cfg.chat && cfg.chat.temperature !== undefined && this.settingsTemperatureInput)
+      this.settingsTemperatureInput.value = String(cfg.chat.temperature);
+    if (cfg.chat && cfg.chat.maxTokens !== undefined && this.settingsMaxTokensInput)
+      this.settingsMaxTokensInput.value = String(cfg.chat.maxTokens);
     if (cfg.embed && cfg.embed.model && this.settingsEmbedModelInput)
       this.settingsEmbedModelInput.value = cfg.embed.model;
     if (cfg.embed && cfg.embed.baseURL && this.settingsEmbedUrlInput)
       this.settingsEmbedUrlInput.value = cfg.embed.baseURL;
+    if (cfg.embed && cfg.embed.batchSize !== undefined && this.settingsEmbedBatchSizeInput)
+      this.settingsEmbedBatchSizeInput.value = String(cfg.embed.batchSize);
     if (cfg.chat && this.settingsApiKeyInput) {
       // Reflect whether a key is already set without revealing the value. The redacted `***`
       // placeholder is the visual cue; we never assign the redacted value into `value`.
       var placeholder = SettingsTasks.apiKeyDisplayPlaceholder(cfg.chat.apiKey);
       this.settingsApiKeyInput.placeholder = placeholder || SettingsTasks.API_KEY_PLACEHOLDER;
     }
+    if (cfg.embed && this.settingsEmbedApiKeyInput) {
+      var embedPlaceholder = SettingsTasks.apiKeyDisplayPlaceholder(cfg.embed.apiKey);
+      this.settingsEmbedApiKeyInput.placeholder =
+        embedPlaceholder || SettingsTasks.API_KEY_PLACEHOLDER;
+    }
     if (cfg.mode && this.settingsModeSelect) this.settingsModeSelect.value = cfg.mode;
     if (cfg.approval && this.settingsApprovalSelect)
       this.settingsApprovalSelect.value = cfg.approval;
     if (cfg.scope && this.settingsScopeInput) this.settingsScopeInput.value = cfg.scope;
+    if (cfg.toolApproval && this.settingsToolApprovalInputs) {
+      var tools = Object.keys(cfg.toolApproval);
+      for (var tooli = 0; tooli < tools.length; tooli++) {
+        var toolName = tools[tooli];
+        if (this.settingsToolApprovalInputs[toolName]) {
+          this.settingsToolApprovalInputs[toolName].value = cfg.toolApproval[toolName];
+        }
+      }
+    }
+    if (cfg.memory && this.settingsMemoryProviderSelect) {
+      if (cfg.memory.provider) this.settingsMemoryProviderSelect.value = cfg.memory.provider;
+      if (cfg.memory.url && this.settingsMemoryHippoUrlInput)
+        this.settingsMemoryHippoUrlInput.value = cfg.memory.url;
+      if (this.settingsMemoryHippoKeyInput) {
+        var memoryPlaceholder = SettingsTasks.apiKeyDisplayPlaceholder(cfg.memory.key);
+        this.settingsMemoryHippoKeyInput.placeholder =
+          memoryPlaceholder || SettingsTasks.API_KEY_PLACEHOLDER;
+      }
+    }
+    if (cfg.index) {
+      if (cfg.index.chunkSize !== undefined && this.settingsIndexChunkSizeInput)
+        this.settingsIndexChunkSizeInput.value = String(cfg.index.chunkSize);
+      if (cfg.index.chunkOverlap !== undefined && this.settingsIndexChunkOverlapInput)
+        this.settingsIndexChunkOverlapInput.value = String(cfg.index.chunkOverlap);
+      if (cfg.index.root && this.settingsIndexRootInput)
+        this.settingsIndexRootInput.value = cfg.index.root;
+    }
+    if (cfg.search && cfg.search.minScore !== undefined && this.settingsSearchMinScoreInput)
+      this.settingsSearchMinScoreInput.value = String(cfg.search.minScore);
+    if (cfg.mcpServers && this.settingsMcpServersTextarea) {
+      this.settingsMcpServersTextarea.value = JSON.stringify(cfg.mcpServers, null, 2);
+    }
+    if (this.settingsDiagnosticsPre) {
+      this.settingsDiagnosticsPre.textContent = JSON.stringify(cfg, null, 2);
+    }
     if (cfg.tiers && this.settingsTierInputs) {
       // Mirror the parsed `cfg.tiers` partial overrides into the form. We never echo the api key
       // back (the spec only exposes model + baseURL in the UI). Undefined tier slots are left at
@@ -1213,11 +1510,79 @@
         if (!tierSlot || !this.settingsTierInputs[tn]) continue;
         if (tierSlot.model) this.settingsTierInputs[tn].model.value = tierSlot.model;
         if (tierSlot.baseURL) this.settingsTierInputs[tn].baseURL.value = tierSlot.baseURL;
+        if (tierSlot.temperature !== undefined)
+          this.settingsTierInputs[tn].temperature.value = String(tierSlot.temperature);
+        if (tierSlot.maxTokens !== undefined)
+          this.settingsTierInputs[tn].maxTokens.value = String(tierSlot.maxTokens);
+        if (tierSlot.apiKey && this.settingsTierInputs[tn].apiKey) {
+          this.settingsTierInputs[tn].apiKey.placeholder =
+            SettingsTasks.apiKeyDisplayPlaceholder(tierSlot.apiKey) ||
+            SettingsTasks.API_KEY_PLACEHOLDER;
+        }
       }
     }
+    this._renderSettingsMarketplace();
     // Re-check the URL hint so the user gets immediate feedback if their saved URL matches a
     // registered provider. Without this the hint would only update on the next manual edit.
     if (this.settingsUrlInput && this._refreshUrlHint) this._refreshUrlHint();
+  };
+
+  ChatPanel.prototype._renderSettingsMarketplace = function () {
+    if (!this.settingsMarketplaceEl) return;
+    var self = this;
+    this.settingsMarketplaceEl.innerHTML = '';
+    var entries = [];
+    try {
+      entries = AgentPacks.listMarketplace();
+    } catch (e) {
+      var err = document.createElement('div');
+      err.className = 'chatgml-settings-providers-empty';
+      err.textContent = 'Marketplace unavailable: ' + (e.message || e);
+      this.settingsMarketplaceEl.appendChild(err);
+      return;
+    }
+    var kinds = ['provider', 'plugin', 'agent-pack', 'skill'];
+    for (var ki = 0; ki < kinds.length; ki++) {
+      var kind = kinds[ki];
+      var group = entries.filter(function (entry) {
+        return entry.kind === kind;
+      });
+      if (group.length === 0) continue;
+      var title = document.createElement('div');
+      title.className = 'chatgml-settings-section-header';
+      title.textContent = kind === 'plugin' ? 'GMEdit plugins' : kind + 's';
+      this.settingsMarketplaceEl.appendChild(title);
+      for (var i = 0; i < group.length; i++) {
+        (function (entry) {
+          var row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'chatgml-settings-marketplace-row';
+          row.title = entry.description || entry.prompt || '';
+          var badge = document.createElement('span');
+          badge.className = 'chatgml-tool-kind chatgml-tool-kind-' + entry.kind;
+          badge.textContent = entry.installed ? 'installed' : 'install';
+          var name = document.createElement('span');
+          name.textContent = entry.name || entry.id;
+          row.appendChild(badge);
+          row.appendChild(name);
+          row.addEventListener('click', function () {
+            try {
+              var installed = entry.installed ? entry : AgentPacks.installMarketplace(entry.id);
+              self.flash(
+                (installed.name || entry.name || entry.id) +
+                  ' ' +
+                  (installed.installMessage ||
+                    (entry.installed ? 'already installed' : 'installed')),
+              );
+              self._renderSettingsMarketplace();
+            } catch (e) {
+              self.flash('marketplace install failed: ' + (e.message || e), true);
+            }
+          });
+          self.settingsMarketplaceEl.appendChild(row);
+        })(group[i]);
+      }
+    }
   };
 
   /** Populate the providers registry section. Replaces the contents of `settingsHeaderEl.left`
@@ -1538,20 +1903,21 @@
       this.settingsProviderSearchInput.addEventListener('input', this._onProviderSearchInput);
     }
 
-    if (this.settingsProviderSearchInput.parentNode !== this.settingsScrollEl) {
-      this.settingsScrollEl.insertBefore(
-        this.settingsProviderSearchInput,
-        this.settingsHeaderEl.nextSibling,
-      );
+    var providerHost =
+      this.settingsSections && this.settingsSections.models
+        ? this.settingsSections.models
+        : this.settingsScrollEl;
+    if (this.settingsProviderSearchInput.parentNode !== providerHost) {
+      providerHost.insertBefore(this.settingsProviderSearchInput, providerHost.firstChild);
     }
-    if (this.settingsProviderStatusEl.parentNode !== this.settingsScrollEl) {
-      this.settingsScrollEl.insertBefore(
+    if (this.settingsProviderStatusEl.parentNode !== providerHost) {
+      providerHost.insertBefore(
         this.settingsProviderStatusEl,
         this.settingsProviderSearchInput.nextSibling,
       );
     }
-    if (this.settingsProvidersEl.parentNode !== this.settingsScrollEl) {
-      this.settingsScrollEl.insertBefore(
+    if (this.settingsProvidersEl.parentNode !== providerHost) {
+      providerHost.insertBefore(
         this.settingsProvidersEl,
         this.settingsProviderStatusEl.nextSibling,
       );
@@ -1773,6 +2139,47 @@
       if (this.running && this.ready) this.reindexBtn.removeAttribute('disabled');
       else this.reindexBtn.setAttribute('disabled', 'disabled');
     }
+    this._syncDrawerButtons();
+  };
+
+  ChatPanel.prototype._syncDrawerButtons = function () {
+    if (this.diagnosticsBtn) {
+      this.diagnosticsBtn.classList.toggle('is-active', !!this.diagnosticsOpen);
+      this.diagnosticsBtn.setAttribute('aria-expanded', this.diagnosticsOpen ? 'true' : 'false');
+      this.diagnosticsBtn.title = this.diagnosticsOpen
+        ? 'Hide ChatGML diagnostics'
+        : 'Show ChatGML diagnostics';
+    }
+    if (this.knowledgeBtn) {
+      this.knowledgeBtn.classList.toggle('is-active', !!this.knowledgeOpen);
+      this.knowledgeBtn.setAttribute('aria-expanded', this.knowledgeOpen ? 'true' : 'false');
+      this.knowledgeBtn.title = this.knowledgeOpen ? 'Hide knowledge map' : 'Show knowledge map';
+    }
+  };
+
+  ChatPanel.prototype._showSettingsSection = function (id) {
+    if (!this.settingsSections) return;
+    var keys = Object.keys(this.settingsSections);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      var open = key === id;
+      this.settingsSections[key].style.display = open ? 'flex' : 'none';
+      if (this.settingsTabButtons && this.settingsTabButtons[key]) {
+        this.settingsTabButtons[key].classList.toggle('is-active', open);
+        this.settingsTabButtons[key].setAttribute('aria-selected', open ? 'true' : 'false');
+      }
+    }
+  };
+
+  ChatPanel.prototype._revealDrawer = function (el) {
+    if (!el || el.style.display === 'none' || typeof el.scrollIntoView !== 'function') return;
+    setTimeout(function () {
+      try {
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } catch (e) {
+        el.scrollIntoView(false);
+      }
+    }, 0);
   };
 
   /**
@@ -2654,10 +3061,11 @@
       ['gmloop', snap.gmloop || '(not checked)'],
       ['gmloop dir', snap.gmloopDir || '(none)'],
       ['gmloop runner', snap.gmloopRunner || '(none)'],
+      ['companions', snap.companionPlugins || '(not checked)'],
       ['env file', snap.envFile || '(default)'],
       ['auth', snap.authState || 'missing'],
       ['auth source', snap.authSource || '(none)'],
-      ['last error', snap.lastError || '(none)'],
+      ['last error', snap.lastError || snap.error || '(none)'],
     ];
     for (var i = 0; i < rows.length; i++) {
       var row = document.createElement('div');
@@ -2678,6 +3086,13 @@
       pre.className = 'chatgml-diagnostics-log';
       pre.textContent = sanitizeDiagnosticText(logs.slice(-12).join('\n'));
       this.diagnosticsBodyEl.appendChild(pre);
+    } else {
+      var empty = document.createElement('div');
+      empty.className = 'chatgml-diagnostics-empty';
+      empty.textContent = snap.error
+        ? sanitizeDiagnosticText(snap.error)
+        : 'No recent plugin logs.';
+      this.diagnosticsBodyEl.appendChild(empty);
     }
   };
 
@@ -2706,6 +3121,19 @@
       ['tools', s.catalog ? s.catalog.length : 0],
       ['checkpoints', (s.checkpoints || []).length],
       ['sessions', this._sessionsData ? this._sessionsData.length : 0],
+      [
+        'market',
+        (function () {
+          try {
+            var items = AgentPacks.listMarketplace();
+            var count = 0;
+            for (var mi = 0; mi < items.length; mi++) if (items[mi].installed) count++;
+            return count + '/' + items.length;
+          } catch (e) {
+            return 'n/a';
+          }
+        })(),
+      ],
     ];
     for (var i = 0; i < statRows.length; i++) {
       var stat = document.createElement('div');
@@ -2848,7 +3276,8 @@
     var prompt = usage.promptTokens || usage.prompt_tokens;
     var completion = usage.completionTokens || usage.completion_tokens;
     if (total) return 'usage: ' + total + ' tokens';
-    if (prompt || completion) return 'usage: ' + (prompt || 0) + ' in / ' + (completion || 0) + ' out';
+    if (prompt || completion)
+      return 'usage: ' + (prompt || 0) + ' in / ' + (completion || 0) + ' out';
     return 'usage: not reported';
   }
 
@@ -2856,8 +3285,10 @@
     var src = summary || ctx;
     if (!src || typeof src !== 'object') return '';
     var parts = [];
-    if (src.openFile) parts.push(String(src.openFile) + (src.cursorLine ? ':' + src.cursorLine : ''));
-    if (src.hasSelection || (ctx && ctx.selection && String(ctx.selection).trim() !== '')) parts.push('selection');
+    if (src.openFile)
+      parts.push(String(src.openFile) + (src.cursorLine ? ':' + src.cursorLine : ''));
+    if (src.hasSelection || (ctx && ctx.selection && String(ctx.selection).trim() !== ''))
+      parts.push('selection');
     var mentionCount = src.mentionCount || (ctx && ctx.mentions ? ctx.mentions.length : 0);
     if (mentionCount) parts.push('@' + mentionCount);
     if (src.approxChars) parts.push('~' + Math.ceil(src.approxChars / 1000) + 'k chars');
@@ -2867,12 +3298,21 @@
   function turnMetaText(turn) {
     var parts = [];
     var model = turn.model || '';
-    if (turn.provider || model) parts.push('model: ' + [turn.provider, model].filter(Boolean).join(' / '));
+    if (turn.provider || model)
+      parts.push('model: ' + [turn.provider, model].filter(Boolean).join(' / '));
     var ctx = contextLabel(turn.context, turn.contextSummary);
     if (ctx) parts.push(ctx);
     var timeline = turn.toolTimeline || [];
     if (timeline.length) {
-      parts.push('tools: ' + timeline.slice(0, 4).map(function (t) { return t.name; }).join(', '));
+      parts.push(
+        'tools: ' +
+          timeline
+            .slice(0, 4)
+            .map(function (t) {
+              return t.name;
+            })
+            .join(', '),
+      );
     } else if (turn.toolsUsed && turn.toolsUsed.length) {
       parts.push('tools: ' + turn.toolsUsed.slice(0, 4).join(', '));
     }
@@ -2906,9 +3346,16 @@
     var ctx = turn.context || {};
     var summary = turn.contextSummary || {};
     if (summary.openFile || ctx.openFile) {
-      ctxLines.push('file: ' + (summary.openFile || ctx.openFile) + ((summary.cursorLine || ctx.cursorLine) ? ':' + (summary.cursorLine || ctx.cursorLine) : ''));
+      ctxLines.push(
+        'file: ' +
+          (summary.openFile || ctx.openFile) +
+          (summary.cursorLine || ctx.cursorLine
+            ? ':' + (summary.cursorLine || ctx.cursorLine)
+            : ''),
+      );
     }
-    if (summary.hasSelection || (ctx.selection && String(ctx.selection).trim() !== '')) ctxLines.push('selection: attached');
+    if (summary.hasSelection || (ctx.selection && String(ctx.selection).trim() !== ''))
+      ctxLines.push('selection: attached');
     var mentionCount = summary.mentionCount || (ctx.mentions ? ctx.mentions.length : 0);
     if (mentionCount) ctxLines.push('mentions: ' + mentionCount);
     if (summary.approxChars) ctxLines.push('budget: ~' + summary.approxChars + ' chars');
@@ -2925,7 +3372,9 @@
       toolLines.push(label);
     }
     if (toolLines.length === 0 && turn.toolsUsed && turn.toolsUsed.length) {
-      toolLines = turn.toolsUsed.map(function (name) { return name; });
+      toolLines = turn.toolsUsed.map(function (name) {
+        return name;
+      });
     }
     appendDetail(parent, 'Tool calls', toolLines);
 
@@ -2936,11 +3385,15 @@
     }
     appendDetail(parent, 'Sources', sourceLines);
 
-    appendDetail(parent, 'Usage', [
-      usageLabel(turn.usage),
-      turn.model ? 'model: ' + turn.model : '',
-      turn.provider ? 'provider: ' + turn.provider : '',
-    ].filter(Boolean));
+    appendDetail(
+      parent,
+      'Usage',
+      [
+        usageLabel(turn.usage),
+        turn.model ? 'model: ' + turn.model : '',
+        turn.provider ? 'provider: ' + turn.provider : '',
+      ].filter(Boolean),
+    );
   }
 
   function capabilityPrompt(tool) {
@@ -2968,7 +3421,8 @@
       var t = catalog[i];
       if (t.kind === 'mcp') byTitle['MCP servers'].items.push(t);
       else if (t.name === 'gmedit_plugins') byTitle['GMEdit tools'].items.push(t);
-      else if (t.name === 'gmloop_check' || t.name === 'gmloop_control') byTitle.GMLoop.items.push(t);
+      else if (t.name === 'gmloop_check' || t.name === 'gmloop_control')
+        byTitle.GMLoop.items.push(t);
       else byTitle['Core tools'].items.push(t);
     }
     try {
@@ -2996,8 +3450,7 @@
         return a.status === 'running' || a.status === 'waiting';
       });
     var hasVisibleModelWork =
-      (s.answer != null && String(s.answer).length > 0) ||
-      hasRunningActivity;
+      (s.answer != null && String(s.answer).length > 0) || hasRunningActivity;
     var phaseDetail = s.phaseDetail ? String(s.phaseDetail) : '';
     var displayPhase =
       this.running && s.busy && hasQueuedTurn && !hasVisibleModelWork && !phaseDetail
@@ -3139,13 +3592,20 @@
       !hasVisibleModelWork
     ) {
       const thinkingRow = document.createElement('div');
-      thinkingRow.className = 'chatgml-activity-row chatgml-activity-phase chatgml-activity-thinking';
+      thinkingRow.className =
+        'chatgml-activity-row chatgml-activity-phase chatgml-activity-thinking';
       const thinkingHeader = document.createElement('span');
       thinkingHeader.className = 'chatgml-activity-header';
       thinkingHeader.textContent = 'thinking: waiting for model response';
       thinkingRow.appendChild(thinkingHeader);
       this.activityEl.appendChild(thinkingRow);
-    } else if (inlineActivity.length === 0 && this.running && s.busy && s.phase && s.phase !== 'idle') {
+    } else if (
+      inlineActivity.length === 0 &&
+      this.running &&
+      s.busy &&
+      s.phase &&
+      s.phase !== 'idle'
+    ) {
       const phaseRow = document.createElement('div');
       phaseRow.className = 'chatgml-activity-row chatgml-activity-phase';
       const phaseHeader = document.createElement('span');
@@ -3291,8 +3751,7 @@
               t.kind === 'skill' ||
               t.kind === 'plugin' ||
               t.kind === 'provider';
-            kind.textContent =
-              isMarketplace ? (t.installed ? 'installed' : 'install') : t.kind;
+            kind.textContent = isMarketplace ? (t.installed ? 'installed' : 'install') : t.kind;
             const name = document.createElement('span');
             name.textContent = t.name;
             if (t.kind === 'mcp') {
@@ -3335,6 +3794,7 @@
     this._renderContextChip();
     this._renderDiagnostics();
     this._renderKnowledge();
+    this._syncDrawerButtons();
 
     // Trim notice: shown only when the reducer's eviction counters are > 0. We render a single
     // composed sentence ("⚠ Showing last N turns (X trimmed from earlier history)" + an
@@ -3393,7 +3853,8 @@
       this._resetTranscriptDom();
     }
     var oldEmptyState = this.transcriptEl.querySelector('.chatgml-empty-state');
-    if (oldEmptyState && oldEmptyState.parentNode) oldEmptyState.parentNode.removeChild(oldEmptyState);
+    if (oldEmptyState && oldEmptyState.parentNode)
+      oldEmptyState.parentNode.removeChild(oldEmptyState);
     if (turns.length > 0 || hasStreamingAnswer) {
       var oldLegacy = this.transcriptEl.querySelector('.chatgml-transcript-legacy');
       if (oldLegacy && oldLegacy.parentNode) oldLegacy.parentNode.removeChild(oldLegacy);
@@ -3715,7 +4176,11 @@
         this.errorDetailsEl.style.display = '';
         var authError = /HTTP\s+401|unauthorized/i.test(errText);
         var providerBusy = /HTTP\s+429|overload|rate.?limit|too many requests/i.test(errText);
-        var prefix = authError ? 'Auth error: ' : providerBusy ? 'Provider overloaded: ' : 'Error: ';
+        var prefix = authError
+          ? 'Auth error: '
+          : providerBusy
+            ? 'Provider overloaded: '
+            : 'Error: ';
         this.errorSummaryEl.textContent =
           prefix + (errText.length > 96 ? errText.slice(0, 96) + '...' : errText);
         this.errorBodyEl.textContent = errText;

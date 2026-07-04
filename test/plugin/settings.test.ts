@@ -36,6 +36,7 @@ const SettingsTasks = require(path.join(PLUGIN, 'settings-tasks.js')) as {
   apiKeyDisplayPlaceholder: (redacted: string | undefined) => string;
   hasApiKey: (redacted: string | undefined) => boolean;
   providerDerivedCommands: (settings: Record<string, unknown>) => Array<[string, string]>;
+  mcpCommandsFromJson: (json: string) => Array<[string, string]>;
   API_KEY_PLACEHOLDER: string;
 };
 
@@ -139,6 +140,67 @@ describe('plugin/settings-tasks.js — settings save plan (audit gaps #12 + #13)
     );
     expect(plan.commands).toEqual([]);
     expect(plan.scope).toBeNull();
+  });
+
+  it('buildSettingsCommands: exposes advanced config fields without raw secret echo', () => {
+    const plan = SettingsTasks.buildSettingsCommands({
+      temperature: '0.4',
+      maxTokens: '8192',
+      embedApiKey: 'env:EMBED_KEY',
+      embedBatchSize: '32',
+      memoryProvider: 'hippo',
+      memoryHippoUrl: 'http://127.0.0.1:7077',
+      memoryHippoKey: 'env:HIPPO_KEY',
+      indexChunkSize: '1000',
+      indexChunkOverlap: '100',
+      indexRoot: 'objects',
+      searchMinScore: '0.25',
+      toolApproval: { execute_command: 'auto', apply_patch: 'gated' },
+      tiers: {
+        planner: { apiKey: 'env:PLANNER_KEY', temperature: '0.1', maxTokens: '4096' },
+      },
+    });
+
+    expect(plan.commands).toEqual([
+      ['chat.temperature', '0.4'],
+      ['chat.maxTokens', '8192'],
+      ['embed.apiKey', 'env:EMBED_KEY'],
+      ['embed.batchSize', '32'],
+      ['memory.provider', 'hippo'],
+      ['memory.hippo.url', 'http://127.0.0.1:7077'],
+      ['memory.hippo.key', 'env:HIPPO_KEY'],
+      ['index.chunkSize', '1000'],
+      ['index.chunkOverlap', '100'],
+      ['index.root', 'objects'],
+      ['search.minScore', '0.25'],
+      ['toolApproval.apply_patch', 'gated'],
+      ['toolApproval.execute_command', 'auto'],
+      ['tiers.planner.apiKey', 'env:PLANNER_KEY'],
+      ['tiers.planner.temperature', '0.1'],
+      ['tiers.planner.maxTokens', '4096'],
+    ]);
+  });
+
+  it('mcpCommandsFromJson: writes per-server leaves and skips redacted env values', () => {
+    expect(
+      SettingsTasks.mcpCommandsFromJson(
+        JSON.stringify({
+          fs: {
+            command: 'npx',
+            args: ['-y', 'server'],
+            env: { ROOT: '/tmp', TOKEN: '***' },
+            timeout: 60000,
+            disabled: false,
+          },
+        }),
+      ),
+    ).toEqual([
+      ['mcpServers.fs.command', 'npx'],
+      ['mcpServers.fs.args', '["-y","server"]'],
+      ['mcpServers.fs.timeout', '60000'],
+      ['mcpServers.fs.disabled', 'false'],
+      ['mcpServers.fs.env.ROOT', '/tmp'],
+    ]);
   });
 
   it('buildSettingsCommands: scope is a plugin pref (separate from `commands`)', () => {

@@ -45,4 +45,26 @@ describe('GMEdit/GMLoop tools', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('gmloop_check status honors CHATGML_GMLOOP_DIR', async () => {
+    const root = tmpDir();
+    const gmloop = tmpDir();
+    const old = process.env.CHATGML_GMLOOP_DIR;
+    try {
+      const cli = path.join(gmloop, 'src', 'cli', 'dist');
+      fs.mkdirSync(cli, { recursive: true });
+      fs.writeFileSync(path.join(cli, 'index.js'), 'console.log("fake gmloop")\n');
+      process.env.CHATGML_GMLOOP_DIR = gmloop;
+      const { ctx } = makeToolContext({ root });
+      const res = await dispatchTool(buildToolRegistry(), 'gmloop_check', '{}', ctx);
+      expect(res.ok).toBe(true);
+      expect(res.content).toContain('GMLoop ready');
+      expect(res.content).toContain(gmloop);
+    } finally {
+      if (old === undefined) delete process.env.CHATGML_GMLOOP_DIR;
+      else process.env.CHATGML_GMLOOP_DIR = old;
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(gmloop, { recursive: true, force: true });
+    }
+  });
 });

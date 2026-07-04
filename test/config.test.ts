@@ -8,6 +8,7 @@ import {
   redact,
   ConfigError,
   DEFAULTS,
+  SETTABLE_FIELD_NAMES,
   configFilePaths,
   setUserGlobalConfigField,
   userGlobalConfigPath,
@@ -685,6 +686,17 @@ describe('setUserGlobalConfigField (durable config set)', () => {
     const written = JSON.parse(readFileSync(res.filePath, 'utf8'));
     expect(written.index.chunkSize).toBe(4096);
     expect(typeof written.index.chunkSize).toBe('number');
+  });
+
+  it('persists numeric tier fields and documents tool approval paths', () => {
+    const h = harness();
+    const env = { XDG_CONFIG_HOME: h.xdg };
+    setUserGlobalConfigField('tiers.planner.temperature', '0.3', env);
+    setUserGlobalConfigField('tiers.planner.maxTokens', '4096', env);
+    const written = JSON.parse(readFileSync(userGlobalConfigPath(env), 'utf8'));
+    expect(written.tiers.planner.temperature).toBe(0.3);
+    expect(written.tiers.planner.maxTokens).toBe(4096);
+    expect(SETTABLE_FIELD_NAMES).toContain('toolApproval.<tool>');
   });
 
   it('rejects a non-numeric value for a numeric field', () => {

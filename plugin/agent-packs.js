@@ -71,15 +71,26 @@
       id: 'chatgml-gmloop',
       name: 'GMLoop companion',
       kind: 'plugin',
+      folder: 'plugin-gmloop',
       description: 'GMEdit context-menu companion for GMLoop and GMLive checks.',
-      prompt: 'Use the GMLoop companion plugin for lint, format-check, live reload, and runner checks.',
+      prompt:
+        'Use the GMLoop companion plugin for lint, format-check, live reload, and runner checks.',
     },
     {
       id: 'chatgml-inline',
       name: 'Inline edit companion',
       kind: 'plugin',
+      folder: 'plugin-inline',
       description: 'GMEdit inline edit/review companion.',
       prompt: 'Use the inline companion flow for small selected-code edits.',
+    },
+    {
+      id: 'chatgml-explain',
+      name: 'Explain companion',
+      kind: 'plugin',
+      folder: 'plugin-explain',
+      description: 'GMEdit selected-code explanation companion.',
+      prompt: 'Use the explain companion flow for selected GameMaker code.',
     },
   ];
 
@@ -97,7 +108,8 @@
         auth: 'bearer',
         models: [{ id: 'kimi-for-coding' }],
       },
-      prompt: 'Use the Kimi Code provider: model kimi-for-coding at https://api.kimi.com/coding/v1.',
+      prompt:
+        'Use the Kimi Code provider: model kimi-for-coding at https://api.kimi.com/coding/v1.',
     },
     {
       id: 'provider-openrouter-minimax-m3',
@@ -112,14 +124,16 @@
         auth: 'bearer',
         models: [{ id: 'minimax/minimax-m3' }],
       },
-      prompt: 'Use OpenRouter MiniMax M3: model minimax/minimax-m3 via https://openrouter.ai/api/v1.',
+      prompt:
+        'Use OpenRouter MiniMax M3: model minimax/minimax-m3 via https://openrouter.ai/api/v1.',
     },
   ];
 
   function configDir() {
     if (process.env.CHATGML_CONFIG_DIR) return process.env.CHATGML_CONFIG_DIR;
     if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'chatgml');
-    if (process.platform === 'win32' && process.env.APPDATA) return path.join(process.env.APPDATA, 'chatgml');
+    if (process.platform === 'win32' && process.env.APPDATA)
+      return path.join(process.env.APPDATA, 'chatgml');
     return path.join(os.homedir(), '.config', 'chatgml');
   }
 
@@ -132,6 +146,99 @@
     if (dir) return dir;
     if (kind === 'agent-pack') return userDir();
     return path.join(configDir(), 'marketplace', kind + 's');
+  }
+
+  function defaultPluginsDir() {
+    if (process.env.CHATGML_GMEDIT_PLUGINS_DIR) return process.env.CHATGML_GMEDIT_PLUGINS_DIR;
+    if (process.platform === 'win32') {
+      return path.join(
+        process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+        'AceGM',
+        'GMEdit',
+        'plugins',
+      );
+    }
+    if (process.platform === 'darwin') {
+      return path.join(
+        os.homedir(),
+        'Library',
+        'Application Support',
+        'AceGM',
+        'GMEdit',
+        'plugins',
+      );
+    }
+    return path.join(
+      process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+      'AceGM',
+      'GMEdit',
+      'plugins',
+    );
+  }
+
+  function bundledPluginSource(entry) {
+    const folder = entry.folder || entry.id;
+    const candidates = [
+      path.resolve(__dirname, '..', folder),
+      path.resolve(__dirname, '..', '..', folder),
+      path.resolve(process.cwd(), folder),
+    ];
+    for (let i = 0; i < candidates.length; i++) {
+      if (fs.existsSync(path.join(candidates[i], 'config.json'))) return candidates[i];
+    }
+    return '';
+  }
+
+  function pluginInstalled(entry, opts) {
+    const dir = (opts && opts.pluginsDir) || defaultPluginsDir();
+    return fs.existsSync(path.join(dir, entry.id, 'config.json'));
+  }
+
+  function copyDir(src, dest) {
+    fs.mkdirSync(dest, { recursive: true });
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+    for (let i = 0; i < entries.length; i++) {
+      const ent = entries[i];
+      const from = path.join(src, ent.name);
+      const to = path.join(dest, ent.name);
+      if (ent.isDirectory()) copyDir(from, to);
+      else if (ent.isFile()) fs.copyFileSync(from, to);
+    }
+  }
+
+  function sameRealPath(a, b) {
+    try {
+      return fs.realpathSync(a) === fs.realpathSync(b);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function installGmeditPlugin(entry, opts) {
+    const pluginsDir = (opts && opts.pluginsDir) || defaultPluginsDir();
+    const src = bundledPluginSource(entry);
+    if (!src) throw new Error('bundled plugin source not found: ' + (entry.folder || entry.id));
+    const dest = path.join(pluginsDir, entry.id);
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    if (fs.existsSync(dest)) {
+      if (!sameRealPath(src, dest) && !fs.existsSync(path.join(dest, 'config.json'))) {
+        throw new Error('target exists but is not a GMEdit plugin: ' + dest);
+      }
+      return Object.assign({}, entry, { installed: true, installMessage: 'already installed' });
+    }
+    try {
+      fs.symlinkSync(src, dest, process.platform === 'win32' ? 'junction' : 'dir');
+      return Object.assign({}, entry, {
+        installed: true,
+        installMessage: 'linked; restart GMEdit',
+      });
+    } catch (_) {
+      copyDir(src, dest);
+      return Object.assign({}, entry, {
+        installed: true,
+        installMessage: 'copied; restart GMEdit',
+      });
+    }
   }
 
   function packById(id) {
@@ -179,6 +286,7 @@
   }
 
   function hasManifest(entry, opts) {
+    if (entry.kind === 'plugin') return pluginInstalled(entry, opts);
     if (entry.kind === 'agent-pack') return !!installedIds(opts && opts.agentPacksDir)[entry.id];
     const base = manifestDir(entry.kind, opts && opts.manifestDir);
     return fs.existsSync(path.join(base, entry.id + '.json'));
@@ -199,7 +307,8 @@
 
   function listMarketplace(opts) {
     return marketplaceEntries().map(function (entry) {
-      const installed = entry.kind === 'provider' ? providerInstalled(entry, opts) : hasManifest(entry, opts);
+      const installed =
+        entry.kind === 'provider' ? providerInstalled(entry, opts) : hasManifest(entry, opts);
       return Object.assign({}, entry, { installed: installed });
     });
   }
@@ -250,10 +359,13 @@
     const entry = marketplaceById(id);
     if (!entry) throw new Error('unknown marketplace entry: ' + id);
     if (entry.kind === 'agent-pack') return installPack(id, opts && opts.agentPacksDir);
+    if (entry.kind === 'plugin') return installGmeditPlugin(entry, opts);
     if (entry.kind === 'provider') {
       const p =
         (opts && opts.providersPath) ||
-        Providers.defaultChatgmlProvidersPath(opts && opts.configDir ? opts.configDir : configDir());
+        Providers.defaultChatgmlProvidersPath(
+          opts && opts.configDir ? opts.configDir : configDir(),
+        );
       const provider = entry.provider || {};
       const result = Providers.registerProvider({
         chatgmlPath: p,
@@ -281,6 +393,7 @@
     listPacks,
     installPack,
     installedIds,
+    defaultPluginsDir,
     listMarketplace,
     installMarketplace,
   };

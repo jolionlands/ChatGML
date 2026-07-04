@@ -18,7 +18,9 @@
   }
 
   function findOnPath(name) {
-    const parts = (process.env.PATH || '').split(path.delimiter);
+    const parts = (process.env.PATH || process.env.Path || process.env.path || '').split(
+      path.delimiter,
+    );
     const suffixes = process.platform === 'win32' ? ['', '.cmd', '.exe', '.bat'] : [''];
     for (let i = 0; i < parts.length; i++) {
       for (let j = 0; j < suffixes.length; j++) {
@@ -29,6 +31,13 @@
     return '';
   }
 
+  function wrapCmdForWindows(cmd, argv) {
+    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd)) {
+      return { cmd: 'cmd.exe', argv: ['/c', cmd].concat(argv) };
+    }
+    return { cmd: cmd, argv: argv };
+  }
+
   function runner() {
     const configured = process.env.CHATGML_GMLOOP_BIN || '';
     if (existsFile(configured)) {
@@ -36,6 +45,12 @@
         ? { cmd: 'node', prefix: [configured], label: configured }
         : { cmd: configured, prefix: [], label: configured };
     }
+    const configuredDir = process.env.CHATGML_GMLOOP_DIR || '';
+    const configuredCli = configuredDir
+      ? path.join(configuredDir, 'src', 'cli', 'dist', 'index.js')
+      : '';
+    if (existsFile(configuredCli))
+      return { cmd: 'node', prefix: [configuredCli], label: configuredCli };
     const onPath = findOnPath('gmloop');
     if (onPath) return { cmd: onPath, prefix: [], label: onPath };
     const sibling = path.resolve(__dirname, '..', '..', 'GMLoop', 'src', 'cli', 'dist', 'index.js');
@@ -71,7 +86,8 @@
     if (!dir) return show('Open a GameMaker project first.');
     const r = runner();
     if (!r.cmd) return show('GMLoop not found. Set CHATGML_GMLOOP_BIN or put gmloop on PATH.');
-    const proc = spawn(r.cmd, r.prefix.concat(argv), {
+    const wrapped = wrapCmdForWindows(r.cmd, r.prefix.concat(argv));
+    const proc = spawn(wrapped.cmd, wrapped.argv, {
       cwd: dir,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -142,9 +158,20 @@
     addMenuItem(menu, 3, 'GMLoop: live reload status', 'chatgml-gmloop-live-status', function () {
       runProject('GMLoop live reload status', ['live-reload', 'status', '--path', '$PROJECT']);
     });
-    addMenuItem(menu, 4, 'GMLoop: discover live reload', 'chatgml-gmloop-live-discover', function () {
-      runProject('GMLoop live reload discover', ['live-reload', 'discover', '--path', '$PROJECT']);
-    });
+    addMenuItem(
+      menu,
+      4,
+      'GMLoop: discover live reload',
+      'chatgml-gmloop-live-discover',
+      function () {
+        runProject('GMLoop live reload discover', [
+          'live-reload',
+          'discover',
+          '--path',
+          '$PROJECT',
+        ]);
+      },
+    );
     addMenuItem(menu, 5, 'GMLoop: prepare live reload', 'chatgml-gmloop-live-prepare', function () {
       runProject('GMLoop live reload prepare', ['live-reload', 'prepare']);
     });

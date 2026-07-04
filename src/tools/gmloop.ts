@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { defineTool, ToolError } from '../tool-error.js';
 import type { ToolDef, ToolContext, ToolResult } from '../types.js';
@@ -26,7 +27,9 @@ const GmloopArgs = z.object({
     .optional()
     .describe('Read-only GMLoop action.'),
   path: z.string().optional().describe('Project-relative file/folder path for lint/format/parse.'),
-  endpoint: LiveEndpoint.optional().describe('live_status endpoint: status, health, ping, or ready.'),
+  endpoint: LiveEndpoint.optional().describe(
+    'live_status endpoint: status, health, ping, or ready.',
+  ),
   logKind: z.enum(['runtime', 'compile', 'all']).optional().describe('runner_logs kind.'),
   errorsOnly: z.boolean().optional().describe('Only show runner error logs.'),
   filter: z.string().optional().describe('Substring filter for runner_logs.'),
@@ -47,7 +50,10 @@ const GmloopControlArgs = z.object({
       'runner_clear_logs',
     ])
     .describe('GMLoop command action that can start/stop/build runtime state.'),
-  path: z.string().optional().describe('Project-relative project root, .yyp, file, or folder path.'),
+  path: z
+    .string()
+    .optional()
+    .describe('Project-relative project root, .yyp, file, or folder path.'),
   debug: z.boolean().optional().describe('Start runner in debug mode when action is runner_start.'),
 });
 type GmloopControlArgs = z.infer<typeof GmloopControlArgs>;
@@ -68,7 +74,9 @@ function fileExists(p: string): boolean {
 }
 
 function findOnPath(name: string): string {
-  const parts = (process.env.PATH || '').split(path.delimiter);
+  const parts = (process.env.PATH || process.env.Path || process.env.path || '').split(
+    path.delimiter,
+  );
   const suffixes = process.platform === 'win32' ? ['', '.cmd', '.exe', '.bat'] : [''];
   for (const dir of parts) {
     for (const ext of suffixes) {
@@ -79,6 +87,18 @@ function findOnPath(name: string): string {
   return '';
 }
 
+function chatgmlSiblingGmloopCli(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '..', '..', 'GMLoop', 'src', 'cli', 'dist', 'index.js');
+}
+
+function wrapCmdForWindows(cmd: string, argv: string[]): { cmd: string; argv: string[] } {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd)) {
+    return { cmd: 'cmd.exe', argv: ['/c', cmd].concat(argv) };
+  }
+  return { cmd, argv };
+}
+
 function runner(root: string): { cmd: string; prefix: string[]; label: string; setup?: string } {
   const configured = envValue('CHATGML_GMLOOP_BIN');
   if (configured && fileExists(configured)) {
@@ -86,9 +106,18 @@ function runner(root: string): { cmd: string; prefix: string[]; label: string; s
       ? { cmd: 'node', prefix: [configured], label: `node ${configured}` }
       : { cmd: configured, prefix: [], label: configured };
   }
+  const configuredDir = envValue('CHATGML_GMLOOP_DIR');
+  const configuredCli = configuredDir
+    ? path.join(configuredDir, 'src', 'cli', 'dist', 'index.js')
+    : '';
+  if (configuredCli && fileExists(configuredCli)) {
+    return { cmd: 'node', prefix: [configuredCli], label: `node ${configuredCli}` };
+  }
   const onPath = findOnPath('gmloop');
   if (onPath) return { cmd: onPath, prefix: [], label: onPath };
-  const sibling = path.resolve(root, '..', 'GMLoop', 'src', 'cli', 'dist', 'index.js');
+  const sibling = fileExists(chatgmlSiblingGmloopCli())
+    ? chatgmlSiblingGmloopCli()
+    : path.resolve(root, '..', 'GMLoop', 'src', 'cli', 'dist', 'index.js');
   if (fileExists(sibling)) return { cmd: 'node', prefix: [sibling], label: `node ${sibling}` };
   return { cmd: '', prefix: [], label: '', setup: 'Set CHATGML_GMLOOP_BIN or put gmloop on PATH.' };
 }
@@ -124,7 +153,11 @@ function argvFor(action: GmloopAction, target: string, args: GmloopArgs): string
   return [];
 }
 
-function controlArgvFor(action: GmloopControlAction, target: string, args: GmloopControlArgs): string[] {
+function controlArgvFor(
+  action: GmloopControlAction,
+  target: string,
+  args: GmloopControlArgs,
+): string[] {
   if (action === 'live_prepare') return ['live-reload', 'prepare'];
   if (action === 'live_build') return ['live-reload', 'build', target];
   if (action === 'runner_start') {
@@ -150,7 +183,12 @@ async function runGmloop(
   if (!r.cmd) throw new ToolError('provider_error', `GMLoop not found. ${r.setup}`);
   const fullArgv = r.prefix.concat(argv);
   return new Promise<ToolResult>((resolve, reject) => {
-    const proc = spawn(r.cmd, fullArgv, { cwd: ctx.root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const wrapped = wrapCmdForWindows(r.cmd, fullArgv);
+    const proc = spawn(wrapped.cmd, wrapped.argv, {
+      cwd: ctx.root,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const chunks: string[] = [];
     const timer = setTimeout(() => {
       proc.kill();

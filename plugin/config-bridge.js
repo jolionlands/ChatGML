@@ -11,6 +11,7 @@
   const fs = require('fs');
   const path = require('path');
   const ChildProcess = root.ChatGmlChildProcess || require('./child-process.js');
+  const SettingsTasks = root.ChatGmlSettingsTasks || require('./settings-tasks.js');
 
   // Simple persisted prefs in the plugin dir (GMEdit Preferences UI also edits these).
   function ConfigBridge(pluginDir) {
@@ -84,10 +85,12 @@
     const normalized = JSON.stringify(parsed, null, 2);
     this.prefs.mcpServers = normalized;
     this._save();
-    const self = this;
-    this.setConfigField('mcpServers', normalized, function (err) {
-      if (err) console.warn('chatgml: could not set mcpServers', err);
-    });
+    const commands = SettingsTasks.mcpCommandsFromJson(normalized);
+    for (let i = 0; i < commands.length; i++) {
+      this.setConfigField(commands[i][0], commands[i][1], function (err) {
+        if (err) console.warn('chatgml: could not set ' + commands[i][0], err);
+      });
+    }
   };
 
   ConfigBridge.prototype.getApprovalPolicy = function () {
