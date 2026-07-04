@@ -17,6 +17,9 @@ describe('buildToolRegistry', () => {
     expect(reg.has('search_code')).toBe(true);
     expect(reg.has('graph_neighbors')).toBe(true);
     expect(reg.has('temporal_query')).toBe(true);
+    expect(reg.has('gmedit_plugins')).toBe(true);
+    expect(reg.has('gmloop_check')).toBe(true);
+    expect(reg.has('gmloop_control')).toBe(true);
   });
 
   it('omits apply_patch, search_replace and execute_command when readOnly', () => {
@@ -24,6 +27,7 @@ describe('buildToolRegistry', () => {
     expect(reg.has('apply_patch')).toBe(false);
     expect(reg.has('search_replace')).toBe(false);
     expect(reg.has('execute_command')).toBe(false);
+    expect(reg.has('gmloop_control')).toBe(false);
     expect(reg.has('glob')).toBe(true);
   });
 });
@@ -38,6 +42,9 @@ describe('toOpenAiToolSpecs', () => {
         'apply_patch',
         'execute_command',
         'glob',
+        'gmedit_plugins',
+        'gmloop_check',
+        'gmloop_control',
         'graph_neighbors',
         'grep',
         'read_file',

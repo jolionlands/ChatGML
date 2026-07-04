@@ -126,6 +126,24 @@ export interface Usage {
   totalTokens?: number;
 }
 
+export interface ContextSummary {
+  openFile?: string;
+  cursorLine?: number;
+  hasSelection?: boolean;
+  mentionCount?: number;
+  approxChars?: number;
+}
+
+export interface ToolUseSummary {
+  name: string;
+  kind: Tool['kind'] | 'tool';
+  status: 'running' | 'ok' | 'error' | 'waiting';
+  server?: string;
+  argsPreview?: string;
+  outputPreview?: string;
+  citations?: Citation[];
+}
+
 // THE single outbound NDJSON union.
 export type AgentEvent =
   | {
@@ -187,6 +205,10 @@ export type AgentEvent =
       tier?: TierName | null;
       usage?: Usage;
       toolsUsed?: string[];
+      toolTimeline?: ToolUseSummary[];
+      contextSummary?: ContextSummary;
+      provider?: string;
+      model?: string;
       /**
        * Model thinking text for this turn (only set when the model emitted reasoning
        * content). Mirrored onto the panel via the `thinking` event right before this one.

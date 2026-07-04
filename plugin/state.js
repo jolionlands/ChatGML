@@ -402,6 +402,11 @@
           if (event.thinking) turn.thinking = event.thinking;
           if (event.usage) turn.usage = event.usage;
           if (event.toolsUsed && event.toolsUsed.length > 0) turn.toolsUsed = event.toolsUsed.slice();
+          if (event.toolTimeline && event.toolTimeline.length > 0)
+            turn.toolTimeline = event.toolTimeline.slice();
+          if (event.contextSummary) turn.contextSummary = event.contextSummary;
+          if (event.provider) turn.provider = event.provider;
+          if (event.model) turn.model = event.model;
           const capped = pushCapped(
             state.turns || [],
             turn,

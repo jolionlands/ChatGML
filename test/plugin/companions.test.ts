@@ -101,4 +101,24 @@ describe('companion plugin modules load as CommonJS', () => {
     // Belt-and-suspenders: the comment that used to introduce the hack should also be gone.
     expect(src).not.toMatch(/patch showOverlay's callbacks/i);
   });
+
+  it('plugin-gmloop registers a safe read-only GMEdit companion', () => {
+    const fs = require('node:fs');
+    const cfg = JSON.parse(fs.readFileSync(path.join(REPO, 'plugin-gmloop/config.json'), 'utf8'));
+    const src = fs.readFileSync(path.join(REPO, 'plugin-gmloop/gmloop.js'), 'utf8');
+    expect(cfg.name).toBe('chatgml-gmloop');
+    expect(src).toMatch(/PLUGIN_NAME\s*=\s*['"]chatgml-gmloop['"]/);
+    expect(src).toMatch(/GMEdit\.register\(PLUGIN_NAME/);
+    expect(src).toMatch(/GMLoop: lint current file/);
+    expect(src).toMatch(/GMLoop: format check current file/);
+    expect(src).toMatch(/GMLoop: graph doctor project/);
+    expect(src).toMatch(/GMLoop: live reload status/);
+    expect(src).toMatch(/GMLoop: runner start/);
+    expect(src).toMatch(/GMLoop: runner stop/);
+    expect(src).toMatch(/GMLive: toggle bridge/);
+    expect(src).toMatch(/window\.ChatGmlGmloop/);
+    expect(src).toMatch(/window\.ChatGmlGmlive/);
+    expect(src).toMatch(/shell:\s*false/);
+    expect(src).not.toMatch(/--write/);
+  });
 });

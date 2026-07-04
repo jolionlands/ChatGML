@@ -1,0 +1,5 @@
+{
+  "name": "chatgml-gmloop",
+  "description": "GMLoop and GMLive controls inside GMEdit: lint, format-check, live reload, and runner actions.",
+  "scripts": ["gmloop.js"]
+}

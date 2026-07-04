@@ -1851,9 +1851,40 @@
       { type: 'folder', label: 'folder', insert: 'folder ' },
       { type: 'problems', label: 'problems', insert: 'problems' },
       { type: 'terminal', label: 'terminal', insert: 'terminal' },
+      {
+        type: 'plugins',
+        label: 'GMEdit plugins',
+        action: function () {
+          self._insertCapabilityPrompt('Use gmedit_plugins to inspect installed GMEdit plugins.');
+        },
+      },
+      {
+        type: 'gmloop',
+        label: 'GMLoop status',
+        action: function () {
+          self._insertCapabilityPrompt('Use gmloop_check to check GMLoop status for this project.');
+        },
+      },
       { type: 'url', label: 'url', insert: 'url ' },
       { type: 'image', label: 'image', insert: 'image ' },
     );
+    var lastSources = [];
+    var turns = (this.state && this.state.turns) || [];
+    for (var ti = turns.length - 1; ti >= 0; ti--) {
+      if (turns[ti].sources && turns[ti].sources.length) {
+        lastSources = turns[ti].sources;
+        break;
+      }
+    }
+    if (lastSources.length) {
+      items.push({
+        type: 'sources',
+        label: 'last answer sources',
+        action: function () {
+          self._insertCapabilityPrompt('Use the last answer sources as context.');
+        },
+      });
+    }
     this._mentionItems = items;
     this._mentionActiveIndex = 0;
     for (let i = 0; i < items.length; i++) {
@@ -1952,6 +1983,7 @@
 
   /** Render the file dropdown contents (called by _showFileMentionDropdown once files are ready). */
   ChatPanel.prototype._renderFileDropdown = function (matches, query) {
+    var self = this;
     this.mentionDropdownEl.innerHTML = '';
     this._mentionItems = matches.map(function (m) {
       return { type: 'file-result', label: m, insert: m + ' ' };
@@ -2022,7 +2054,9 @@
   /** Confirm the currently selected mention item. */
   ChatPanel.prototype._selectMentionItem = function () {
     if (!this._mentionItems || this._mentionItems.length === 0) return;
-    this._insertMention(this._mentionItems[this._mentionActiveIndex].insert);
+    var entry = this._mentionItems[this._mentionActiveIndex];
+    if (entry && typeof entry.action === 'function') entry.action();
+    else this._insertMention(entry && entry.insert ? entry.insert : '');
     this._hideMentionDropdown();
   };
 
@@ -2121,6 +2155,19 @@
     this._renderMentionChips();
   };
 
+  ChatPanel.prototype._insertCapabilityPrompt = function (text) {
+    if (!text) return;
+    var val = this.inputEl.value || '';
+    var prefix = val && !/\s$/.test(val) ? '\n' : '';
+    this.inputEl.value = val + prefix + text;
+    var pos = this.inputEl.value.length;
+    this.inputEl.selectionStart = pos;
+    this.inputEl.selectionEnd = pos;
+    this.inputEl.focus();
+    this._renderMentionChips();
+    this.flash('capability hint inserted');
+  };
+
   /** Render removable chips for each parsed mention above the textarea. */
   ChatPanel.prototype._renderMentionChips = function () {
     const self = this;
@@ -2131,8 +2178,10 @@
       return;
     }
     this.mentionRowEl.style.display = '';
+    var approx = 0;
     for (let i = 0; i < parsed.mentions.length; i++) {
       const m = parsed.mentions[i];
+      approx += (m.target ? String(m.target).length : String(m.type || '').length) + 120;
       const chip = document.createElement('span');
       chip.className = 'chatgml-mention-chip';
       const label = m.type + (m.target && m.target !== m.type ? ': ' + m.target : '');
@@ -2152,6 +2201,16 @@
       chip.appendChild(x);
       this.mentionRowEl.appendChild(chip);
     }
+    const budget = document.createElement('span');
+    budget.className = 'chatgml-mention-budget';
+    budget.textContent =
+      'context: ' +
+      parsed.mentions.length +
+      (parsed.mentions.length === 1 ? ' item' : ' items') +
+      ' / ~' +
+      Math.max(1, Math.ceil(approx / 1000)) +
+      'k chars';
+    this.mentionRowEl.appendChild(budget);
   };
 
   /** Remove the first mention line matching the given mention from the textarea. */
@@ -2774,36 +2833,157 @@
   };
 
   function usageLabel(usage) {
-    if (!usage || typeof usage !== 'object') return '';
+    if (!usage || typeof usage !== 'object') return 'usage: not reported';
     var total = usage.totalTokens || usage.total_tokens;
     var prompt = usage.promptTokens || usage.prompt_tokens;
     var completion = usage.completionTokens || usage.completion_tokens;
-    if (total) return 'tokens: ' + total;
-    if (prompt || completion) return 'tokens: ' + (prompt || 0) + '/' + (completion || 0);
-    return '';
+    if (total) return 'usage: ' + total + ' tokens';
+    if (prompt || completion) return 'usage: ' + (prompt || 0) + ' in / ' + (completion || 0) + ' out';
+    return 'usage: not reported';
   }
 
-  function contextLabel(ctx) {
-    if (!ctx || typeof ctx !== 'object') return '';
+  function contextLabel(ctx, summary) {
+    var src = summary || ctx;
+    if (!src || typeof src !== 'object') return '';
     var parts = [];
-    if (ctx.openFile) parts.push(String(ctx.openFile) + (ctx.cursorLine ? ':' + ctx.cursorLine : ''));
-    if (ctx.selection && String(ctx.selection).trim() !== '') parts.push('selection');
-    if (ctx.mentions && ctx.mentions.length) parts.push('@' + ctx.mentions.length);
+    if (src.openFile) parts.push(String(src.openFile) + (src.cursorLine ? ':' + src.cursorLine : ''));
+    if (src.hasSelection || (ctx && ctx.selection && String(ctx.selection).trim() !== '')) parts.push('selection');
+    var mentionCount = src.mentionCount || (ctx && ctx.mentions ? ctx.mentions.length : 0);
+    if (mentionCount) parts.push('@' + mentionCount);
+    if (src.approxChars) parts.push('~' + Math.ceil(src.approxChars / 1000) + 'k chars');
     return parts.length ? 'context: ' + parts.join(' + ') : '';
   }
 
   function turnMetaText(turn) {
     var parts = [];
-    var ctx = contextLabel(turn.context);
+    var model = turn.model || '';
+    if (turn.provider || model) parts.push('model: ' + [turn.provider, model].filter(Boolean).join(' / '));
+    var ctx = contextLabel(turn.context, turn.contextSummary);
     if (ctx) parts.push(ctx);
-    if (turn.toolsUsed && turn.toolsUsed.length) {
+    var timeline = turn.toolTimeline || [];
+    if (timeline.length) {
+      parts.push('tools: ' + timeline.slice(0, 4).map(function (t) { return t.name; }).join(', '));
+    } else if (turn.toolsUsed && turn.toolsUsed.length) {
       parts.push('tools: ' + turn.toolsUsed.slice(0, 4).join(', '));
     }
-    var usage = usageLabel(turn.usage);
-    if (usage) parts.push(usage);
+    parts.push(usageLabel(turn.usage));
     if (turn.sources && turn.sources.length) parts.push('sources: ' + turn.sources.length);
     if (turn.thinking) parts.push('thinking');
     return parts.join(' | ');
+  }
+
+  function appendDetail(parent, title, lines) {
+    if (!lines || lines.length === 0) return;
+    var details = document.createElement('details');
+    details.className = 'chatgml-turn-detail';
+    var summary = document.createElement('summary');
+    summary.textContent = title;
+    details.appendChild(summary);
+    var body = document.createElement('div');
+    body.className = 'chatgml-turn-detail-body';
+    for (var i = 0; i < lines.length; i++) {
+      var row = document.createElement('div');
+      row.className = 'chatgml-turn-detail-row';
+      row.textContent = lines[i];
+      body.appendChild(row);
+    }
+    details.appendChild(body);
+    parent.appendChild(details);
+  }
+
+  function renderTurnDetails(turn, parent) {
+    var ctxLines = [];
+    var ctx = turn.context || {};
+    var summary = turn.contextSummary || {};
+    if (summary.openFile || ctx.openFile) {
+      ctxLines.push('file: ' + (summary.openFile || ctx.openFile) + ((summary.cursorLine || ctx.cursorLine) ? ':' + (summary.cursorLine || ctx.cursorLine) : ''));
+    }
+    if (summary.hasSelection || (ctx.selection && String(ctx.selection).trim() !== '')) ctxLines.push('selection: attached');
+    var mentionCount = summary.mentionCount || (ctx.mentions ? ctx.mentions.length : 0);
+    if (mentionCount) ctxLines.push('mentions: ' + mentionCount);
+    if (summary.approxChars) ctxLines.push('budget: ~' + summary.approxChars + ' chars');
+    appendDetail(parent, 'Context used', ctxLines);
+
+    var toolLines = [];
+    var timeline = turn.toolTimeline || [];
+    for (var i = 0; i < timeline.length; i++) {
+      var t = timeline[i];
+      var label = t.name + ' - ' + t.status;
+      if (t.server) label += ' (' + t.server + ')';
+      if (t.argsPreview) label += ' args: ' + t.argsPreview;
+      if (t.outputPreview) label += ' -> ' + t.outputPreview;
+      toolLines.push(label);
+    }
+    if (toolLines.length === 0 && turn.toolsUsed && turn.toolsUsed.length) {
+      toolLines = turn.toolsUsed.map(function (name) { return name; });
+    }
+    appendDetail(parent, 'Tool calls', toolLines);
+
+    var sourceLines = [];
+    var sources = turn.sources || [];
+    for (var si = 0; si < sources.length; si++) {
+      sourceLines.push(sources[si].path || sources[si].snippet || '(memory)');
+    }
+    appendDetail(parent, 'Sources', sourceLines);
+
+    appendDetail(parent, 'Usage', [
+      usageLabel(turn.usage),
+      turn.model ? 'model: ' + turn.model : '',
+      turn.provider ? 'provider: ' + turn.provider : '',
+    ].filter(Boolean));
+  }
+
+  function capabilityPrompt(tool) {
+    if (!tool) return '';
+    if (tool.prompt) return tool.prompt;
+    var name = tool.name || '';
+    if (name === 'gmedit_plugins') return 'Use gmedit_plugins to inspect installed GMEdit plugins.';
+    if (name === 'gmloop_check') return 'Use gmloop_check to check GMLoop status for this project.';
+    if (name === 'gmloop_control') return 'Use gmloop_control for a safe GMLoop action.';
+    return name ? 'Use ' + name + ' for this task.' : '';
+  }
+
+  function groupCapabilities(catalog) {
+    var groups = [
+      { title: 'Core tools', items: [] },
+      { title: 'GMEdit tools', items: [] },
+      { title: 'GMLoop', items: [] },
+      { title: 'MCP servers', items: [] },
+      { title: 'Skills', items: [] },
+    ];
+    var byTitle = {};
+    for (var gi = 0; gi < groups.length; gi++) byTitle[groups[gi].title] = groups[gi];
+    catalog = catalog || [];
+    for (var i = 0; i < catalog.length; i++) {
+      var t = catalog[i];
+      if (t.kind === 'mcp') byTitle['MCP servers'].items.push(t);
+      else if (t.name === 'gmedit_plugins') byTitle['GMEdit tools'].items.push(t);
+      else if (t.name === 'gmloop_check' || t.name === 'gmloop_control') byTitle.GMLoop.items.push(t);
+      else byTitle['Core tools'].items.push(t);
+    }
+    byTitle.Skills.items.push(
+      {
+        name: 'Review current file',
+        kind: 'skill',
+        description: 'Review with current editor context.',
+        prompt: 'Review the current file and call out concrete bugs, risks, and fixes.',
+      },
+      {
+        name: 'Debug current event',
+        kind: 'skill',
+        description: 'Inspect the active GameMaker event.',
+        prompt: 'Debug the current GameMaker event using the attached file and selection.',
+      },
+      {
+        name: 'GMLoop diagnostics',
+        kind: 'skill',
+        description: 'Check GMLoop status and safe local checks.',
+        prompt: 'Use gmloop_check to inspect GMLoop status and suggest the next safe check.',
+      },
+    );
+    return groups.filter(function (g) {
+      return g.items.length > 0;
+    });
   }
 
   ChatPanel.prototype.render = function () {
@@ -3058,58 +3238,79 @@
       this.activityEl.appendChild(row);
     }
 
-    // Tool catalog.
+    // Capability catalog.
     this.catalogEl.innerHTML = '';
     if (s.catalog && s.catalog.length > 0) {
       const header = document.createElement('div');
       header.className = 'chatgml-tool-catalog-header';
       header.textContent =
-        (this.catalogOpen ? '▼ ' : '▶ ') + 'Available tools (' + s.catalog.length + ')';
+        (this.catalogOpen ? '▼ ' : '▶ ') + 'Capabilities (' + s.catalog.length + ')';
       header.addEventListener('click', function () {
         self.toggleCatalog();
       });
       this.catalogEl.appendChild(header);
       if (this.catalogOpen) {
-        for (let i = 0; i < s.catalog.length; i++) {
-          const t = s.catalog[i];
-          const row = document.createElement('div');
-          row.className = 'chatgml-tool-row';
-          const kind = document.createElement('span');
-          kind.className = 'chatgml-tool-kind chatgml-tool-kind-' + t.kind;
-          kind.textContent = t.kind;
-          const name = document.createElement('span');
-          name.textContent = t.name;
-          if (t.kind === 'mcp') {
-            const badge = document.createElement('span');
-            badge.className = 'chatgml-mcp-badge';
-            badge.textContent = 'MCP';
-            name.appendChild(badge);
-            if (t.server) {
-              const serverRow = document.createElement('span');
-              serverRow.className = 'chatgml-mcp-server-row';
-              serverRow.textContent = ' (' + t.server + ')';
-              name.appendChild(serverRow);
+        var groups = groupCapabilities(s.catalog);
+        for (let gi = 0; gi < groups.length; gi++) {
+          const group = groups[gi];
+          const groupEl = document.createElement('div');
+          groupEl.className = 'chatgml-capability-group';
+          const groupTitle = document.createElement('div');
+          groupTitle.className = 'chatgml-capability-title';
+          groupTitle.textContent = group.title;
+          groupEl.appendChild(groupTitle);
+          for (let i = 0; i < group.items.length; i++) {
+            const t = group.items[i];
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'chatgml-tool-row chatgml-capability-row';
+            row.title = capabilityPrompt(t);
+            row.addEventListener(
+              'click',
+              (function (entry) {
+                return function () {
+                  self._insertCapabilityPrompt(capabilityPrompt(entry));
+                };
+              })(t),
+            );
+            const kind = document.createElement('span');
+            kind.className = 'chatgml-tool-kind chatgml-tool-kind-' + t.kind;
+            kind.textContent = t.kind;
+            const name = document.createElement('span');
+            name.textContent = t.name;
+            if (t.kind === 'mcp') {
+              const badge = document.createElement('span');
+              badge.className = 'chatgml-mcp-badge';
+              badge.textContent = 'MCP';
+              name.appendChild(badge);
+              if (t.server) {
+                const serverRow = document.createElement('span');
+                serverRow.className = 'chatgml-mcp-server-row';
+                serverRow.textContent = ' (' + t.server + ')';
+                name.appendChild(serverRow);
+              }
             }
+            if (t.autoApprove) {
+              const badge = document.createElement('span');
+              badge.className = 'chatgml-tool-auto';
+              badge.textContent = 'auto';
+              name.appendChild(badge);
+            }
+            const desc = document.createElement('span');
+            desc.className = 'chatgml-tool-desc';
+            const d = String(t.description || '');
+            desc.textContent = d.length > 120 ? d.slice(0, 120) + '...' : d;
+            row.appendChild(kind);
+            row.appendChild(name);
+            if (desc.textContent !== '') {
+              const sep = document.createElement('span');
+              sep.textContent = ' - ';
+              row.appendChild(sep);
+              row.appendChild(desc);
+            }
+            groupEl.appendChild(row);
           }
-          if (t.autoApprove) {
-            const badge = document.createElement('span');
-            badge.className = 'chatgml-tool-auto';
-            badge.textContent = 'auto';
-            name.appendChild(badge);
-          }
-          const desc = document.createElement('span');
-          desc.className = 'chatgml-tool-desc';
-          const d = String(t.description || '');
-          desc.textContent = d.length > 120 ? d.slice(0, 120) + '…' : d;
-          row.appendChild(kind);
-          row.appendChild(name);
-          if (desc.textContent !== '') {
-            const sep = document.createElement('span');
-            sep.textContent = ' — ';
-            row.appendChild(sep);
-            row.appendChild(desc);
-          }
-          this.catalogEl.appendChild(row);
+          this.catalogEl.appendChild(groupEl);
         }
       }
     }
@@ -3360,6 +3561,7 @@
             meta.textContent = metaText;
             asstBubble.appendChild(meta);
           }
+          renderTurnDetails(turn, asstBubble);
           this.transcriptEl.appendChild(asstBubble);
           appendedAssistantTurn = true;
         }

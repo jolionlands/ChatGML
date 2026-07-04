@@ -30,6 +30,8 @@ import { editTool } from './edit.js';
 import { executeCommandTool } from './exec.js';
 import { searchReplaceTool } from './search_replace.js';
 import { wrapMcpTools } from './mcp.js';
+import { gmeditPluginsTool } from './gmedit.js';
+import { gmloopTool, gmloopControlTool } from './gmloop.js';
 
 export {
   globTool,
@@ -42,6 +44,9 @@ export {
   executeCommandTool,
   searchReplaceTool,
   wrapMcpTools,
+  gmeditPluginsTool,
+  gmloopTool,
+  gmloopControlTool,
 };
 
 const searchFilesTool = defineTool({
@@ -62,11 +67,13 @@ const READ_TOOLS: readonly Tool[] = [
   searchTool,
   graphTool,
   temporalTool,
+  gmeditPluginsTool,
+  gmloopTool,
 ] as unknown as readonly Tool[];
 
 const GATED_TOOLS: readonly Tool[] = [editTool, searchReplaceTool] as unknown as readonly Tool[];
 
-const COMMAND_TOOLS: readonly Tool[] = [executeCommandTool] as unknown as readonly Tool[];
+const COMMAND_TOOLS: readonly Tool[] = [executeCommandTool, gmloopControlTool] as unknown as readonly Tool[];
 
 export const MODE_TOOL_KINDS: Record<Mode, Array<Tool['kind']>> = {
   architect: ['read', 'gated', 'command', 'mcp'],

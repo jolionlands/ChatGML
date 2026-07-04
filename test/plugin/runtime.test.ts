@@ -364,6 +364,24 @@ describe('reducePluginState', () => {
         thinking: 'reasoning',
         usage: { totalTokens: 42 },
         toolsUsed: ['read_file', 'grep'],
+        toolTimeline: [
+          {
+            name: 'read_file',
+            kind: 'read',
+            status: 'ok',
+            argsPreview: '{"path":"objects/a.gml"}',
+            outputPreview: 'x = 1;',
+          },
+        ],
+        contextSummary: {
+          openFile: 'objects/a.gml',
+          cursorLine: 7,
+          hasSelection: true,
+          mentionCount: 1,
+          approxChars: 128,
+        },
+        provider: 'local',
+        model: 'test-model',
       },
       start(),
     );
@@ -374,6 +392,24 @@ describe('reducePluginState', () => {
       thinking: 'reasoning',
       usage: { totalTokens: 42 },
       toolsUsed: ['read_file', 'grep'],
+      toolTimeline: [
+        {
+          name: 'read_file',
+          kind: 'read',
+          status: 'ok',
+          argsPreview: '{"path":"objects/a.gml"}',
+          outputPreview: 'x = 1;',
+        },
+      ],
+      contextSummary: {
+        openFile: 'objects/a.gml',
+        cursorLine: 7,
+        hasSelection: true,
+        mentionCount: 1,
+        approxChars: 128,
+      },
+      provider: 'local',
+      model: 'test-model',
     });
     expect(s.turns[0]?.sources).toEqual([{ path: 'objects/a.gml', provider: 'local' }]);
   });

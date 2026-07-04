@@ -1284,6 +1284,31 @@ button[disabled],
   color: var(--chatgml-fg);
 }
 
+.chatgml-capability-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 4px;
+}
+
+.chatgml-capability-title {
+  color: var(--chatgml-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.chatgml-capability-row {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: var(--chatgml-muted);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 /* =========================================================================
  * Knowledge map
  * ========================================================================= */
@@ -1605,6 +1630,14 @@ button[disabled],
 
 .chatgml-mention-chip button:hover {
   color: var(--chatgml-del-fg);
+}
+
+.chatgml-mention-budget {
+  color: var(--chatgml-muted);
+  border: 1px dashed var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 2px 7px;
+  font-size: 11px;
 }
 
 .chatgml-mention-autocomplete {
@@ -3062,4 +3095,35 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chatgml-turn-detail {
+  margin-top: 4px;
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  background: var(--chatgml-surface-1);
+}
+
+.chatgml-turn-detail summary {
+  cursor: pointer;
+  padding: 4px 7px;
+  color: var(--chatgml-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chatgml-turn-detail-body {
+  border-top: 1px solid var(--chatgml-border);
+  padding: 5px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chatgml-turn-detail-row {
+  color: var(--chatgml-muted);
+  font-family: var(--chatgml-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

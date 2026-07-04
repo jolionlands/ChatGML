@@ -16,6 +16,8 @@ import type {
   TierName,
   ToolCatalogEntry,
   Usage,
+  ToolUseSummary,
+  ContextSummary,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -247,6 +249,10 @@ export interface TurnRecord {
   thinking?: string;
   usage?: Usage;
   toolsUsed?: string[];
+  toolTimeline?: ToolUseSummary[];
+  contextSummary?: ContextSummary;
+  provider?: string;
+  model?: string;
 }
 
 /** Cap on `turns` — only the most recent TURN_CAP user/assistant bubble pairs are kept in state. */
@@ -667,6 +673,12 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
             ...(event.toolsUsed && event.toolsUsed.length > 0
               ? { toolsUsed: event.toolsUsed.slice() }
               : {}),
+            ...(event.toolTimeline && event.toolTimeline.length > 0
+              ? { toolTimeline: event.toolTimeline.slice() }
+              : {}),
+            ...(event.contextSummary ? { contextSummary: event.contextSummary } : {}),
+            ...(event.provider ? { provider: event.provider } : {}),
+            ...(event.model ? { model: event.model } : {}),
           },
           TURN_CAP,
           state.turnsEvicted,

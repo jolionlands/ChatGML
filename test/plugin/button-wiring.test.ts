@@ -72,9 +72,14 @@ describe('GMEdit panel button wiring', () => {
     expect(PANEL).toMatch(/this\._renderKnowledge\(\)/);
     expect(PANEL).toMatch(/ChatPanel\.prototype\.loadTurns/);
     expect(PANEL).toMatch(/turnMetaText/);
-    expect(PANEL).toMatch(/Available tools/);
+    expect(PANEL).toMatch(/Capabilities/);
+    expect(PANEL).toMatch(/renderTurnDetails\(turn, asstBubble\)/);
+    expect(PANEL).toMatch(/Context used/);
+    expect(PANEL).toMatch(/Tool calls/);
+    expect(PANEL).toMatch(/usage: not reported/);
     expect(PANEL).toMatch(/Working/);
     expect(STYLE).toMatch(/\.chatgml-turn-meta/);
+    expect(STYLE).toMatch(/\.chatgml-turn-detail/);
   });
 
   it('tool activity and catalog render inside the transcript instead of compressing it', () => {
@@ -86,6 +91,30 @@ describe('GMEdit panel button wiring', () => {
     expect(PANEL).toMatch(/this\.transcriptEl\.insertBefore\(this\.catalogEl/);
     expect(STYLE).toMatch(/\.chatgml-transcript > \.chatgml-activity/);
     expect(STYLE).toMatch(/\.chatgml-transcript > \.chatgml-tool-catalog/);
+  });
+
+  it('capability drawer groups tools and inserts prompt hints', () => {
+    expect(PANEL).toMatch(/groupCapabilities/);
+    expect(PANEL).toMatch(/Core tools/);
+    expect(PANEL).toMatch(/GMEdit tools/);
+    expect(PANEL).toMatch(/GMLoop/);
+    expect(PANEL).toMatch(/MCP servers/);
+    expect(PANEL).toMatch(/Skills/);
+    expect(PANEL).toMatch(/_insertCapabilityPrompt/);
+    expect(PANEL).toMatch(/Use gmedit_plugins to inspect installed GMEdit plugins/);
+    expect(PANEL).toMatch(/Use gmloop_check to check GMLoop status/);
+    expect(STYLE).toMatch(/\.chatgml-capability-group/);
+    expect(STYLE).toMatch(/\.chatgml-capability-row/);
+  });
+
+  it('@ menu exposes capability context and budget chips', () => {
+    expect(PANEL).toMatch(/label:\s*'GMEdit plugins'/);
+    expect(PANEL).toMatch(/label:\s*'GMLoop status'/);
+    expect(PANEL).toMatch(/last answer sources/);
+    expect(PANEL).toMatch(/chatgml-mention-budget/);
+    expect(PANEL).toMatch(/context: '/);
+    expect(PANEL).toMatch(/if \(entry && typeof entry\.action === 'function'\) entry\.action\(\)/);
+    expect(STYLE).toMatch(/\.chatgml-mention-budget/);
   });
 
   it('opening the panel auto-launches the core when a project is open', () => {
@@ -193,8 +222,8 @@ describe('GMEdit panel button wiring', () => {
 
   it('terminal errors clear busy instead of leaving Stop stuck on streaming', () => {
     expect(PANEL).toMatch(/this\.state\.busy = true/);
-    expect(PANEL).toMatch(/this\._setBusy\(\!\!this\.state\.busy\)/);
+    expect(PANEL).toMatch(/this\._setBusy\(!!this\.state\.busy\)/);
     expect(PANEL).not.toMatch(/this\._setBusy\(this\.state\.outbox\.length > 0\)/);
-    expect(PANEL).toMatch(/var isWorking = \!\!s\.busy \|\| hasRunningActivity/);
+    expect(PANEL).toMatch(/var isWorking = !!s\.busy \|\| hasRunningActivity/);
   });
 });

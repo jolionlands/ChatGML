@@ -139,6 +139,11 @@ describe('runAgent loop', () => {
     expect(toolMsg?.tool_call_id).toBe('c1');
     expect(toolMsg?.name).toBe('glob');
     expect(res.toolsUsed).toEqual(['glob']);
+    expect(res.toolTimeline).toMatchObject([
+      { name: 'glob', kind: 'read', status: 'ok', argsPreview: '{"pattern":"**/*.gml"}' },
+    ]);
+    expect(res.provider).toBe('x');
+    expect(res.model).toBe('m');
     expect(res.usage?.totalTokens).toBe(123);
     // second model call saw the tool result in its messages
     expect(llm.callCount).toBe(2);

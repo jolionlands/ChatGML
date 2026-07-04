@@ -32,6 +32,8 @@ import type {
   TierName,
   Tiers,
   Usage,
+  ToolUseSummary,
+  ContextSummary,
 } from './types.js';
 import { LlmError } from './llm.js';
 import type {
@@ -510,6 +512,10 @@ export interface AgentRunResult {
   tier: TierName | null;
   usage?: Usage;
   toolsUsed?: string[];
+  toolTimeline?: ToolUseSummary[];
+  contextSummary?: ContextSummary;
+  provider?: string;
+  model?: string;
   /**
    * Model thinking / chain-of-thought text the model emitted during this turn. Populated
    * from the final assistant message's `thinking` field, which the LLM client accumulates
@@ -520,6 +526,34 @@ export interface AgentRunResult {
    * block above the assistant bubble.
    */
   thinking?: string;
+}
+
+function preview(value: unknown, limit = 280): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!text) return '';
+  return text.length > limit ? text.slice(0, limit) + '...' : text;
+}
+
+function summarizeContext(context?: EditorContext): ContextSummary | undefined {
+  if (!context) return undefined;
+  const out: ContextSummary = {};
+  if (context.openFile) out.openFile = context.openFile;
+  if (context.cursorLine) out.cursorLine = context.cursorLine;
+  if (context.selection && context.selection.trim() !== '') out.hasSelection = true;
+  if (context.mentions && context.mentions.length > 0) out.mentionCount = context.mentions.length;
+  const approx =
+    (context.selection ? context.selection.length : 0) +
+    (context.mentions || []).reduce((n, m) => n + String(m.content || m.target || '').length, 0);
+  if (approx > 0) out.approxChars = approx;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function providerLabel(baseURL: string): string {
+  try {
+    return new URL(baseURL).hostname.replace(/^api\./, '');
+  } catch {
+    return baseURL || '';
+  }
 }
 
 /**
@@ -538,6 +572,10 @@ export async function runAgent(
   const ignore = deps.ignore ?? (await buildIgnoreFilter(deps.config.index.root));
   const sources: Citation[] = [];
   const toolsUsed: string[] = [];
+  const toolTimeline: ToolUseSummary[] = [];
+  const contextSummary = summarizeContext(opts.context);
+  const provider = providerLabel(deps.config.chat.baseURL);
+  const model = deps.config.chat.model;
 
   const activeTools = filterToolsByMode(deps.tools, deps.config.mode ?? 'code');
   const toolSpecs: ToolSpec[] = toOpenAiToolSpecs(activeTools);
@@ -587,7 +625,11 @@ export async function runAgent(
       sources,
       taskId: opts.taskId,
       tier: turnTier,
+      ...(contextSummary ? { contextSummary } : {}),
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
       ...(toolsUsed.length > 0 ? { toolsUsed: toolsUsed.slice() } : {}),
+      ...(toolTimeline.length > 0 ? { toolTimeline: toolTimeline.slice() } : {}),
     };
   };
 
@@ -664,8 +706,12 @@ export async function runAgent(
         sources,
         taskId: opts.taskId,
         tier: turnTier,
+        ...(contextSummary ? { contextSummary } : {}),
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
         ...(result.usage ? { usage: result.usage } : {}),
         ...(toolsUsed.length > 0 ? { toolsUsed: toolsUsed.slice() } : {}),
+        ...(toolTimeline.length > 0 ? { toolTimeline: toolTimeline.slice() } : {}),
         ...(turnThinking !== undefined ? { thinking: turnThinking } : {}),
       };
     }
@@ -676,7 +722,7 @@ export async function runAgent(
       if (signal.aborted) break;
       const toolName = call.function.name;
       if (toolsUsed.indexOf(toolName) === -1) toolsUsed.push(toolName);
-      const outcome = await runOneToolCall(call, deps, ctx, sources, messages);
+      const outcome = await runOneToolCall(call, deps, ctx, sources, messages, toolTimeline);
       if (outcome.ok) {
         lastFailedFingerprint = null;
         consecutiveFailures = 0;
@@ -820,6 +866,7 @@ async function runOneToolCall(
   ctx: ToolContext,
   sources: Citation[],
   messages: ChatMessage[],
+  toolTimeline: ToolUseSummary[],
 ): Promise<ToolCallOutcome> {
   const name = call.function.name;
   let parsedArgs: unknown = undefined;
@@ -828,9 +875,17 @@ async function runOneToolCall(
   } catch {
     parsedArgs = call.function.arguments;
   }
+  const tool = deps.tools.get(name);
+  const summary: ToolUseSummary = {
+    name,
+    kind: tool?.kind ?? 'tool',
+    status: 'running',
+    ...(tool?.server ? { server: tool.server } : {}),
+    ...(parsedArgs !== undefined ? { argsPreview: preview(parsedArgs) } : {}),
+  };
+  toolTimeline.push(summary);
   deps.emit({ type: 'tool_call', id: call.id, name, args: parsedArgs });
 
-  const tool = deps.tools.get(name);
   const perToolPolicy = ctx.toolApproval?.[name];
   const effectiveApproval = perToolPolicy ?? ctx.approval;
   let callCtx: ToolContext = { ...ctx, toolCallId: call.id };
@@ -913,6 +968,8 @@ async function runOneToolCall(
             } else {
               deps.emit({ type: 'tool_result', id: req.id, name, ok: true, content });
             }
+            summary.status = 'ok';
+            summary.outputPreview = preview(content);
             messages.push({ role: 'tool', content, tool_call_id: call.id, name });
             return { ok: true, name, fingerprint: `${name}\0${canonicalJson(parsedArgs)}` };
           }
@@ -935,6 +992,9 @@ async function runOneToolCall(
   }
 
   const res = await dispatchTool(deps.tools, name, call.function.arguments, callCtx);
+  summary.status = res.ok ? 'ok' : 'error';
+  summary.outputPreview = preview(res.content);
+  if (res.citations && res.citations.length > 0) summary.citations = res.citations.slice(0, 5);
 
   if (res.citations) {
     for (const c of res.citations) sources.push(c);
@@ -1259,6 +1319,12 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
             ...(result.toolsUsed && result.toolsUsed.length > 0
               ? { toolsUsed: result.toolsUsed }
               : {}),
+            ...(result.toolTimeline && result.toolTimeline.length > 0
+              ? { toolTimeline: result.toolTimeline }
+              : {}),
+            ...(result.contextSummary ? { contextSummary: result.contextSummary } : {}),
+            ...(result.provider ? { provider: result.provider } : {}),
+            ...(result.model ? { model: result.model } : {}),
             // THINKING PROPAGATION (mirror of the `thinking` event for late-joining clients;
             // the plugin can ignore this since it already saw the `thinking` event, but a
             // replayed turn_end from /resume gets the block too).
