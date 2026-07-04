@@ -77,10 +77,12 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  height: 100%;
+  height: auto;
+  align-self: stretch;
+  box-sizing: border-box;
   overflow: hidden;
-  flex: 0 0 420px;
-  width: 420px;
+  flex: 0 0 auto;
+  width: 520px;
   min-width: 300px;
   max-width: 760px;
   border-left: 1px solid var(--chatgml-border);
@@ -89,13 +91,16 @@
 
 #chatgml_editor.chatgml-aside {
   flex: 0 0 auto;
+  height: auto !important;
   min-width: 300px !important;
   max-width: 760px !important;
 }
 
 .chatgml-aside-host {
   display: flex !important;
+  align-items: stretch;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -118,15 +123,12 @@
   background: var(--chatgml-accent);
 }
 
-.chatgml-resizing,
-.chatgml-resizing * {
-  cursor: col-resize !important;
-  user-select: none !important;
-}
-
 #chatgml_panel_host {
-  height: 100%;
+  flex: 1 1 auto;
+  height: auto;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 #chatgml_editor .ace_content {

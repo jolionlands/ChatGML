@@ -108,12 +108,11 @@ describe('GMEdit panel button wiring', () => {
   });
 
   it('ChatGML aside uses bounded chrome and safe hide/show reattachment', () => {
-    expect(CHAT).toMatch(/ASIDE_WIDTH_KEY = 'chatgml_aside_width_v2'/);
-    expect(CHAT).toMatch(/ASIDE_DEFAULT_WIDTH = 420/);
-    expect(CHAT).toMatch(/ASIDE_MAX_WIDTH = 760/);
-    expect(CHAT).toMatch(/function applyAsideWidth\(width\)/);
-    expect(CHAT).toMatch(/function installAsideResizer\(handle\)/);
-    expect(CHAT).toMatch(/rect\.right - ev\.clientX/);
+    expect(CHAT).toMatch(/ASIDE_WIDTH_KEY = 'chatgml_aside_width_v3'/);
+    expect(CHAT).toMatch(/ASIDE_DEFAULT_WIDTH = 520/);
+    expect(CHAT).not.toMatch(/function installAsideResizer\(handle\)/);
+    expect(CHAT).not.toMatch(/function applyAsideWidth\(width\)/);
+    expect(CHAT).toMatch(/splitter = new GMEdit_Splitter\(sizer\)/);
     expect(CHAT).toMatch(/splitter-default-width', String\(ASIDE_DEFAULT_WIDTH\)/);
     expect(CHAT).toMatch(/splitter-lskey', ASIDE_WIDTH_KEY/);
     expect(CHAT).toMatch(/container\.classList\.add\('chatgml-aside'\)/);
@@ -123,14 +122,17 @@ describe('GMEdit panel button wiring', () => {
       /if \(sizer && sizer\.parentNode\) sizer\.parentNode\.removeChild\(sizer\)/,
     );
     expect(CHAT).toMatch(/if \(sizer\.parentNode !== mainCont\) mainCont\.appendChild\(sizer\)/);
-    expect(CHAT).toMatch(/applyAsideWidth\(readAsideWidth\(\)\)/);
-    expect(STYLE).toMatch(/#chatgml_editor \{[\s\S]*width: 420px/);
+    expect(STYLE).toMatch(/#chatgml_editor \{[\s\S]*flex: 0 0 auto/);
+    expect(STYLE).toMatch(/#chatgml_editor \{[\s\S]*width: 520px/);
+    expect(STYLE).toMatch(/#chatgml_editor \{[\s\S]*height: auto/);
+    expect(STYLE).toMatch(/#chatgml_editor \{[\s\S]*align-self: stretch/);
     expect(STYLE).toMatch(/\.chatgml-aside-host \{[\s\S]*display: flex !important/);
+    expect(STYLE).toMatch(/\.chatgml-aside-host \{[\s\S]*align-items: stretch/);
     expect(STYLE).toMatch(/\.chatgml-editor-main \{[\s\S]*min-width: 360px/);
     expect(STYLE).toMatch(/#chatgml_editor\.chatgml-aside \{[\s\S]*max-width: 760px !important/);
     expect(STYLE).not.toMatch(/#chatgml_editor\.chatgml-aside \{[\s\S]*width: clamp\(300px, 34vw, 520px\) !important/);
+    expect(STYLE).not.toMatch(/flex: 0 0 420px/);
     expect(STYLE).toMatch(/\.chatgml-splitter \{[\s\S]*flex: 0 0 5px/);
-    expect(STYLE).toMatch(/\.chatgml-resizing/);
     expect(STYLE).toMatch(/\.chatgml-panel\[data-theme='light'\]/);
   });
 

@@ -51,11 +51,8 @@
 
   const PLUGIN_NAME = 'chatgml';
   const OPEN_PREF_KEY = 'chatgml_open_on_project_v1';
-  const ASIDE_WIDTH_KEY = 'chatgml_aside_width_v2';
-  const ASIDE_MIN_WIDTH = 300;
-  const ASIDE_MAX_WIDTH = 760;
-  const EDITOR_MIN_WIDTH = 360;
-  const ASIDE_DEFAULT_WIDTH = 420;
+  const ASIDE_WIDTH_KEY = 'chatgml_aside_width_v3';
+  const ASIDE_DEFAULT_WIDTH = 520;
   // SESSION_DIR is the per-project NDJSON store. Per spec, files live at
   // `~/.config/chatgml/sessions/<projectHash>-<taskId>.ndjson` (one NDJSON line per turn). The
   // SESSIONS module (plugin/sessions.js) owns all session I/O; this constant is retained as the
@@ -127,83 +124,6 @@
   function shouldRestoreOpen(projectDir) {
     const map = readOpenPrefMap();
     return !!map[projectDir || '__global__'];
-  }
-
-  function asideMaxWidth() {
-    const hostWidth = mainCont && mainCont.clientWidth ? mainCont.clientWidth : 0;
-    const byEditor = hostWidth > 0 ? hostWidth - EDITOR_MIN_WIDTH - 5 : ASIDE_MAX_WIDTH;
-    return Math.max(ASIDE_MIN_WIDTH, Math.min(ASIDE_MAX_WIDTH, byEditor || ASIDE_MAX_WIDTH));
-  }
-
-  function clampAsideWidth(value) {
-    const n = Number(value);
-    const raw = Number.isFinite(n) ? n : ASIDE_DEFAULT_WIDTH;
-    return Math.max(ASIDE_MIN_WIDTH, Math.min(asideMaxWidth(), Math.round(raw)));
-  }
-
-  function readAsideWidth() {
-    try {
-      if (typeof localStorage === 'undefined') return ASIDE_DEFAULT_WIDTH;
-      return clampAsideWidth(localStorage.getItem(ASIDE_WIDTH_KEY));
-    } catch (e) {
-      return ASIDE_DEFAULT_WIDTH;
-    }
-  }
-
-  function writeAsideWidth(width) {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(ASIDE_WIDTH_KEY, String(clampAsideWidth(width)));
-      }
-    } catch (e) {
-      /* localStorage can be unavailable in test contexts */
-    }
-  }
-
-  function applyAsideWidth(width) {
-    if (!container) return;
-    const w = clampAsideWidth(width);
-    container.style.width = w + 'px';
-    container.style.flexBasis = w + 'px';
-    container.style.minWidth = ASIDE_MIN_WIDTH + 'px';
-    container.style.maxWidth = asideMaxWidth() + 'px';
-  }
-
-  function installAsideResizer(handle) {
-    if (!handle) return null;
-    let dragging = false;
-    function move(ev) {
-      if (!dragging || !mainCont) return;
-      const rect = mainCont.getBoundingClientRect();
-      const width = rect.right - ev.clientX;
-      applyAsideWidth(width);
-      forceUpdate();
-    }
-    function up() {
-      if (!dragging) return;
-      dragging = false;
-      document.body.classList.remove('chatgml-resizing');
-      writeAsideWidth(container ? container.getBoundingClientRect().width : ASIDE_DEFAULT_WIDTH);
-      document.removeEventListener('mousemove', move, true);
-      document.removeEventListener('mouseup', up, true);
-      forceUpdateSoon();
-    }
-    handle.addEventListener('mousedown', function (ev) {
-      if (ev.button !== 0) return;
-      dragging = true;
-      document.body.classList.add('chatgml-resizing');
-      ev.preventDefault();
-      ev.stopPropagation();
-      document.addEventListener('mousemove', move, true);
-      document.addEventListener('mouseup', up, true);
-    });
-    handle.addEventListener('dblclick', function (ev) {
-      ev.preventDefault();
-      applyAsideWidth(ASIDE_DEFAULT_WIDTH);
-      writeAsideWidth(ASIDE_DEFAULT_WIDTH);
-      forceUpdateSoon();
-    });
-    return { apply: applyAsideWidth };
   }
 
   function copyText(text) {
@@ -1702,7 +1622,6 @@
     if (ready && mainCont && sizer && container) {
       if (sizer.parentNode !== mainCont) mainCont.appendChild(sizer);
       if (container.parentNode !== mainCont) mainCont.appendChild(container);
-      applyAsideWidth(readAsideWidth());
     } else {
       prepare();
     }
@@ -2188,14 +2107,10 @@
     mainCont.appendChild(nextCont);
     mainCont.appendChild(sizer);
     mainCont.appendChild(container);
-    applyAsideWidth(readAsideWidth());
 
-    splitter = installAsideResizer(sizer);
+    splitter = new GMEdit_Splitter(sizer);
     void splitter;
     void editor;
-    window.addEventListener('resize', function () {
-      applyAsideWidth(readAsideWidth());
-    });
     refreshEffectiveConfig();
   }
 
