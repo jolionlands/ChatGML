@@ -228,6 +228,166 @@
     return out;
   }
 
+  function addModelIfMissing(provider, model) {
+    if (!provider || typeof provider !== 'object') return;
+    provider.models = Array.isArray(provider.models) ? provider.models : [];
+    for (let i = 0; i < provider.models.length; i++) {
+      if (provider.models[i] && provider.models[i].id === model.id) return;
+    }
+    provider.models.push(model);
+  }
+
+  function addCuratedFallbacks(registry) {
+    if (!registry || !registry.providers || typeof registry.providers !== 'object') return registry;
+    const p = registry.providers;
+    if (!p['kimi-coding']) {
+      p['kimi-coding'] = {
+        kind: 'kimi',
+        base_url: 'https://api.kimi.com/coding/v1',
+        path: '/chat/completions',
+        auth: 'env',
+        envVar: 'KIMI_API_KEY',
+        envVars: ['KIMI_API_KEY', 'KIMI_CODE_API_KEY'],
+        models: [
+          {
+            id: 'kimi-for-coding',
+            wire_model: 'Kimi K2.7 Code (Kimi Code CLI alias)',
+            context_window: 262144,
+          },
+        ],
+        _source: 'curated',
+      };
+    }
+    if (!p['kimi-moonshot']) {
+      p['kimi-moonshot'] = {
+        kind: 'openai_compat',
+        base_url: 'https://api.moonshot.ai/v1',
+        path: '/chat/completions',
+        auth: 'env',
+        envVar: 'MOONSHOT_API_KEY',
+        envVars: ['MOONSHOT_API_KEY', 'KIMI_PLATFORM_API_KEY'],
+        models: [
+          { id: 'kimi-k2.7-code', wire_model: 'Kimi K2.7 Code', context_window: 262144 },
+          {
+            id: 'kimi-k2.7-code-highspeed',
+            wire_model: 'Kimi K2.7 Code Highspeed',
+            context_window: 262144,
+          },
+          { id: 'kimi-k2.6', wire_model: 'Kimi K2.6', context_window: 262144 },
+          { id: 'kimi-k2.5', wire_model: 'Kimi K2.5', context_window: 262144 },
+        ],
+        _source: 'curated',
+      };
+    }
+    if (!p['opencode-go']) {
+      p['opencode-go'] = {
+        kind: 'openai_compat',
+        base_url: 'https://opencode.ai/zen/go/v1',
+        path: '/chat/completions',
+        auth: 'env',
+        envVar: 'OPENCODE_API_KEY',
+        envVars: ['OPENCODE_API_KEY'],
+        models: [
+          { id: 'kimi-k2.6', wire_model: 'Kimi K2.6', context_window: 262144 },
+          { id: 'minimax-m2.7', wire_model: 'MiniMax M2.7', context_window: 204800 },
+        ],
+        _source: 'curated',
+      };
+    }
+    if (!p['openrouter']) {
+      p['openrouter'] = {
+        kind: 'openai_compat',
+        base_url: 'https://openrouter.ai/api/v1',
+        path: '/chat/completions',
+        auth: 'env',
+        envVar: 'OPENROUTER_API_KEY',
+        envVars: ['OPENROUTER_API_KEY'],
+        models: [],
+        _source: 'curated',
+      };
+    }
+    addModelIfMissing(p['openrouter'], {
+      id: 'minimax/minimax-m3',
+      wire_model: 'MiniMax: MiniMax M3',
+      context_window: 1000000,
+    });
+    if (!p['minimax-openai']) {
+      p['minimax-openai'] = {
+        kind: 'openai_compat',
+        base_url: 'https://api.minimax.io/v1',
+        path: '/chat/completions',
+        auth: 'env',
+        envVar: 'MINIMAX_API_KEY',
+        envVars: ['MINIMAX_API_KEY'],
+        models: [{ id: 'MiniMax-M3', wire_model: 'MiniMax M3', context_window: 1000000 }],
+        _source: 'curated',
+      };
+    }
+    if (!p['maveros-lan']) {
+      p['maveros-lan'] = {
+        kind: 'openai_compat',
+        base_url: 'http://192.168.1.206:18091/v1',
+        path: '/chat/completions',
+        auth: 'none',
+        models: [
+          {
+            id: 'qwen3.6-27b-maveros',
+            wire_model: 'Qwen3.6-27B-Q4_K_M.gguf',
+            context_window: 65536,
+          },
+        ],
+        _source: 'curated',
+      };
+    }
+    return registry;
+  }
+
+  function enrichMissingProviderMetadata(registry, sources) {
+    if (!registry || !registry.providers || typeof registry.providers !== 'object') return registry;
+    if (!Array.isArray(sources)) return registry;
+    for (let si = 0; si < sources.length; si++) {
+      const src = sources[si];
+      if (!src || !src.providers || typeof src.providers !== 'object') continue;
+      const names = Object.keys(src.providers);
+      for (let ni = 0; ni < names.length; ni++) {
+        const name = names[ni];
+        const dest = registry.providers[name];
+        const from = src.providers[name];
+        if (!dest || !from || typeof dest !== 'object' || typeof from !== 'object') continue;
+        if (!dest.kind && from.kind) dest.kind = from.kind;
+        if (!dest.path && from.path) dest.path = from.path;
+        if (!Array.isArray(from.models)) continue;
+        dest.models = Array.isArray(dest.models) ? dest.models : [];
+        for (let mi = 0; mi < from.models.length; mi++) {
+          const srcModel = from.models[mi];
+          if (!srcModel || typeof srcModel.id !== 'string') continue;
+          let destModel = null;
+          for (let di = 0; di < dest.models.length; di++) {
+            if (dest.models[di] && dest.models[di].id === srcModel.id) {
+              destModel = dest.models[di];
+              break;
+            }
+          }
+          if (!destModel) {
+            dest.models.push(Object.assign({}, srcModel));
+            continue;
+          }
+          if (!destModel.wire_model && srcModel.wire_model)
+            destModel.wire_model = srcModel.wire_model;
+          if (!destModel.context_window && srcModel.context_window) {
+            destModel.context_window = srcModel.context_window;
+          }
+          if (destModel.can_reason !== true && srcModel.can_reason === true)
+            destModel.can_reason = true;
+          if (destModel.supports_attachments !== true && srcModel.supports_attachments === true) {
+            destModel.supports_attachments = true;
+          }
+        }
+      }
+    }
+    return registry;
+  }
+
   // -------------------------------------------------------------------------
   // External source loaders
   //
@@ -295,8 +455,12 @@
       const kind = npm.indexOf('anthropic') >= 0 ? 'anthropic' : 'openai_compat';
       // API key may be a string OR a `{env: NAME}` reference — both stay as the literal value
       // here; the auth-source loader handles the env reference at usage time.
-      const apiKey =
-        typeof opts.apiKey === 'string' && opts.apiKey !== '' ? opts.apiKey : undefined;
+      const apiKey = typeof opts.apiKey === 'string' && opts.apiKey !== '' ? opts.apiKey : '';
+      const envKeyMatch = /^env:([A-Z_][A-Z0-9_]*)$/.exec(apiKey);
+      const objectEnvKey =
+        opts.apiKey && typeof opts.apiKey === 'object' && typeof opts.apiKey.env === 'string'
+          ? opts.apiKey.env
+          : '';
       const models = [];
       if (entry.models && typeof entry.models === 'object' && !Array.isArray(entry.models)) {
         const modelIds = Object.keys(entry.models);
@@ -323,9 +487,9 @@
         kind: kind,
         base_url: baseUrl,
         path: '/chat/completions',
-        // If the user has the literal key inline, prefer it; otherwise fall back to `env` so
-        // the .env export can show `auth=env`. We never leak the literal key into the file.
-        auth: apiKey ? 'bearer' : 'env',
+        auth: envKeyMatch !== null || objectEnvKey !== '' || apiKey === '' ? 'env' : 'bearer',
+        envVar: envKeyMatch !== null ? envKeyMatch[1] : objectEnvKey,
+        _hasKey: apiKey !== '' && envKeyMatch === null,
         models: models,
         _source: 'opencode',
       };
@@ -394,12 +558,7 @@
       // (uncommon — crush treats literal keys as anti-patterns).
       const apiKeyField = typeof entry.api_key === 'string' ? entry.api_key : '';
       const envMatch = /^\$([A-Z_][A-Z0-9_]*)$/.exec(apiKeyField);
-      const auth =
-        envMatch !== null
-          ? 'env'
-          : apiKeyField !== ''
-            ? 'bearer'
-            : 'env';
+      const auth = envMatch !== null ? 'env' : apiKeyField !== '' ? 'bearer' : 'env';
       const envVar = envMatch !== null ? envMatch[1] : '';
       const models = [];
       if (Array.isArray(entry.models)) {
@@ -413,8 +572,7 @@
             can_reason: m.can_reason === true,
             supports_attachments: m.supports_attachments === true,
             cost_per_1m_in: typeof m.cost_per_1m_in === 'number' ? m.cost_per_1m_in : undefined,
-            cost_per_1m_out:
-              typeof m.cost_per_1m_out === 'number' ? m.cost_per_1m_out : undefined,
+            cost_per_1m_out: typeof m.cost_per_1m_out === 'number' ? m.cost_per_1m_out : undefined,
           });
         }
       }
@@ -560,9 +718,84 @@
     return { catalog: out, warning: null };
   }
 
+  function uniqueStrings(values) {
+    const out = [];
+    const seen = {};
+    for (let i = 0; i < values.length; i++) {
+      const v = typeof values[i] === 'string' ? values[i].trim() : '';
+      if (v === '') continue;
+      const key = v.toLowerCase();
+      if (seen[key]) continue;
+      seen[key] = true;
+      out.push(v);
+    }
+    return out;
+  }
+
+  function providerEnvVarHints(name, raw) {
+    const base = raw && typeof raw.base_url === 'string' ? raw.base_url : '';
+    const hay = (name + ' ' + base).toLowerCase();
+    if (/api\.kimi\.com\/coding|kimi-coding|kimi-code/.test(hay)) {
+      return ['KIMI_API_KEY', 'KIMI_CODE_API_KEY'];
+    }
+    if (/moonshot|kimi-moonshot|api\.moonshot\.ai/.test(hay)) {
+      return ['MOONSHOT_API_KEY', 'KIMI_PLATFORM_API_KEY'];
+    }
+    if (/openrouter/.test(hay)) return ['OPENROUTER_API_KEY'];
+    if (/opencode/.test(hay)) return ['OPENCODE_API_KEY'];
+    if (/minimax/.test(hay)) return ['MINIMAX_API_KEY'];
+    if (/maveros/.test(hay)) return ['MAVEROS_API_KEY'];
+    if (/nvidia/.test(hay)) return ['NVIDIA_API_KEY'];
+    if (/deepseek/.test(hay)) return ['DEEPSEEK_API_KEY'];
+    if (/groq/.test(hay)) return ['GROQ_API_KEY'];
+    if (/mistral/.test(hay)) return ['MISTRAL_API_KEY'];
+    if (/anthropic/.test(hay)) return ['ANTHROPIC_API_KEY'];
+    if (/gemini|google/.test(hay)) return ['GOOGLE_API_KEY'];
+    if (/openai/.test(hay)) return ['OPENAI_API_KEY'];
+    return [];
+  }
+
+  function providerEnvVarHint(name, raw) {
+    const hints = providerEnvVarHints(name, raw);
+    return hints.length > 0 ? hints[0] : '';
+  }
+
+  function authAliasesForProvider(name, raw) {
+    const aliases = [name];
+    const base = raw && typeof raw.base_url === 'string' ? raw.base_url : '';
+    const hay = (name + ' ' + base).toLowerCase();
+    if (/api\.kimi\.com\/coding|kimi-coding|kimi-code/.test(hay)) {
+      aliases.push('kimi', 'kimi-coding', 'kimi-code', 'kimi-for-coding');
+    } else if (/moonshot|kimi-moonshot|api\.moonshot\.ai/.test(hay)) {
+      aliases.push('moonshot', 'moonshotai', 'kimi-platform', 'kimi-moonshot');
+    }
+    if (/openrouter/.test(hay)) aliases.push('openrouter', 'openrouter-ai', 'open-router');
+    if (/opencode/.test(hay)) aliases.push('opencode', 'opencode-go');
+    if (/minimax/.test(hay)) aliases.push('minimax', 'minimax-openai', 'minimax-m3');
+    if (/maveros/.test(hay)) aliases.push('maveros', 'maveros-lan');
+    return uniqueStrings(aliases);
+  }
+
+  function findAuthEntryForProvider(authMap, name, raw) {
+    if (!authMap || typeof authMap !== 'object') return null;
+    const aliases = authAliasesForProvider(name, raw);
+    for (let i = 0; i < aliases.length; i++) {
+      if (authMap[aliases[i]]) return authMap[aliases[i]];
+    }
+    const keys = Object.keys(authMap);
+    for (let ai = 0; ai < aliases.length; ai++) {
+      const alias = aliases[ai].toLowerCase();
+      for (let ki = 0; ki < keys.length; ki++) {
+        if (keys[ki].toLowerCase() === alias) return authMap[keys[ki]];
+      }
+    }
+    return null;
+  }
+
   /**
    * Inject API-key + auth metadata from the auth-file map into provider entries. Keys are matched
-   * by provider NAME (case-sensitive). When a provider has both an entry in the auth map and an
+   * by provider NAME or a small set of known local-tool aliases. When a provider has an entry in
+   * the auth map and an
    * entry in the registry, the registry entry's `auth` field is upgraded:
    *
    *   - `auth: 'oauth'` if the auth entry is oauth (no apiKey persisted; `auth: oauth` flag)
@@ -578,10 +811,10 @@
     const names = Object.keys(registry.providers);
     for (let i = 0; i < names.length; i++) {
       const name = names[i];
-      const entry = authMap[name];
-      if (!entry) continue;
       const prov = registry.providers[name];
       if (!prov || typeof prov !== 'object') continue;
+      const entry = findAuthEntryForProvider(authMap, name, prov);
+      if (!entry) continue;
       if (entry.auth === 'oauth') {
         prov.auth = 'oauth';
         if (entry.apiKey) prov.apiKey = entry.apiKey;
@@ -677,6 +910,23 @@
     const baseUrl = typeof raw.base_url === 'string' ? raw.base_url : '';
     const kind = typeof raw.kind === 'string' ? raw.kind : 'openai_compat';
     const auth = typeof raw.auth === 'string' ? raw.auth : 'bearer';
+    const envHints = auth === 'none' ? [] : providerEnvVarHints(name, raw);
+    const envVars = uniqueStrings(
+      (Array.isArray(raw.envVars) ? raw.envVars : [])
+        .concat(typeof raw.envVar === 'string' ? [raw.envVar] : [])
+        .concat(typeof raw._envVar === 'string' ? [raw._envVar] : [])
+        .concat(envHints),
+    );
+    const envVar = envVars.length > 0 ? envVars[0] : '';
+    const hasKey =
+      typeof raw.apiKey === 'string' ||
+      typeof raw.refreshToken === 'string' ||
+      typeof raw.tokenExpires === 'number' ||
+      raw._hasKey === true;
+    const authState =
+      auth === 'none' ? 'none' : hasKey ? 'key found' : envVar !== '' ? 'env ref' : 'missing';
+    const kimiCodeApi = /:\/\/api\.kimi\.com\/coding(?:\/v1)?\/?$/i.test(baseUrl);
+    const usable = kind === 'openai_compat' && baseUrl !== '' && baseUrl.charAt(0) !== '$';
     const endpoint =
       typeof raw.path === 'string' && raw.path !== '' ? raw.path : '/chat/completions';
     let models = [];
@@ -686,9 +936,15 @@
           return m && typeof m === 'object' && typeof m.id === 'string';
         })
         .map(function (m) {
+          const wireModel =
+            kimiCodeApi && m.id === 'kimi-for-coding'
+              ? 'Kimi K2.7 Code (Kimi Code CLI alias)'
+              : typeof m.wire_model === 'string'
+                ? m.wire_model
+                : m.id;
           return {
             id: m.id,
-            wireModel: typeof m.wire_model === 'string' ? m.wire_model : m.id,
+            wireModel: wireModel,
             contextWindow: typeof m.context_window === 'number' ? m.context_window : 0,
           };
         });
@@ -699,6 +955,11 @@
       baseUrl: baseUrl,
       endpoint: endpoint,
       auth: auth,
+      authState: authState,
+      envVar: envVar,
+      envVars: envVars,
+      source: typeof raw._source === 'string' ? raw._source : '',
+      usable: usable,
       models: models,
     };
   }
@@ -735,6 +996,10 @@
           baseUrl: p.baseUrl,
           endpoint: p.endpoint,
           auth: p.auth,
+          authState: p.authState,
+          envVar: p.envVar,
+          envVars: p.envVars || [],
+          usable: p.usable,
           contextWindow: p.models[j].contextWindow,
         });
       }
@@ -778,6 +1043,115 @@
    * default path is `/chat/completions` for OpenAI-compat providers, but a registry entry can
    * override it (e.g. Ollama uses `/api/chat`).
    */
+  function normalizeBaseUrl(url) {
+    return typeof url === 'string' ? url.trim().replace(/\/+$/, '') : '';
+  }
+
+  function providerHasModel(raw, modelId) {
+    if (!raw || !Array.isArray(raw.models) || typeof modelId !== 'string' || modelId === '') {
+      return false;
+    }
+    for (let i = 0; i < raw.models.length; i++) {
+      const m = raw.models[i];
+      if (m && typeof m === 'object' && m.id === modelId) return true;
+    }
+    return false;
+  }
+
+  function findProviderForConfig(registry, config) {
+    if (!registry || !registry.providers || typeof registry.providers !== 'object') return null;
+    const cfg = config || {};
+    const wantedBase = normalizeBaseUrl(cfg.baseURL || cfg.baseUrl || '');
+    const wantedModel = typeof cfg.model === 'string' ? cfg.model : '';
+    const wantedName = typeof cfg.providerName === 'string' ? cfg.providerName : '';
+    const names = Object.keys(registry.providers);
+    let best = null;
+    let bestScore = 0;
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i];
+      const raw = registry.providers[name];
+      if (!raw || typeof raw !== 'object') continue;
+      let score = 0;
+      if (wantedName && name === wantedName) score += 200;
+      if (wantedBase && normalizeBaseUrl(raw.base_url) === wantedBase) score += 100;
+      if (wantedModel && providerHasModel(raw, wantedModel)) score += 30;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { name: name, raw: raw, score: score };
+      }
+    }
+    return best;
+  }
+
+  function resolveAuthForConfig(registry, config, env) {
+    const cfg = config || {};
+    const sourceEnv = env || (typeof process !== 'undefined' ? process.env : {});
+    const found = findProviderForConfig(registry, cfg);
+    if (!found) {
+      return {
+        providerName: '',
+        authState: 'missing',
+        authSource: 'no matching provider',
+        envVar: '',
+        envVars: [],
+        extraEnv: {},
+      };
+    }
+    const raw = found.raw;
+    const configApiKey = typeof cfg.apiKey === 'string' ? cfg.apiKey : '';
+    const configEnvMatch = /^env:([A-Z_][A-Z0-9_]*)$/.exec(configApiKey);
+    const envVars = uniqueStrings(
+      (configEnvMatch ? [configEnvMatch[1]] : [])
+        .concat(Array.isArray(raw.envVars) ? raw.envVars : [])
+        .concat(typeof raw.envVar === 'string' ? [raw.envVar] : [])
+        .concat(typeof raw._envVar === 'string' ? [raw._envVar] : [])
+        .concat(providerEnvVarHints(found.name, raw)),
+    );
+    let envVar = envVars.length > 0 ? envVars[0] : '';
+    let envValue = '';
+    for (let ei = 0; ei < envVars.length; ei++) {
+      const candidate = envVars[ei];
+      if (sourceEnv && typeof sourceEnv[candidate] === 'string' && sourceEnv[candidate] !== '') {
+        envVar = candidate;
+        envValue = sourceEnv[candidate];
+        break;
+      }
+    }
+    const literalKey = typeof raw.apiKey === 'string' && raw.apiKey !== '' ? raw.apiKey : '';
+    const extraEnv = {};
+    let authState = raw.auth === 'none' ? 'none' : 'missing';
+    let authSource = raw.auth === 'none' ? 'no auth required' : 'missing';
+
+    if (literalKey !== '') {
+      authState = 'key found';
+      authSource = 'provider auth key';
+      if (envVar) extraEnv[envVar] = literalKey;
+      if (configApiKey === '') extraEnv.CHATGML_CHAT_API_KEY = literalKey;
+    } else if (envVar && envValue !== '') {
+      authState = 'env ref';
+      authSource = 'env:' + envVar;
+      if (configApiKey === '') extraEnv.CHATGML_CHAT_API_KEY = envValue;
+    } else if (configEnvMatch) {
+      authState = 'missing';
+      authSource = 'missing env:' + configEnvMatch[1];
+    } else if (configApiKey && configApiKey !== '***') {
+      authState = 'set';
+      authSource = 'configured key';
+    } else if (envVar) {
+      authState = 'missing';
+      authSource = 'missing env:' + envVars.join('|');
+    }
+
+    return {
+      providerName: found.name,
+      authState: authState,
+      authSource: authSource,
+      envVar: envVar || '',
+      envVars: envVars,
+      extraEnv: extraEnv,
+    };
+  }
+
   function resolveEndpoint(provider, model) {
     if (!provider) return null;
     const path2 = provider.endpoint || '/chat/completions';
@@ -962,7 +1336,8 @@
     } catch (e) {
       warnings.push('could not read ' + piPath + ': ' + (e.message || e));
     }
-    if (pi) sources.push({ name: 'pi', path: piPath, count: Object.keys(pi.providers || {}).length });
+    if (pi)
+      sources.push({ name: 'pi', path: piPath, count: Object.keys(pi.providers || {}).length });
 
     const oc = readOpencodeConfig(opencodePath);
     if (oc.warning) warnings.push(oc.warning);
@@ -990,9 +1365,13 @@
     const auth = readAuthFile(authPath);
     if (auth.warning) warnings.push(auth.warning);
 
-    // 3. Merge in priority order: pi → opencode → crush → chatgml (chatgml wins).
-    const merged = mergeRegistries([pi, oc, cr, bootstrap.data]);
+    // 3. Merge in priority order: crush → pi → opencode → chatgml (chatgml wins).
+    // Crush has rich model metadata, but opencode/Pi usually have the correct runnable URL.
+    const merged = mergeRegistries([cr, pi, oc, bootstrap.data]);
     merged.__source = chatgmlPath;
+
+    enrichMissingProviderMetadata(merged, [cr]);
+    addCuratedFallbacks(merged);
 
     // 4. Enrich with auth (in-place; never overwrites an existing `auth: 'none'`).
     enrichWithAuth(merged, auth.auth);
@@ -1034,17 +1413,25 @@
     readProvidersFile: readProvidersFile,
     bootstrapProviders: bootstrapProviders,
     mergeRegistries: mergeRegistries,
+    addCuratedFallbacks: addCuratedFallbacks,
+    enrichMissingProviderMetadata: enrichMissingProviderMetadata,
     readOpencodeConfig: readOpencodeConfig,
     readCrushProviders: readCrushProviders,
     readAuthFile: readAuthFile,
     readModelCatalog: readModelCatalog,
     enrichWithAuth: enrichWithAuth,
     enrichWithCatalog: enrichWithCatalog,
+    authAliasesForProvider: authAliasesForProvider,
+    findAuthEntryForProvider: findAuthEntryForProvider,
+    providerEnvVarHints: providerEnvVarHints,
+    providerEnvVarHint: providerEnvVarHint,
     normalizeProvider: normalizeProvider,
     listProviders: listProviders,
     listModels: listModels,
     findProviderByUrl: findProviderByUrl,
     findModel: findModel,
+    findProviderForConfig: findProviderForConfig,
+    resolveAuthForConfig: resolveAuthForConfig,
     resolveEndpoint: resolveEndpoint,
     providerToConfig: providerToConfig,
     toEnvFormat: toEnvFormat,

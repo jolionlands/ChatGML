@@ -131,13 +131,14 @@
 
     function makeButton(label, isReject, blockIndex) {
       var btn = document.createElement('button');
+      btn.type = 'button';
       btn.className = 'run-button' + (isReject ? ' chatgml-reject' : '');
       btn.textContent = label;
       btn.addEventListener('click', function () {
         if (isReject) {
-          self.onReject(proposal.id, blockIndex);
+          if (typeof self.onReject === 'function') self.onReject(proposal.id, blockIndex);
         } else {
-          self.onApprove(proposal.id, blockIndex);
+          if (typeof self.onApprove === 'function') self.onApprove(proposal.id, blockIndex);
         }
         if (blockIndex === undefined) self.resolve(proposal.id, isReject ? 'rejected' : 'approved');
       });

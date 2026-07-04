@@ -200,6 +200,20 @@ describe('reducePluginState', () => {
     expect(s.mode).toBe('architect');
   });
 
+  it('status detail is retained for retry/progress UI and cleared by plain status', () => {
+    let s = reducePluginState(
+      {
+        type: 'status',
+        phase: 'streaming',
+        detail: 'provider overloaded; retry 1/2 in 1.2s',
+      } as AgentEvent,
+      start(),
+    );
+    expect(s.phaseDetail).toBe('provider overloaded; retry 1/2 in 1.2s');
+    s = reducePluginState({ type: 'status', phase: 'thinking' } as AgentEvent, s);
+    expect(s.phaseDetail).toBeNull();
+  });
+
   it('initial mode defaults to code', () => {
     expect(start().mode).toBe('code');
   });
@@ -283,11 +297,85 @@ describe('reducePluginState', () => {
     const s = reducePluginState({ type: 'answer', text: 'final', sources }, start());
     expect(s.answer).toBe('final');
     expect(s.sources).toEqual(sources);
+    expect(s.phase).toBe('done');
+    expect(s.phaseDetail).toBeNull();
+    expect(s.busy).toBe(false);
   });
 
   it('error records the message', () => {
     const s = reducePluginState({ type: 'error', message: 'boom', code: 'http' }, start());
     expect(s.error).toBe('boom');
+  });
+
+  it('error clears stale streaming state so the panel cannot stay frozen', () => {
+    const streaming: PluginState = {
+      ...start(),
+      phase: 'streaming',
+      phaseDetail: 'reading chat stream',
+      busy: true,
+      answer: 'partial assistant text',
+      pendingUserText: 'hi',
+      outbox: [{ id: 'q1', text: 'hi', status: 'streaming', ts: 1 }],
+      lastThinking: 'thinking',
+    };
+    const s = reducePluginState(
+      { type: 'error', message: 'network error reading chat stream', code: 'network' },
+      streaming,
+    );
+    expect(s.error).toBe('network error reading chat stream');
+    expect(s.phase).toBe('idle');
+    expect(s.phaseDetail).toBeNull();
+    expect(s.busy).toBe(false);
+    expect(s.answer).toBeNull();
+    expect(s.pendingUserText).toBeNull();
+    expect(s.outbox).toEqual([]);
+    expect(s.lastThinking).toBeNull();
+  });
+
+  it('turn_end resets phase/detail after a completed turn', () => {
+    const streaming: PluginState = {
+      ...start(),
+      phase: 'streaming',
+      phaseDetail: 'reading chat stream',
+      busy: true,
+      answer: 'hello',
+      pendingUserText: 'hi',
+      outbox: [{ id: 'q1', text: 'hi', status: 'streaming', ts: 1 }],
+    };
+    const s = reducePluginState(
+      { type: 'turn_end', userText: 'hi', assistantText: 'hello', sources: [] },
+      streaming,
+    );
+    expect(s.phase).toBe('idle');
+    expect(s.phaseDetail).toBeNull();
+    expect(s.busy).toBe(false);
+    expect(s.outbox).toEqual([]);
+    expect(s.answer).toBeNull();
+  });
+
+  it('turn_end keeps context, sources, thinking, usage, and tools for the completed bubble', () => {
+    const s = reducePluginState(
+      {
+        type: 'turn_end',
+        userText: 'hi',
+        assistantText: 'hello',
+        sources: [{ path: 'objects/a.gml', provider: 'local' }],
+        context: { openFile: 'objects/a.gml', cursorLine: 7, selection: 'x = 1;' },
+        thinking: 'reasoning',
+        usage: { totalTokens: 42 },
+        toolsUsed: ['read_file', 'grep'],
+      },
+      start(),
+    );
+    expect(s.turns[0]).toMatchObject({
+      userText: 'hi',
+      assistantText: 'hello',
+      context: { openFile: 'objects/a.gml', cursorLine: 7 },
+      thinking: 'reasoning',
+      usage: { totalTokens: 42 },
+      toolsUsed: ['read_file', 'grep'],
+    });
+    expect(s.turns[0]?.sources).toEqual([{ path: 'objects/a.gml', provider: 'local' }]);
   });
 
   it('tool_catalog stores the tool list', () => {
@@ -527,6 +615,11 @@ describe('parseSlashCommand', () => {
 
   it('parses /mcp', () => {
     expect(parseSlashCommand('/mcp')).toEqual({ kind: 'mcp' });
+  });
+
+  it('parses /gmloop status commands', () => {
+    expect(parseSlashCommand('/gmloop')).toEqual({ kind: 'gmloop', value: 'status' });
+    expect(parseSlashCommand('/gmloop lint')).toEqual({ kind: 'gmloop', value: 'lint' });
   });
 });
 

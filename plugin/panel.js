@@ -28,13 +28,18 @@
    * @param {(record:object)=>void=} opts.onTurnEnd    - one record per turn_end (for session save)
    * @param {(record:object)=>void=} opts.onAppliedEdit - after an edit is approved&written (inline diff)
    * @param {(ev:PopStateEvent|Event)=>void=} opts.onEditorContext - supply openFile/selection/cursor
-   * @param {()=>void=} opts.onUndo                    - undo the most recent checkpoint
+   * @param {(checkpointId?:string)=>void=} opts.onUndo - undo selected/latest checkpoint
    * @param {(name:('planner'|'implementer'|'reviewer'|null))=>void=} opts.onTierOverride - set/clear the per-turn tier override (Cline-style Plan/Act)
+   * @param {()=>object=} opts.getDiagnostics - read-only sanitized diagnostics snapshot
+   * @param {(text:string)=>void=} opts.onCopyDiagnostics - copy sanitized diagnostics text
    */
   function ChatPanel(opts) {
     this.opts = opts;
     this.state = State.initialPluginState();
     this.running = false;
+    this.ready = false;
+    this.diagnosticsOpen = false;
+    this.knowledgeOpen = false;
     this.catalogOpen = false;
     this.selectedCheckpointId = null;
     // The last turn_end record for the in-flight turn (so onAppliedEdit and the inline-diff jump can
@@ -86,37 +91,60 @@
     this._buildSessionsSidebar();
     c.appendChild(this.sessionsEl);
 
-    // Controls row.
+    // Compact workbench header: primary run/mode controls stay first; maintenance/task actions
+    // live in the secondary strip so the first viewport reads like a coding assistant, not a form.
     const controls = document.createElement('div');
-    controls.className = 'chatgml-controls';
+    controls.className = 'chatgml-controls chatgml-workbench-header';
+    const primaryControls = document.createElement('div');
+    primaryControls.className = 'chatgml-primary-controls';
+    const secondaryControls = document.createElement('div');
+    secondaryControls.className = 'chatgml-secondary-controls';
+    const callOpt = function (name, args, missingMessage) {
+      if (typeof self.opts[name] === 'function') {
+        return self.opts[name].apply(null, args || []);
+      }
+      self.flash(missingMessage || name + ' is not wired', true);
+      return undefined;
+    };
 
     this.launchBtn = document.createElement('button');
-    this.launchBtn.className = 'run-button';
+    this.launchBtn.type = 'button';
+    this.launchBtn.className = 'run-button chatgml-launch-btn';
     this.launchBtn.textContent = 'Launch';
     this.launchBtn.addEventListener('click', function () {
-      if (self.running) self.opts.onStop();
-      else self.opts.onLaunch();
+      if (self.running) {
+        callOpt('onStop', [], 'Stop is not wired');
+      } else {
+        self.flash('launching ChatGML core...');
+        callOpt('onLaunch', [], 'Launch is not wired');
+      }
     });
 
     this.reindexBtn = document.createElement('button');
+    this.reindexBtn.type = 'button';
     this.reindexBtn.className = 'run-button';
     this.reindexBtn.textContent = 'Reindex';
     this.reindexBtn.addEventListener('click', function () {
-      self.opts.onReindex();
+      if (!self.ready) {
+        self.flash('launch ChatGML before reindexing', true);
+        return;
+      }
+      callOpt('onReindex', [], 'Reindex is not wired');
     });
     this.reindexBtn.setAttribute('disabled', 'disabled');
 
     this.restartBtn = document.createElement('button');
+    this.restartBtn.type = 'button';
     this.restartBtn.className = 'run-button';
     this.restartBtn.textContent = 'Restart';
     this.restartBtn.addEventListener('click', function () {
-      if (typeof self.opts.onRestart === 'function') self.opts.onRestart();
+      callOpt('onRestart', [], 'Restart is not wired');
     });
     this.restartBtn.style.display = 'none';
 
-    controls.appendChild(this.launchBtn);
-    controls.appendChild(this.reindexBtn);
-    controls.appendChild(this.restartBtn);
+    primaryControls.appendChild(this.launchBtn);
+    secondaryControls.appendChild(this.reindexBtn);
+    secondaryControls.appendChild(this.restartBtn);
 
     // Mode segmented control.
     this.modeSegEl = document.createElement('div');
@@ -126,6 +154,7 @@
     for (let i = 0; i < modes.length; i++) {
       const m = modes[i];
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.className = 'chatgml-mode-btn';
       btn.textContent = m[0].toUpperCase() + m.slice(1);
       btn.addEventListener(
@@ -141,7 +170,40 @@
       this.modeSegEl.appendChild(btn);
       this.modeBtns[m] = btn;
     }
-    controls.appendChild(this.modeSegEl);
+    primaryControls.appendChild(this.modeSegEl);
+
+    this.tierQuickEl = document.createElement('div');
+    this.tierQuickEl.className = 'chatgml-mode-segmented chatgml-tier-quick';
+    this.tierQuickBtns = {};
+    var tierQuick = [
+      { value: '', label: 'Auto' },
+      { value: 'planner', label: 'Plan' },
+      { value: 'implementer', label: 'Act' },
+      { value: 'reviewer', label: 'Review' },
+    ];
+    for (let i = 0; i < tierQuick.length; i++) {
+      const entry = tierQuick[i];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chatgml-mode-btn';
+      btn.textContent = entry.label;
+      btn.title = entry.value
+        ? 'Use ' + entry.value + ' tier for the next turn'
+        : 'Use automatic tier';
+      btn.addEventListener('click', function () {
+        const chosen = entry.value || null;
+        self.setTierOverride(chosen);
+        if (typeof self.opts.onTierOverride === 'function') self.opts.onTierOverride(chosen);
+        self.flash(
+          chosen
+            ? 'tier set to ' + chosen + ' — next turn uses this lane'
+            : 'tier override cleared',
+        );
+      });
+      this.tierQuickEl.appendChild(btn);
+      this.tierQuickBtns[entry.value || 'auto'] = btn;
+    }
+    primaryControls.appendChild(this.tierQuickEl);
 
     // Task workspace picker.
     this.taskWrapEl = document.createElement('div');
@@ -162,6 +224,7 @@
       }
     });
     this.taskDeleteBtn = document.createElement('button');
+    this.taskDeleteBtn.type = 'button';
     this.taskDeleteBtn.className = 'chatgml-task-delete';
     this.taskDeleteBtn.textContent = '×';
     this.taskDeleteBtn.title = 'Delete the selected task';
@@ -176,10 +239,11 @@
     });
     this.taskWrapEl.appendChild(this.taskSelectEl);
     this.taskWrapEl.appendChild(this.taskDeleteBtn);
-    controls.appendChild(this.taskWrapEl);
+    secondaryControls.appendChild(this.taskWrapEl);
 
     // Clear conversation button (mirrors the /clear slash command).
     this.clearBtn = document.createElement('button');
+    this.clearBtn.type = 'button';
     this.clearBtn.className = 'run-button chatgml-clear-btn';
     this.clearBtn.textContent = 'Clear';
     this.clearBtn.title = 'Clear conversation';
@@ -189,7 +253,10 @@
     });
     this.clearBtn.style.fontSize = '11px';
     this.clearBtn.style.padding = '4px 10px';
-    controls.appendChild(this.clearBtn);
+    secondaryControls.appendChild(this.clearBtn);
+
+    controls.appendChild(primaryControls);
+    controls.appendChild(secondaryControls);
 
     c.appendChild(controls);
 
@@ -201,33 +268,111 @@
     // Quick-config row (scope/model/approval snapshot from the core's effective config). Populated
     // by setConfig(); empty until then so the panel never lies about config it has not read.
     this.configRowEl = document.createElement('div');
-    this.configRowEl.className = 'chatgml-config-row';
+    this.configRowEl.className = 'chatgml-config-row chatgml-env-strip';
     c.appendChild(this.configRowEl);
 
-    // Checkpoint chips row (after config chips).
+    // Changes section: checkpoints and edit proposals share one compact surface.
+    this.changesEl = document.createElement('div');
+    this.changesEl.className = 'chatgml-changes-section';
+    this.changesTitleEl = document.createElement('div');
+    this.changesTitleEl.className = 'chatgml-changes-title';
+    this.changesTitleEl.textContent = 'Changes';
+    this.changesEl.appendChild(this.changesTitleEl);
+
+    // Checkpoint chips row (inside changes section).
     this.checkpointRowEl = document.createElement('div');
     this.checkpointRowEl.className = 'chatgml-checkpoint-row';
     this.undoBtn = document.createElement('button');
+    this.undoBtn.type = 'button';
     this.undoBtn.className = 'chatgml-undo-btn';
     this.undoBtn.textContent = 'Undo last';
     this.undoBtn.title = 'Undo the most recent checkpoint';
     this.undoBtn.addEventListener('click', function () {
-      if (typeof self.opts.onUndo === 'function') self.opts.onUndo();
+      if (typeof self.opts.onUndo === 'function')
+        self.opts.onUndo(self.selectedCheckpointId || undefined);
     });
     this.checkpointRowEl.appendChild(this.undoBtn);
-    c.appendChild(this.checkpointRowEl);
+    this.changesEl.appendChild(this.checkpointRowEl);
 
-    c.appendChild(this.statusEl);
+    // Edit proposals.
+    const proposalsContainer = document.createElement('div');
+    proposalsContainer.className = 'chatgml-proposals';
+    this.changesEl.appendChild(proposalsContainer);
+    c.appendChild(this.changesEl);
+    this.diffView = new DiffView.EditProposalView({
+      container: proposalsContainer,
+      onApprove: function (id, blockIndex) {
+        if (typeof self.opts.onApprove === 'function') self.opts.onApprove(id, blockIndex);
+      },
+      onReject: function (id, blockIndex) {
+        if (typeof self.opts.onReject === 'function') self.opts.onReject(id, blockIndex);
+      },
+    });
+
+    primaryControls.appendChild(this.statusEl);
+
+    this.errorDetailsEl = document.createElement('details');
+    this.errorDetailsEl.className = 'chatgml-error-details';
+    this.errorDetailsEl.style.display = 'none';
+    this.errorSummaryEl = document.createElement('summary');
+    this.errorSummaryEl.textContent = 'Error';
+    this.errorBodyEl = document.createElement('pre');
+    this.errorDetailsEl.appendChild(this.errorSummaryEl);
+    this.errorDetailsEl.appendChild(this.errorBodyEl);
+    c.appendChild(this.errorDetailsEl);
+
+    this.diagnosticsEl = document.createElement('div');
+    this.diagnosticsEl.className = 'chatgml-diagnostics';
+    this.diagnosticsEl.style.display = 'none';
+    this.diagnosticsHeaderEl = document.createElement('div');
+    this.diagnosticsHeaderEl.className = 'chatgml-diagnostics-header';
+    this.diagnosticsHeaderEl.textContent = 'Diagnostics';
+    this.diagnosticsCopyBtn = document.createElement('button');
+    this.diagnosticsCopyBtn.type = 'button';
+    this.diagnosticsCopyBtn.className = 'chatgml-diagnostics-copy';
+    this.diagnosticsCopyBtn.textContent = 'Copy';
+    this.diagnosticsCopyBtn.addEventListener('click', function () {
+      var text = self._diagnosticsText();
+      if (typeof self.opts.onCopyDiagnostics === 'function') {
+        self.opts.onCopyDiagnostics(text);
+        self.flash('diagnostics copied');
+        return;
+      }
+      try {
+        if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text);
+          self.flash('diagnostics copied');
+        }
+      } catch (e) {
+        self.flash('copy diagnostics failed', true);
+      }
+    });
+    this.diagnosticsHeaderEl.appendChild(this.diagnosticsCopyBtn);
+    this.diagnosticsBodyEl = document.createElement('div');
+    this.diagnosticsBodyEl.className = 'chatgml-diagnostics-body';
+    this.diagnosticsEl.appendChild(this.diagnosticsHeaderEl);
+    this.diagnosticsEl.appendChild(this.diagnosticsBodyEl);
+    c.appendChild(this.diagnosticsEl);
+
+    this.knowledgeEl = document.createElement('div');
+    this.knowledgeEl.className = 'chatgml-knowledge';
+    this.knowledgeEl.style.display = 'none';
+    this.knowledgeHeaderEl = document.createElement('div');
+    this.knowledgeHeaderEl.className = 'chatgml-knowledge-header';
+    this.knowledgeHeaderEl.textContent = 'Knowledge';
+    this.knowledgeBodyEl = document.createElement('div');
+    this.knowledgeBodyEl.className = 'chatgml-knowledge-body';
+    this.knowledgeEl.appendChild(this.knowledgeHeaderEl);
+    this.knowledgeEl.appendChild(this.knowledgeBodyEl);
+    c.appendChild(this.knowledgeEl);
 
     // Activity (tool calls).
     this.activityEl = document.createElement('div');
-    this.activityEl.className = 'chatgml-activity';
-    c.appendChild(this.activityEl);
+    this.activityEl.className = 'chatgml-activity chatgml-activity-inline';
 
     // Tool catalog (collapsible).
     this.catalogEl = document.createElement('div');
-    this.catalogEl.className = 'chatgml-tool-catalog';
-    c.appendChild(this.catalogEl);
+    this.catalogEl.className = 'chatgml-tool-catalog chatgml-tool-catalog-inline';
 
     // Transcript (streamed tokens) + final answer.
     // Trim notice: a small dim line shown ABOVE the transcript whenever the reducer had to evict
@@ -248,20 +393,6 @@
     this.sourcesEl.className = 'chatgml-sources';
     c.appendChild(this.sourcesEl);
 
-    // Edit proposals.
-    const proposalsContainer = document.createElement('div');
-    proposalsContainer.className = 'chatgml-proposals';
-    c.appendChild(proposalsContainer);
-    this.diffView = new DiffView.EditProposalView({
-      container: proposalsContainer,
-      onApprove: function (id, blockIndex) {
-        self.opts.onApprove(id, blockIndex);
-      },
-      onReject: function (id, blockIndex) {
-        self.opts.onReject(id, blockIndex);
-      },
-    });
-
     // Mention chips row (above input).
     this.mentionRowEl = document.createElement('div');
     this.mentionRowEl.className = 'chatgml-mention-row';
@@ -276,7 +407,8 @@
     this.inputEl.className = 'chatgml-input';
     this.inputEl.setAttribute('placeholder', 'Ask about this project… (type /help for commands)');
     this.sendBtn = document.createElement('button');
-    this.sendBtn.className = 'run-button';
+    this.sendBtn.type = 'button';
+    this.sendBtn.className = 'run-button chatgml-send-btn';
     this.sendBtn.textContent = 'Send';
     const submit = function () {
       self._submit();
@@ -335,20 +467,68 @@
     inputRow.appendChild(this.mentionDropdownEl);
     // Settings gear button (right-aligned in controls row).
     this.settingsBtn = document.createElement('button');
+    this.settingsBtn.type = 'button';
     this.settingsBtn.className = 'chatgml-settings-btn';
     this.settingsBtn.title = 'Settings';
     this.settingsBtn.innerHTML = '⚙';
     this.settingsBtn.addEventListener('click', function () {
       self._toggleSettings();
     });
-    controls.appendChild(this.settingsBtn);
+    primaryControls.appendChild(this.settingsBtn);
+
+    this.diagnosticsBtn = document.createElement('button');
+    this.diagnosticsBtn.type = 'button';
+    this.diagnosticsBtn.className = 'run-button chatgml-diagnostics-btn';
+    this.diagnosticsBtn.textContent = 'Diag';
+    this.diagnosticsBtn.title = 'Show ChatGML diagnostics';
+    this.diagnosticsBtn.addEventListener('click', function () {
+      self.diagnosticsOpen = !self.diagnosticsOpen;
+      self.flash(self.diagnosticsOpen ? 'diagnostics opened' : 'diagnostics closed');
+      self.render();
+    });
+    secondaryControls.appendChild(this.diagnosticsBtn);
+
+    this.knowledgeBtn = document.createElement('button');
+    this.knowledgeBtn.type = 'button';
+    this.knowledgeBtn.className = 'run-button chatgml-knowledge-btn';
+    this.knowledgeBtn.textContent = 'Know';
+    this.knowledgeBtn.title = 'Show knowledge map';
+    this.knowledgeBtn.addEventListener('click', function () {
+      self.knowledgeOpen = !self.knowledgeOpen;
+      self.flash(self.knowledgeOpen ? 'knowledge map opened' : 'knowledge map closed');
+      self.render();
+    });
+    secondaryControls.appendChild(this.knowledgeBtn);
 
     this.sendBtn.setAttribute('disabled', 'disabled');
+    this.contextBtn = document.createElement('button');
+    this.contextBtn.type = 'button';
+    this.contextBtn.className = 'chatgml-context-btn';
+    this.contextBtn.textContent = '@';
+    this.contextBtn.title = 'Add context';
+    this.contextBtn.addEventListener('click', function () {
+      self.inputEl.focus();
+      const start = self.inputEl.selectionStart || 0;
+      const end = self.inputEl.selectionEnd || start;
+      const before = self.inputEl.value.slice(0, start);
+      const after = self.inputEl.value.slice(end);
+      if (before.charAt(before.length - 1) !== '@') {
+        self.inputEl.value = before + '@' + after;
+        self.inputEl.selectionStart = start + 1;
+        self.inputEl.selectionEnd = start + 1;
+        self._mentionTriggerPos = start;
+      } else {
+        self._mentionTriggerPos = start - 1;
+      }
+      self._showMentionDropdown();
+    });
+    inputRow.appendChild(this.contextBtn);
     inputRow.appendChild(this.inputEl);
     inputRow.appendChild(this.sendBtn);
     // Stop-generating button: visible only while the agent is streaming or running a tool. Inserted
     // BEFORE the send button so it lands to its left in the input row.
     this.stopGenBtn = document.createElement('button');
+    this.stopGenBtn.type = 'button';
     this.stopGenBtn.className = 'run-button chatgml-stop-btn';
     this.stopGenBtn.textContent = '⏹';
     this.stopGenBtn.title = 'Stop generating';
@@ -358,6 +538,13 @@
     });
     inputRow.insertBefore(this.stopGenBtn, this.sendBtn);
     c.appendChild(inputRow);
+
+    this.contextRowEl = document.createElement('div');
+    this.contextRowEl.className = 'chatgml-context-row';
+    this.contextChipEl = document.createElement('span');
+    this.contextChipEl.className = 'chatgml-context-chip';
+    this.contextRowEl.appendChild(this.contextChipEl);
+    c.insertBefore(this.contextRowEl, inputRow);
   };
 
   /** Toggle the settings dropdown panel (lazy-builds on first open). Visibility is determined
@@ -370,7 +557,12 @@
     var el = this.settingsPanelEl;
     var computed =
       typeof getComputedStyle === 'function' ? getComputedStyle(el).display : el.style.display;
-    el.style.display = computed === 'none' ? 'flex' : 'none';
+    var willOpen = computed === 'none';
+    el.style.display = willOpen ? 'flex' : 'none';
+    if (willOpen) this._fitSettingsPanel();
+    if (willOpen && typeof this.opts.onSettingsOpen === 'function') {
+      this.opts.onSettingsOpen();
+    }
     // First open after the panel was just built: pick up the providers load result that
     // chatgml.js stashed on `this._pendingProvidersLoad` during the bootstrap call. We use the
     // same callbacks the bootstrap uses so Refresh/Add/Export behave identically.
@@ -386,6 +578,18 @@
     }
   };
 
+  ChatPanel.prototype._fitSettingsPanel = function () {
+    if (!this.settingsPanelEl || !this.settingsScrollEl) return;
+    var container = this.opts && this.opts.container ? this.opts.container : null;
+    var hostHeight =
+      (container && container.clientHeight) ||
+      (typeof window !== 'undefined' && window.innerHeight) ||
+      720;
+    var max = Math.max(180, Math.min(620, hostHeight - 132));
+    this.settingsPanelEl.style.maxHeight = max + 'px';
+    this.settingsScrollEl.style.maxHeight = max + 'px';
+  };
+
   // -------------------------------------------------------------------------
   // SESSIONS SIDEBAR (multi-session history). The sidebar lives at the very top of the panel
   // container, above the controls row, so it's visible while the user reviews the chat
@@ -398,7 +602,7 @@
   ChatPanel.prototype._buildSessionsSidebar = function () {
     const self = this;
     const root = document.createElement('div');
-    root.className = 'chatgml-session-root';
+    root.className = 'chatgml-session-root chatgml-session-root--collapsed';
 
     // Header row (always visible). Holds the toggle chevron + title + count + "+ New session".
     const header = document.createElement('div');
@@ -407,14 +611,17 @@
     toggle.className = 'chatgml-session-toggle';
     toggle.type = 'button';
     toggle.title = 'Toggle sessions list';
-    toggle.setAttribute('aria-expanded', 'true');
-    toggle.textContent = '\u25BE'; // ▾ — small downward chevron
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = '\u25B8'; // small right chevron
     toggle.addEventListener('click', function () {
       self._toggleSessionsSidebar();
     });
     const title = document.createElement('span');
     title.className = 'chatgml-session-header-title';
-    title.textContent = 'Sessions';
+    title.textContent = 'Session';
+    const activeTitle = document.createElement('span');
+    activeTitle.className = 'chatgml-session-active-title';
+    activeTitle.textContent = 'default';
     const count = document.createElement('span');
     count.className = 'chatgml-session-header-count';
     count.textContent = '0';
@@ -431,6 +638,7 @@
     });
     header.appendChild(toggle);
     header.appendChild(title);
+    header.appendChild(activeTitle);
     header.appendChild(count);
     header.appendChild(newBtn);
     // Click anywhere on the header (except the new-button) toggles the sidebar so the user can
@@ -462,11 +670,12 @@
     this.sessionsEl = root;
     this.sessionsHeaderEl = header;
     this.sessionsToggleEl = toggle;
+    this.sessionsActiveTitleEl = activeTitle;
     this.sessionsCountEl = count;
     this.sessionsBodyEl = body;
     this.sessionsListEl = list;
     this.sessionsEmptyEl = empty;
-    this.sessionsCollapsed = false;
+    this.sessionsCollapsed = true;
     this._sessionsData = [];
     this._sessionsActiveId = 'default';
   };
@@ -507,11 +716,16 @@
     if (this.sessionsEmptyEl) {
       this.sessionsEmptyEl.style.display = total === 0 ? '' : 'none';
     }
+    if (this.sessionsEl) {
+      if (total === 0) this.sessionsEl.classList.add('chatgml-session-root--empty');
+      else this.sessionsEl.classList.remove('chatgml-session-root--empty');
+    }
     for (let i = 0; i < this._sessionsData.length; i++) {
       const entry = this._sessionsData[i];
       const row = this._buildSessionRow(entry);
       this.sessionsListEl.appendChild(row);
     }
+    this._refreshActiveSessionTitle();
     void self;
   };
 
@@ -591,6 +805,7 @@
    * sidebar reflects the new active id without re-pulling the entire list from disk. */
   ChatPanel.prototype.setActiveSession = function (id) {
     this._sessionsActiveId = id || 'default';
+    this._refreshActiveSessionTitle();
     if (!this.sessionsListEl) return;
     const rows = this.sessionsListEl.querySelectorAll('.chatgml-session-list-item');
     for (let i = 0; i < rows.length; i++) {
@@ -605,6 +820,21 @@
           : 'chatgml-session-dot';
       }
     }
+  };
+
+  ChatPanel.prototype._refreshActiveSessionTitle = function () {
+    if (!this.sessionsActiveTitleEl) return;
+    var label = this._sessionsActiveId || this.taskId || 'default';
+    for (var i = 0; i < this._sessionsData.length; i++) {
+      var entry = this._sessionsData[i];
+      if (entry.id === this._sessionsActiveId || entry.isActive) {
+        label = entry.title || entry.id || label;
+        break;
+      }
+    }
+    this.sessionsActiveTitleEl.textContent =
+      String(label).length > 24 ? String(label).slice(0, 23).trimEnd() + '...' : String(label);
+    this.sessionsActiveTitleEl.title = String(label);
   };
 
   /** Set the "switch in progress" visual cue. Used by chatgml.js to dim the sidebar header
@@ -684,6 +914,14 @@
     // Provider registry section — collapsible details panel inside the settings. Lists every
     // provider+model pair from the merged registry, with a click-to-apply handler that fills the
     // Model + Base URL fields and stamps `providerSelected` on the save.
+    this.settingsProviderSearchInput = document.createElement('input');
+    this.settingsProviderSearchInput.type = 'search';
+    this.settingsProviderSearchInput.className =
+      'chatgml-settings-input chatgml-settings-provider-search';
+    this.settingsProviderSearchInput.placeholder = 'Search providers/models...';
+    this.settingsProviderStatusEl = document.createElement('div');
+    this.settingsProviderStatusEl.className = 'chatgml-settings-provider-status';
+    this.settingsProviderStatusEl.style.display = 'none';
     this.settingsProvidersEl = document.createElement('div');
     this.settingsProvidersEl.className = 'chatgml-settings-providers';
 
@@ -871,6 +1109,7 @@
 
     // Save & Restart button
     var saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
     saveBtn.className = 'run-button chatgml-settings-save';
     saveBtn.textContent = 'Save & Restart';
     saveBtn.addEventListener('click', function () {
@@ -902,12 +1141,16 @@
         },
       };
       // Stamp provider-selected metadata so SettingsTasks can choose to emit the registry-derived
-      // fields (path, auth) without having to re-resolve the (provider, model) pair itself. The
-      // panel set `this._activeProviderEntry` when the user clicked a registry row.
+      // metadata without trying to persist unsupported core fields. The panel set
+      // `this._activeProviderEntry` when the user clicked a registry row.
       if (self._activeProviderEntry) {
         settings.providerSelected = true;
-        settings.path = self._activeProviderEntry.endpoint || '';
-        settings.auth = self._activeProviderEntry.auth || '';
+        settings.providerName = self._activeProviderEntry.providerName || '';
+        settings.authState = self._activeProviderEntry.authState || '';
+        settings.envVar = self._activeProviderEntry.envVar || '';
+        if (settings.authState === 'missing' && !settings.apiKey) {
+          self.flash('selected provider has no key; save an env:KEY API key before Launch', true);
+        }
       }
       if (typeof self.opts.onSaveSettings === 'function') {
         self.opts.onSaveSettings(settings);
@@ -925,8 +1168,13 @@
     // Mount the scroll wrapper inside the panel, then the panel inside the container.
     this.settingsPanelEl.appendChild(this.settingsScrollEl);
 
-    // Insert after controls, before status line.
-    this.opts.container.insertBefore(this.settingsPanelEl, this.statusEl);
+    // Insert after controls, before the config strip. statusEl lives inside the workbench header,
+    // so it is not a direct child of the panel container and cannot be used as insertBefore anchor.
+    var anchor =
+      this.configRowEl && this.configRowEl.parentNode === this.opts.container
+        ? this.configRowEl
+        : this.opts.container.firstChild;
+    this.opts.container.insertBefore(this.settingsPanelEl, anchor || null);
   };
 
   /** Populate settings inputs from a config object (from `chatgml config show`). The api key is
@@ -1005,8 +1253,13 @@
         var srcBadge = document.createElement('span');
         srcBadge.className = 'chatgml-settings-providers-source';
         srcBadge.textContent = src.name + '·' + (src.count || 0);
-        srcBadge.title = src.path + '  (' + (src.count || 0) + ' provider' +
-          ((src.count || 0) === 1 ? '' : 's') + ')';
+        srcBadge.title =
+          src.path +
+          '  (' +
+          (src.count || 0) +
+          ' provider' +
+          ((src.count || 0) === 1 ? '' : 's') +
+          ')';
         headerLeft.appendChild(srcBadge);
       })(sources[si]);
     }
@@ -1082,93 +1335,224 @@
       fillDatalist(slot.baseURL, dlists.baseUrlOptions);
     }
 
-    // Provider list — collapsible `<details>` per provider, with click-to-apply rows for each
-    // model. The apply handler fills the Model + Base URL inputs and stores the entry on the
-    // panel so the save handler can stamp `providerSelected`.
-    while (this.settingsProvidersEl.firstChild)
-      this.settingsProvidersEl.removeChild(this.settingsProvidersEl.firstChild);
-    var providers = loadResult.providers || [];
-    if (providers.length === 0) {
-      var empty = document.createElement('div');
-      empty.className = 'chatgml-settings-providers-empty';
-      empty.textContent =
-        'No providers registered. Edit ~/.config/chatgml/providers.json or click + to add one.';
-      this.settingsProvidersEl.appendChild(empty);
-    } else {
-      for (var pi = 0; pi < providers.length; pi++) {
-        (function (prov) {
-          var det = document.createElement('details');
-          det.className = 'chatgml-settings-provider-group';
-          var sm = document.createElement('summary');
-          var nameSpan = document.createElement('span');
-          nameSpan.textContent = prov.name;
-          sm.appendChild(nameSpan);
-          var metaSpan = document.createElement('span');
-          metaSpan.className = 'chatgml-settings-provider-meta';
-          metaSpan.textContent =
-            prov.kind +
-            (prov.models.length > 0
-              ? ' · ' + prov.models.length + ' model' + (prov.models.length === 1 ? '' : 's')
-              : '');
-          sm.appendChild(metaSpan);
-          det.appendChild(sm);
+    this._providerLoadResult = loadResult;
+    this._renderProviderList = function () {
+      while (self.settingsProvidersEl.firstChild)
+        self.settingsProvidersEl.removeChild(self.settingsProvidersEl.firstChild);
+      var providers = loadResult.providers || [];
+      var query = self.settingsProviderSearchInput
+        ? self.settingsProviderSearchInput.value.toLowerCase().trim()
+        : '';
+      var currentModel = self.settingsModelInput
+        ? self.settingsModelInput.value.toLowerCase().trim()
+        : '';
+      var favoriteNames = {
+        'kimi-coding': true,
+        'kimi-moonshot': true,
+        'opencode-go': true,
+        'maveros-lan': true,
+        openrouter: true,
+        'minimax-openai': true,
+      };
 
-          var urlRow = document.createElement('div');
-          urlRow.className = 'chatgml-settings-provider-url';
-          urlRow.textContent = prov.baseUrl || '(no base_url)';
-          det.appendChild(urlRow);
-
-          var list = document.createElement('div');
-          list.className = 'chatgml-settings-provider-models';
-          if (prov.models.length === 0) {
-            var nm = document.createElement('div');
-            nm.className = 'chatgml-settings-provider-no-models';
-            nm.textContent = 'No models registered — click + to add one.';
-            list.appendChild(nm);
-          } else {
-            for (var mi = 0; mi < prov.models.length; mi++) {
-              (function (model, parent) {
-                var row = document.createElement('button');
-                row.type = 'button';
-                row.className = 'chatgml-settings-provider-model';
-                row.title = 'Click to apply this provider+model to the chat lane';
-                var lbl = document.createElement('span');
-                lbl.textContent = model.id;
-                row.appendChild(lbl);
-                var wire = document.createElement('span');
-                wire.className = 'chatgml-settings-provider-wire';
-                wire.textContent =
-                  model.wireModel && model.wireModel !== model.id ? 'wire: ' + model.wireModel : '';
-                row.appendChild(wire);
-                if (model.contextWindow > 0) {
-                  var ctx = document.createElement('span');
-                  ctx.className = 'chatgml-settings-provider-ctx';
-                  ctx.textContent = 'ctx ' + model.contextWindow.toLocaleString();
-                  row.appendChild(ctx);
-                }
-                row.addEventListener('click', function () {
-                  self._applyProviderEntry({
-                    providerName: prov.name,
-                    modelId: model.id,
-                    baseUrl: prov.baseUrl,
-                    endpoint: prov.endpoint,
-                    auth: prov.auth,
-                  });
-                });
-                parent.appendChild(row);
-              })(prov.models[mi], list);
-            }
-          }
-          det.appendChild(list);
-          self.settingsProvidersEl.appendChild(det);
-        })(providers[pi]);
+      function isFavorite(prov, model) {
+        if (prov.usable === false) return false;
+        if (currentModel && model && String(model.id).toLowerCase() === currentModel) return true;
+        if (prov.name === 'kimi-coding' && model && model.id === 'kimi-for-coding') return true;
+        if (prov.name === 'kimi-moonshot' && model && model.id === 'kimi-k2.7-code') return true;
+        if (prov.name === 'openrouter' && model && model.id === 'minimax/minimax-m3') return true;
+        if (prov.name === 'minimax-openai' && model && model.id === 'MiniMax-M3') return true;
+        return favoriteNames[prov.name] === true;
       }
+
+      function matches(prov, model) {
+        if (!query) return true;
+        var hay =
+          prov.name +
+          ' ' +
+          prov.kind +
+          ' ' +
+          prov.baseUrl +
+          ' ' +
+          (model ? model.id + ' ' + model.wireModel : '');
+        return hay.toLowerCase().indexOf(query) >= 0;
+      }
+
+      function renderGroup(prov, models, parent, open) {
+        var det = document.createElement('details');
+        det.className =
+          'chatgml-settings-provider-group' +
+          (prov.usable === false ? ' chatgml-settings-provider-group--unsupported' : '');
+        if (open) det.open = true;
+        var sm = document.createElement('summary');
+        var nameSpan = document.createElement('span');
+        nameSpan.textContent = prov.name;
+        sm.appendChild(nameSpan);
+        var metaSpan = document.createElement('span');
+        metaSpan.className = 'chatgml-settings-provider-meta';
+        metaSpan.textContent =
+          prov.kind +
+          ' · ' +
+          (models.length || prov.models.length) +
+          ' model' +
+          ((models.length || prov.models.length) === 1 ? '' : 's') +
+          ' · ' +
+          (prov.authState || 'missing') +
+          (prov.usable === false ? ' · not usable' : '');
+        sm.appendChild(metaSpan);
+        det.appendChild(sm);
+
+        var urlRow = document.createElement('div');
+        urlRow.className = 'chatgml-settings-provider-url';
+        urlRow.textContent = prov.baseUrl || '(no base_url)';
+        det.appendChild(urlRow);
+
+        var list = document.createElement('div');
+        list.className = 'chatgml-settings-provider-models';
+        if (models.length === 0) {
+          var nm = document.createElement('div');
+          nm.className = 'chatgml-settings-provider-no-models';
+          nm.textContent = 'No matching models.';
+          list.appendChild(nm);
+        } else {
+          for (var mi = 0; mi < models.length; mi++) {
+            (function (model, parent2) {
+              var row = document.createElement('button');
+              row.type = 'button';
+              row.className = 'chatgml-settings-provider-model';
+              row.title =
+                prov.usable === false
+                  ? 'This provider is not usable by the current OpenAI-compatible core'
+                  : 'Click to apply this provider+model to the chat lane';
+              if (prov.usable === false) row.setAttribute('disabled', 'disabled');
+              var lbl = document.createElement('span');
+              lbl.textContent = model.id;
+              row.appendChild(lbl);
+              var wire = document.createElement('span');
+              wire.className = 'chatgml-settings-provider-wire';
+              wire.textContent =
+                model.wireModel && model.wireModel !== model.id ? 'wire: ' + model.wireModel : '';
+              row.appendChild(wire);
+              if (model.contextWindow > 0) {
+                var ctx = document.createElement('span');
+                ctx.className = 'chatgml-settings-provider-ctx';
+                ctx.textContent = 'ctx ' + model.contextWindow.toLocaleString();
+                row.appendChild(ctx);
+              }
+              row.addEventListener('click', function () {
+                self._applyProviderEntry({
+                  providerName: prov.name,
+                  modelId: model.id,
+                  baseUrl: prov.baseUrl,
+                  endpoint: prov.endpoint,
+                  auth: prov.auth,
+                  authState: prov.authState,
+                  envVar: prov.envVar,
+                  envVars: prov.envVars || [],
+                });
+              });
+              parent2.appendChild(row);
+            })(models[mi], list);
+          }
+        }
+        det.appendChild(list);
+        parent.appendChild(det);
+      }
+
+      if (providers.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'chatgml-settings-providers-empty';
+        empty.textContent =
+          'No providers registered. Edit ~/.config/chatgml/providers.json or click + to add one.';
+        self.settingsProvidersEl.appendChild(empty);
+        return;
+      }
+
+      var favorites = [];
+      var filtered = [];
+      for (var pi = 0; pi < providers.length; pi++) {
+        var prov = providers[pi];
+        var models = Array.isArray(prov.models) ? prov.models : [];
+        var favModels = [];
+        var matchModels = [];
+        for (var mi2 = 0; mi2 < models.length; mi2++) {
+          if (matches(prov, models[mi2])) matchModels.push(models[mi2]);
+          if (isFavorite(prov, models[mi2]) && matches(prov, models[mi2]))
+            favModels.push(models[mi2]);
+        }
+        if (favModels.length > 0) favorites.push({ provider: prov, models: favModels });
+        if (matchModels.length > 0 || (models.length === 0 && matches(prov, null))) {
+          filtered.push({ provider: prov, models: matchModels });
+        }
+      }
+
+      var favTitle = document.createElement('div');
+      favTitle.className = 'chatgml-settings-provider-section-title';
+      favTitle.textContent = 'Favorites';
+      self.settingsProvidersEl.appendChild(favTitle);
+      if (favorites.length === 0) {
+        var noFav = document.createElement('div');
+        noFav.className = 'chatgml-settings-providers-empty';
+        noFav.textContent = query ? 'No favorite matches.' : 'No favorite providers available yet.';
+        self.settingsProvidersEl.appendChild(noFav);
+      } else {
+        for (var fi = 0; fi < favorites.length; fi++) {
+          renderGroup(favorites[fi].provider, favorites[fi].models, self.settingsProvidersEl, true);
+        }
+      }
+
+      var all = document.createElement('details');
+      all.className = 'chatgml-settings-providers-all';
+      all.open = query !== '';
+      var sum = document.createElement('summary');
+      sum.textContent =
+        'Search results (' + filtered.length + ' match' + (filtered.length === 1 ? ')' : 'es)');
+      all.appendChild(sum);
+      if (filtered.length === 0) {
+        var none = document.createElement('div');
+        none.className = 'chatgml-settings-providers-empty';
+        none.textContent = 'No providers match this search.';
+        all.appendChild(none);
+      } else {
+        for (var ai = 0; ai < filtered.length; ai++) {
+          renderGroup(filtered[ai].provider, filtered[ai].models, all, query !== '');
+        }
+      }
+      if (query) {
+        self.settingsProvidersEl.appendChild(all);
+      } else {
+        var hint = document.createElement('div');
+        hint.className = 'chatgml-settings-providers-empty';
+        hint.textContent = 'Search to show other providers.';
+        self.settingsProvidersEl.appendChild(hint);
+      }
+    };
+    this._renderProviderList();
+
+    if (this.settingsProviderSearchInput) {
+      this.settingsProviderSearchInput.removeEventListener('input', this._onProviderSearchInput);
+      this._onProviderSearchInput = function () {
+        if (self._renderProviderList) self._renderProviderList();
+      };
+      this.settingsProviderSearchInput.addEventListener('input', this._onProviderSearchInput);
     }
-    // Mount the provider list just after the sticky header, so it appears above the form rows.
+
+    if (this.settingsProviderSearchInput.parentNode !== this.settingsScrollEl) {
+      this.settingsScrollEl.insertBefore(
+        this.settingsProviderSearchInput,
+        this.settingsHeaderEl.nextSibling,
+      );
+    }
+    if (this.settingsProviderStatusEl.parentNode !== this.settingsScrollEl) {
+      this.settingsScrollEl.insertBefore(
+        this.settingsProviderStatusEl,
+        this.settingsProviderSearchInput.nextSibling,
+      );
+    }
     if (this.settingsProvidersEl.parentNode !== this.settingsScrollEl) {
       this.settingsScrollEl.insertBefore(
         this.settingsProvidersEl,
-        this.settingsHeaderEl.nextSibling,
+        this.settingsProviderStatusEl.nextSibling,
       );
     }
     // URL hint + click handler wiring (re-bound on each refresh so the closure captures the
@@ -1208,13 +1592,48 @@
   };
 
   /** Apply a registry (provider, model) entry to the chat-lane inputs. Called when the user
-   * clicks a row in the providers list. Stamps the entry on the panel so the save handler emits
-   * the registry-derived fields (path, auth) alongside the model + URL. */
+   * clicks a row in the providers list. Stamps metadata on the panel for save feedback only. */
   ChatPanel.prototype._applyProviderEntry = function (entry) {
     if (!entry) return;
     this._activeProviderEntry = entry;
     if (this.settingsModelInput) this.settingsModelInput.value = entry.modelId || '';
     if (this.settingsUrlInput) this.settingsUrlInput.value = entry.baseUrl || '';
+    var envVars = Array.isArray(entry.envVars) ? entry.envVars : [];
+    var envVar = entry.envVar || envVars[0] || '';
+    if (this.settingsApiKeyInput && envVar) {
+      this.settingsApiKeyInput.value = 'env:' + envVar;
+    }
+    if (this.settingsProviderStatusEl) {
+      var shownEnv = [];
+      var envSeen = {};
+      var envCandidates = envVar ? [envVar].concat(envVars) : envVars;
+      for (var evi = 0; evi < envCandidates.length; evi++) {
+        var evn = envCandidates[evi];
+        if (!evn || envSeen[evn]) continue;
+        envSeen[evn] = true;
+        shownEnv.push(evn);
+      }
+      var auth =
+        entry.authState === 'env ref' && envVar
+          ? 'env ref: ' + shownEnv.join(' / ')
+          : entry.authState || 'missing';
+      this.settingsProviderStatusEl.textContent =
+        'selected ' +
+        (entry.providerName || 'provider') +
+        ' / ' +
+        (entry.modelId || 'model') +
+        ' · ' +
+        auth +
+        ' · Save & Restart to apply';
+      this.settingsProviderStatusEl.style.display = 'block';
+    }
+    this.flash(
+      'selected ' +
+        (entry.providerName || 'provider') +
+        ' / ' +
+        (entry.modelId || 'model') +
+        '; Save & Restart to apply',
+    );
     if (this._refreshUrlHint) this._refreshUrlHint();
     // Scroll the chat-lane form rows into view so the user can confirm the auto-fill before
     // hitting Save & Restart.
@@ -1241,6 +1660,14 @@
       this._handleSlash(slash);
       this.inputEl.value = '';
       this._renderMentionChips();
+      return;
+    }
+    if (!this.ready) {
+      this.flash(this.running ? 'ChatGML is still starting' : 'Launch ChatGML first', true);
+      return;
+    }
+    if (this._busy) {
+      this.flash('ChatGML is still working', true);
       return;
     }
     // Non-slash: resolve @mentions, gather editor context, and send the clean message.
@@ -1303,6 +1730,7 @@
     // visually replaced the first bubble", and pinning pendingUserText to the head is exactly
     // the right semantics.
     this.state.pendingUserText = this.state.outbox[0].text;
+    this.state.busy = true;
     this._setBusy(true);
     this.inputEl.value = '';
     this._renderMentionChips();
@@ -1322,10 +1750,6 @@
    */
   ChatPanel.prototype._setBusy = function (busy) {
     this._busy = !!busy;
-    if (this.sendBtn) {
-      if (busy) this.sendBtn.setAttribute('disabled', 'disabled');
-      else this.sendBtn.removeAttribute('disabled');
-    }
     if (this.inputEl) {
       // readOnly prevents typing into an in-flight turn (matches the visual "wait" affordance);
       // it's also a hard guarantee — the textarea ignores keystrokes when readOnly = true.
@@ -1334,6 +1758,19 @@
       } catch (e) {
         /* readOnly is a reflected property on textarea; ignore engine quirks */
       }
+    }
+    this._syncControls();
+  };
+
+  ChatPanel.prototype._syncControls = function () {
+    if (this.launchBtn) this.launchBtn.removeAttribute('disabled');
+    if (this.sendBtn) {
+      if (!this.ready || this._busy) this.sendBtn.setAttribute('disabled', 'disabled');
+      else this.sendBtn.removeAttribute('disabled');
+    }
+    if (this.reindexBtn) {
+      if (this.running && this.ready) this.reindexBtn.removeAttribute('disabled');
+      else this.reindexBtn.setAttribute('disabled', 'disabled');
     }
   };
 
@@ -1388,14 +1825,35 @@
   ChatPanel.prototype._showMentionDropdown = function () {
     const self = this;
     this.mentionDropdownEl.innerHTML = '';
-    const items = [
+    var ctx = null;
+    if (typeof this.opts.getEditorContext === 'function') {
+      try {
+        ctx = this.opts.getEditorContext();
+      } catch (e) {
+        ctx = null;
+      }
+    }
+    const items = [];
+    if (ctx && ctx.openFile) {
+      items.push({ type: 'file', label: 'current file', insert: 'file ' + ctx.openFile });
+    }
+    if (ctx && ctx.selection && String(ctx.selection).trim() !== '') {
+      items.push({
+        type: 'selection',
+        label: 'selection',
+        action: function () {
+          self.flash('current selection is attached');
+        },
+      });
+    }
+    items.push(
       { type: 'file', label: 'file', insert: 'file ' },
       { type: 'folder', label: 'folder', insert: 'folder ' },
       { type: 'problems', label: 'problems', insert: 'problems' },
       { type: 'terminal', label: 'terminal', insert: 'terminal' },
       { type: 'url', label: 'url', insert: 'url ' },
       { type: 'image', label: 'image', insert: 'image ' },
-    ];
+    );
     this._mentionItems = items;
     this._mentionActiveIndex = 0;
     for (let i = 0; i < items.length; i++) {
@@ -1406,12 +1864,16 @@
       div.textContent = item.label;
       div.addEventListener(
         'click',
-        (function (insert) {
+        (function (entry) {
           return function () {
-            self._insertMention(insert);
+            if (typeof entry.action === 'function') {
+              entry.action();
+            } else {
+              self._insertMention(entry.insert);
+            }
             self._hideMentionDropdown();
           };
-        })(item.insert),
+        })(item),
       );
       this.mentionDropdownEl.appendChild(div);
     }
@@ -1590,6 +2052,7 @@
     for (var i = 0; i < opts.length; i++) {
       (function (entry) {
         var btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'chatgml-tier-picker-btn ' + entry.cls;
         btn.textContent = entry.label;
         if (
@@ -1675,6 +2138,7 @@
       const label = m.type + (m.target && m.target !== m.type ? ': ' + m.target : '');
       chip.appendChild(document.createTextNode(label));
       const x = document.createElement('button');
+      x.type = 'button';
       x.textContent = '×';
       x.title = 'Remove mention';
       x.addEventListener(
@@ -1726,12 +2190,10 @@
    * re-renders (which would freeze the panel on longer conversations). */
   ChatPanel.prototype.handleEvent = function (event) {
     this.state = State.reducePluginState(event, this.state);
-    // OUTBOX / busy re-sync: the reducer already managed `state.outbox` and `state.busy`, but
-    // `_busy` (the panel-side flag) and the Send-button disabled state have to be flipped here
-    // so the next render reflects the busy transition immediately. We re-derive busy from
-    // `state.outbox.length` rather than `state.busy` so the panel stays in sync with whichever
-    // event fired (an `error` event without a follow-up turn_end will still drop busy).
-    this._setBusy(this.state.outbox.length > 0);
+    // Busy re-sync: the reducer owns terminal cleanup for answer/error/turn_end. Mirroring
+    // `state.busy` here prevents a stale outbox entry from keeping Send disabled after a
+    // streaming/network failure.
+    this._setBusy(!!this.state.busy);
     if (event.type === 'edit_proposal') {
       const proposal = this.state.pendingProposals.get(event.id);
       if (proposal) this.diffView.show(proposal);
@@ -1753,8 +2215,8 @@
     }
   };
 
-  /** Debounce token rendering to ~60fps (16ms) using requestAnimationFrame. Multiple token
-   * events arriving within one frame are coalesced into a single render. */
+  /** Debounce token rendering to one animation frame. Multiple token events arriving within one
+   * frame are coalesced into one cheap streaming-bubble update instead of a full panel render. */
   ChatPanel.prototype._scheduleTokenRender = function () {
     var self = this;
     if (this._tokenRafScheduled) return;
@@ -1762,14 +2224,53 @@
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(function () {
         self._tokenRafScheduled = false;
-        self.render();
+        self._renderTokenFrame();
       });
     } else {
       setTimeout(function () {
         self._tokenRafScheduled = false;
-        self.render();
+        self._renderTokenFrame();
       }, 16);
     }
+  };
+
+  ChatPanel.prototype._renderTokenFrame = function () {
+    var answer = this.state && this.state.answer != null ? String(this.state.answer) : '';
+    if (!answer) {
+      this.render();
+      return;
+    }
+    if (!this._streamingBubbleEl || this._streamingBubbleEl.parentNode !== this.transcriptEl) {
+      this.render();
+      return;
+    }
+    var body = this._streamingBubbleEl.querySelector('.chatgml-turn-body');
+    if (!body) {
+      this.render();
+      return;
+    }
+    var wasNearBottom = this._isNearBottom();
+    this._setStreamingBodyText(body, answer);
+    if (wasNearBottom) this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+  };
+
+  ChatPanel.prototype._setStreamingBodyText = function (body, text) {
+    var value = String(text || '');
+    if (body._chatgmlStreamingText === value) return;
+    var previous = body._chatgmlStreamingText || '';
+    body._chatgmlStreamingText = value;
+    if (previous && value.indexOf(previous) === 0) {
+      var suffix = value.slice(previous.length);
+      var node = body.firstChild;
+      if (!node || node.nodeType !== 3 || body.childNodes.length !== 1) {
+        body.textContent = previous;
+        node = body.firstChild;
+      }
+      if (node) node.nodeValue += suffix;
+      else body.textContent = value;
+      return;
+    }
+    body.textContent = value;
   };
 
   /** Detect GMEdit's theme (light/dark) and set data-theme on the panel container so CSS
@@ -1806,6 +2307,7 @@
 
   ChatPanel.prototype.setRunning = function (running, error) {
     this.running = running;
+    this.ready = false;
     this.launchBtn.textContent = running ? 'Stop' : 'Launch';
     if (!running) {
       this.state = State.initialPluginState();
@@ -1818,8 +2320,6 @@
       // Stop+Launch cancels any in-flight turn: drop the Send-disabled / input-readOnly flags
       // via _setBusy(false) — keeps the legacy direct DOM writes working AND resets _busy.
       this._setBusy(false);
-      this.sendBtn.setAttribute('disabled', 'disabled');
-      this.reindexBtn.setAttribute('disabled', 'disabled');
       this.state.pendingUserText = null;
       // Reset the eviction counters and the trim-notice element so a Stop+Launch doesn't leave a
       // stale "Showing last N turns (X trimmed)" line behind for a fresh session.
@@ -1847,6 +2347,7 @@
       // child is booting.
       this.state.phase = 'connecting';
     }
+    this._syncControls();
     this.render();
   };
 
@@ -1860,8 +2361,8 @@
 
   /** Called once the ready handshake arrives: enable Send + Reindex. */
   ChatPanel.prototype.setReady = function () {
-    this.sendBtn.removeAttribute('disabled');
-    this.reindexBtn.removeAttribute('disabled');
+    this.ready = true;
+    this._syncControls();
   };
 
   /** Set the per-turn tier override ('planner' | 'implementer' | 'reviewer' | null). null clears
@@ -1871,7 +2372,19 @@
     var normalized =
       name === 'planner' || name === 'implementer' || name === 'reviewer' ? name : null;
     this.tierOverride = normalized;
+    this._syncTierQuickButtons();
     this.render();
+  };
+
+  ChatPanel.prototype._syncTierQuickButtons = function () {
+    if (!this.tierQuickBtns) return;
+    var active = this.tierOverride || 'auto';
+    var keys = Object.keys(this.tierQuickBtns);
+    for (var i = 0; i < keys.length; i++) {
+      var btn = this.tierQuickBtns[keys[i]];
+      if (keys[i] === active) btn.classList.add('active');
+      else btn.classList.remove('active');
+    }
   };
 
   /** Update the active mode (from the ready handshake or user interaction). */
@@ -1885,6 +2398,7 @@
         else btn.classList.remove('active');
       }
     }
+    this._syncTierQuickButtons();
     this.render();
   };
 
@@ -1943,6 +2457,32 @@
     this.render();
   };
 
+  ChatPanel.prototype._resetTranscriptDom = function () {
+    if (this.transcriptEl) this.transcriptEl.innerHTML = '';
+    this._renderedTurnsCount = 0;
+    this._streamingBubbleEl = null;
+    this._pendingBubbleEl = null;
+    this._outboxBubbleEl = null;
+    this._outboxRenderedIds = [];
+  };
+
+  ChatPanel.prototype.loadTurns = function (turns) {
+    var all = Array.isArray(turns) ? turns : [];
+    var cap = State.TURN_CAP || 200;
+    var visible = all.length > cap ? all.slice(all.length - cap) : all.slice();
+    this._resetTranscriptDom();
+    this.state.turns = visible;
+    this.state.turnsEvicted = Math.max(0, all.length - visible.length);
+    this.state.answer = null;
+    this.state.transcript = '';
+    this.state.pendingUserText = null;
+    this.state.outbox = [];
+    this.state.sources = [];
+    this.state.error = null;
+    this._setBusy(false);
+    this.render();
+  };
+
   /** Replace the task picker dropdown options. */
   ChatPanel.prototype.setTasks = function (tasks) {
     this.tasks = tasks ? tasks.slice() : [];
@@ -1972,6 +2512,7 @@
     if (this.taskDeleteBtn) {
       this.taskDeleteBtn.style.display = this.taskId === 'default' ? 'none' : '';
     }
+    this._refreshActiveSessionTitle();
     this.render();
   };
 
@@ -1995,6 +2536,276 @@
     this.render();
   };
 
+  function sanitizeDiagnosticText(value) {
+    var text = String(value == null ? '' : value);
+    text = text.replace(/Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer <redacted>');
+    text = text.replace(/(api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi, '$1=<redacted>');
+    text = text.replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-<redacted>');
+    text = text.replace(/env:[A-Za-z_][A-Za-z0-9_]*/g, function (m) {
+      return m;
+    });
+    return text;
+  }
+
+  ChatPanel.prototype._diagnosticsSnapshot = function () {
+    var snap = {};
+    if (typeof this.opts.getDiagnostics === 'function') {
+      try {
+        snap = this.opts.getDiagnostics() || {};
+      } catch (e) {
+        snap = { error: e && (e.message || String(e)) };
+      }
+    }
+    return snap;
+  };
+
+  ChatPanel.prototype._diagnosticsText = function () {
+    var snap = this._diagnosticsSnapshot();
+    try {
+      return sanitizeDiagnosticText(JSON.stringify(snap, null, 2));
+    } catch (e) {
+      return sanitizeDiagnosticText(String(snap || ''));
+    }
+  };
+
+  ChatPanel.prototype._renderDiagnostics = function () {
+    if (!this.diagnosticsEl || !this.diagnosticsBodyEl) return;
+    this.diagnosticsEl.style.display = this.diagnosticsOpen ? '' : 'none';
+    if (!this.diagnosticsOpen) return;
+    var snap = this._diagnosticsSnapshot();
+    this.diagnosticsBodyEl.innerHTML = '';
+    var rows = [
+      ['core', snap.core || 'unknown'],
+      ['project', snap.projectDir || '(none)'],
+      ['task', snap.taskId || 'default'],
+      ['provider', snap.provider || '(manual)'],
+      ['model', snap.model || '(unset)'],
+      ['base URL', snap.baseURL || '(unset)'],
+      ['fallbacks', snap.fallbacks || '(none)'],
+      ['gmloop', snap.gmloop || '(not checked)'],
+      ['gmloop dir', snap.gmloopDir || '(none)'],
+      ['gmloop runner', snap.gmloopRunner || '(none)'],
+      ['env file', snap.envFile || '(default)'],
+      ['auth', snap.authState || 'missing'],
+      ['auth source', snap.authSource || '(none)'],
+      ['last error', snap.lastError || '(none)'],
+    ];
+    for (var i = 0; i < rows.length; i++) {
+      var row = document.createElement('div');
+      row.className = 'chatgml-diagnostics-row';
+      var key = document.createElement('span');
+      key.className = 'chatgml-diagnostics-key';
+      key.textContent = rows[i][0];
+      var val = document.createElement('span');
+      val.className = 'chatgml-diagnostics-value';
+      val.textContent = sanitizeDiagnosticText(rows[i][1]);
+      row.appendChild(key);
+      row.appendChild(val);
+      this.diagnosticsBodyEl.appendChild(row);
+    }
+    var logs = Array.isArray(snap.logs) ? snap.logs : [];
+    if (logs.length > 0) {
+      var pre = document.createElement('pre');
+      pre.className = 'chatgml-diagnostics-log';
+      pre.textContent = sanitizeDiagnosticText(logs.slice(-12).join('\n'));
+      this.diagnosticsBodyEl.appendChild(pre);
+    }
+  };
+
+  ChatPanel.prototype._renderKnowledge = function () {
+    if (!this.knowledgeEl || !this.knowledgeBodyEl) return;
+    this.knowledgeEl.style.display = this.knowledgeOpen ? '' : 'none';
+    if (!this.knowledgeOpen) return;
+    var snap = this._diagnosticsSnapshot();
+    var s = this.state || State.initialPluginState();
+    var cfg = this._config || {};
+    var ctx = null;
+    if (typeof this.opts.getEditorContext === 'function') {
+      try {
+        ctx = this.opts.getEditorContext();
+      } catch (e) {
+        ctx = null;
+      }
+    }
+    this.knowledgeBodyEl.innerHTML = '';
+
+    var stats = document.createElement('div');
+    stats.className = 'chatgml-knowledge-stats';
+    var statRows = [
+      ['turns', (s.turns || []).length],
+      ['sources', (s.sources || []).length],
+      ['tools', s.catalog ? s.catalog.length : 0],
+      ['checkpoints', (s.checkpoints || []).length],
+      ['sessions', this._sessionsData ? this._sessionsData.length : 0],
+    ];
+    for (var i = 0; i < statRows.length; i++) {
+      var stat = document.createElement('div');
+      stat.className = 'chatgml-knowledge-stat';
+      var statValue = document.createElement('b');
+      statValue.textContent = String(statRows[i][1]);
+      var statLabel = document.createElement('span');
+      statLabel.textContent = statRows[i][0];
+      stat.appendChild(statValue);
+      stat.appendChild(statLabel);
+      stats.appendChild(stat);
+    }
+    this.knowledgeBodyEl.appendChild(stats);
+
+    var graph = document.createElement('div');
+    graph.className = 'chatgml-knowledge-graph';
+    var self = this;
+    var addNode = function (kind, label, meta, onClick) {
+      var node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'chatgml-knowledge-node chatgml-knowledge-node--' + kind;
+      if (typeof onClick === 'function') node.addEventListener('click', onClick);
+      else node.setAttribute('disabled', 'disabled');
+      var title = document.createElement('span');
+      title.className = 'chatgml-knowledge-node-title';
+      title.textContent = label;
+      var sub = document.createElement('span');
+      sub.className = 'chatgml-knowledge-node-meta';
+      sub.textContent = meta || kind;
+      node.appendChild(title);
+      node.appendChild(sub);
+      graph.appendChild(node);
+    };
+
+    addNode('session', this._sessionsActiveId || this.taskId || 'default', 'session');
+    if (ctx && ctx.openFile) {
+      addNode(
+        'file',
+        String(ctx.openFile),
+        ctx.cursorLine ? 'line ' + ctx.cursorLine : 'current file',
+        function () {
+          if (typeof self.opts.onOpenSource === 'function') {
+            self.opts.onOpenSource({ path: ctx.openFile });
+          }
+        },
+      );
+    }
+    addNode('memory', (cfg.memory && cfg.memory.provider) || 'local', 'memory provider');
+    addNode('index', (cfg.index && cfg.index.root) || snap.projectDir || '(project)', 'index root');
+
+    var toolNames = {};
+    if (Array.isArray(s.catalog)) {
+      for (var ti = 0; ti < s.catalog.length; ti++) {
+        var t = s.catalog[ti];
+        if (!t || !t.name) continue;
+        if (
+          t.name === 'search_code' ||
+          t.name === 'graph_neighbors' ||
+          t.name === 'temporal_query' ||
+          t.name === 'grep' ||
+          t.name === 'read_file'
+        ) {
+          toolNames[t.name] = true;
+        }
+      }
+    }
+    var orderedTools = Object.keys(toolNames).sort();
+    for (var oi = 0; oi < orderedTools.length; oi++) {
+      addNode('tool', orderedTools[oi], 'tool');
+    }
+    if (snap.gmloop && snap.gmloop !== 'not found') {
+      addNode('gmloop', 'GMLoop', snap.gmloop);
+    }
+    var sources = Array.isArray(s.sources) ? s.sources.slice(0, 8) : [];
+    for (var si = 0; si < sources.length; si++) {
+      (function (src) {
+        addNode(
+          'source',
+          src.path || src.snippet || '(memory)',
+          src.path ? 'source' : 'memory',
+          src.path && typeof self.opts.onOpenSource === 'function'
+            ? function () {
+                self.opts.onOpenSource(src);
+              }
+            : null,
+        );
+      })(sources[si]);
+    }
+    if (s.checkpoints && s.checkpoints.length > 0) {
+      var cp = s.checkpoints[s.checkpoints.length - 1];
+      addNode('checkpoint', cp.id || 'checkpoint', cp.path || 'undo point');
+    }
+    this.knowledgeBodyEl.appendChild(graph);
+
+    var edges = document.createElement('div');
+    edges.className = 'chatgml-knowledge-edges';
+    var edgeRows = [
+      'session -> turns',
+      'memory -> search_code',
+      'memory -> graph_neighbors',
+      'index -> sources',
+    ];
+    if (ctx && ctx.openFile) edgeRows.unshift('current file -> context');
+    if (snap.gmloop && snap.gmloop !== 'not found') edgeRows.push('GMLoop -> lint/format/graph');
+    for (var ei = 0; ei < edgeRows.length; ei++) {
+      var edge = document.createElement('div');
+      edge.className = 'chatgml-knowledge-edge';
+      edge.textContent = edgeRows[ei];
+      edges.appendChild(edge);
+    }
+    this.knowledgeBodyEl.appendChild(edges);
+  };
+
+  ChatPanel.prototype._renderContextChip = function () {
+    if (!this.contextRowEl || !this.contextChipEl) return;
+    var ctx = null;
+    if (typeof this.opts.getEditorContext === 'function') {
+      try {
+        ctx = this.opts.getEditorContext();
+      } catch (e) {
+        ctx = null;
+      }
+    }
+    if (!ctx || !ctx.openFile) {
+      this.contextRowEl.style.display = 'none';
+      this.contextChipEl.textContent = '';
+      return;
+    }
+    var label = String(ctx.openFile);
+    if (ctx.cursorLine) label += ':' + ctx.cursorLine;
+    if (ctx.selection && String(ctx.selection).trim() !== '') label += ' + selection';
+    this.contextChipEl.textContent = label;
+    this.contextChipEl.title = label;
+    this.contextRowEl.style.display = '';
+  };
+
+  function usageLabel(usage) {
+    if (!usage || typeof usage !== 'object') return '';
+    var total = usage.totalTokens || usage.total_tokens;
+    var prompt = usage.promptTokens || usage.prompt_tokens;
+    var completion = usage.completionTokens || usage.completion_tokens;
+    if (total) return 'tokens: ' + total;
+    if (prompt || completion) return 'tokens: ' + (prompt || 0) + '/' + (completion || 0);
+    return '';
+  }
+
+  function contextLabel(ctx) {
+    if (!ctx || typeof ctx !== 'object') return '';
+    var parts = [];
+    if (ctx.openFile) parts.push(String(ctx.openFile) + (ctx.cursorLine ? ':' + ctx.cursorLine : ''));
+    if (ctx.selection && String(ctx.selection).trim() !== '') parts.push('selection');
+    if (ctx.mentions && ctx.mentions.length) parts.push('@' + ctx.mentions.length);
+    return parts.length ? 'context: ' + parts.join(' + ') : '';
+  }
+
+  function turnMetaText(turn) {
+    var parts = [];
+    var ctx = contextLabel(turn.context);
+    if (ctx) parts.push(ctx);
+    if (turn.toolsUsed && turn.toolsUsed.length) {
+      parts.push('tools: ' + turn.toolsUsed.slice(0, 4).join(', '));
+    }
+    var usage = usageLabel(turn.usage);
+    if (usage) parts.push(usage);
+    if (turn.sources && turn.sources.length) parts.push('sources: ' + turn.sources.length);
+    if (turn.thinking) parts.push('thinking');
+    return parts.join(' | ');
+  }
+
   ChatPanel.prototype.render = function () {
     const self = this;
     const s = this.state;
@@ -2003,16 +2814,27 @@
     if (this._renderCount % 50 === 1) this._detectTheme();
     // Track scroll position before re-rendering so we can avoid yanking the user back to bottom.
     var wasNearBottom = this._isNearBottom();
-    this.statusEl.textContent = this.running ? 'phase: ' + s.phase : 'stopped';
+    var hasQueuedTurn = s.outbox && s.outbox.length > 0;
+    var hasRunningActivity =
+      s.activity &&
+      s.activity.some(function (a) {
+        return a.status === 'running' || a.status === 'waiting';
+      });
+    var hasVisibleModelWork =
+      (s.answer != null && String(s.answer).length > 0) ||
+      hasRunningActivity;
+    var phaseDetail = s.phaseDetail ? String(s.phaseDetail) : '';
+    var displayPhase =
+      this.running && s.busy && hasQueuedTurn && !hasVisibleModelWork && !phaseDetail
+        ? 'thinking'
+        : s.phase;
+    this.statusEl.textContent = this.running
+      ? 'phase: ' + displayPhase + (phaseDetail ? ' - ' + phaseDetail : '')
+      : 'stopped';
 
     // Working/connecting indicator: pulse the status line while the agent is streaming, running
     // a tool, or the core is still booting.
-    var isWorking =
-      (s.answer != null && String(s.answer).length > 0) ||
-      (s.activity &&
-        s.activity.some(function (a) {
-          return a.status === 'running' || a.status === 'waiting';
-        }));
+    var isWorking = !!s.busy || hasRunningActivity;
     this.statusEl.classList.remove('chatgml-status--working');
     this.statusEl.classList.remove('chatgml-status--connecting');
     if (isWorking && this.running) {
@@ -2020,6 +2842,8 @@
     } else if (s.phase === 'connecting') {
       this.statusEl.classList.add('chatgml-status--connecting');
     }
+    if (s.error) this.statusEl.classList.add('chatgml-status--error');
+    else this.statusEl.classList.remove('chatgml-status--error');
 
     // Sync mode segmented control active state.
     if (this.modeBtns) {
@@ -2065,6 +2889,7 @@
       const chips = [];
       if (cfg.scope) chips.push('scope: ' + cfg.scope);
       if (cfg.chat && cfg.chat.model) chips.push('model: ' + cfg.chat.model);
+      if (cfg.chat && cfg.chat.apiKey) chips.push('auth: set');
       if (cfg.approval) chips.push('approval: ' + cfg.approval);
       for (let i = 0; i < chips.length; i++) {
         const chip = document.createElement('span');
@@ -2078,6 +2903,10 @@
     this.checkpointRowEl.innerHTML = '';
     const hasCheckpoints = s.checkpoints && s.checkpoints.length > 0;
     if (hasCheckpoints) {
+      this.undoBtn.textContent = this.selectedCheckpointId ? 'Undo selected' : 'Undo last';
+      this.undoBtn.title = this.selectedCheckpointId
+        ? 'Undo checkpoint ' + this.selectedCheckpointId
+        : 'Undo the most recent checkpoint';
       this.checkpointRowEl.appendChild(this.undoBtn);
       for (let i = 0; i < s.checkpoints.length; i++) {
         const cp = s.checkpoints[i];
@@ -2107,11 +2936,57 @@
     } else {
       this.selectedCheckpointId = null;
     }
+    if (this.changesEl) {
+      const hasProposals =
+        this.diffView &&
+        this.diffView.elements &&
+        typeof this.diffView.elements.size === 'number' &&
+        this.diffView.elements.size > 0;
+      this.changesEl.style.display = hasCheckpoints || hasProposals ? '' : 'none';
+    }
 
     // Activity.
     this.activityEl.innerHTML = '';
-    for (let i = 0; i < s.activity.length; i++) {
-      const a = s.activity[i];
+    var inlineActivity = s.busy ? (s.activity || []).slice(-6) : [];
+    if (inlineActivity.length === 0 && this.running && s.busy && phaseDetail) {
+      const detailRow = document.createElement('div');
+      detailRow.className = 'chatgml-activity-row chatgml-activity-phase chatgml-activity-retry';
+      const detailHeader = document.createElement('span');
+      detailHeader.className = 'chatgml-activity-header';
+      detailHeader.textContent = phaseDetail;
+      detailRow.appendChild(detailHeader);
+      this.activityEl.appendChild(detailRow);
+    } else if (
+      inlineActivity.length === 0 &&
+      this.running &&
+      s.busy &&
+      hasQueuedTurn &&
+      !hasVisibleModelWork
+    ) {
+      const thinkingRow = document.createElement('div');
+      thinkingRow.className = 'chatgml-activity-row chatgml-activity-phase chatgml-activity-thinking';
+      const thinkingHeader = document.createElement('span');
+      thinkingHeader.className = 'chatgml-activity-header';
+      thinkingHeader.textContent = 'thinking: waiting for model response';
+      thinkingRow.appendChild(thinkingHeader);
+      this.activityEl.appendChild(thinkingRow);
+    } else if (inlineActivity.length === 0 && this.running && s.busy && s.phase && s.phase !== 'idle') {
+      const phaseRow = document.createElement('div');
+      phaseRow.className = 'chatgml-activity-row chatgml-activity-phase';
+      const phaseHeader = document.createElement('span');
+      phaseHeader.className = 'chatgml-activity-header';
+      phaseHeader.textContent = 'phase: ' + s.phase;
+      phaseRow.appendChild(phaseHeader);
+      this.activityEl.appendChild(phaseRow);
+    }
+    if (inlineActivity.length > 0) {
+      const activityTitle = document.createElement('div');
+      activityTitle.className = 'chatgml-activity-title';
+      activityTitle.textContent = 'Working';
+      this.activityEl.appendChild(activityTitle);
+    }
+    for (let i = 0; i < inlineActivity.length; i++) {
+      const a = inlineActivity[i];
       const row = document.createElement('div');
       row.className = 'chatgml-activity-row chatgml-activity-' + a.status;
       const header = document.createElement('span');
@@ -2138,25 +3013,28 @@
           const bar = document.createElement('div');
           bar.className = 'chatgml-cmd-bar';
           const approve = document.createElement('button');
+          approve.type = 'button';
           approve.className = 'chatgml-cmd-btn';
           approve.textContent = 'Approve';
           approve.addEventListener('click', function (ev) {
             ev.stopPropagation();
-            self.opts.onApproveCommand(a.id);
+            if (typeof self.opts.onApproveCommand === 'function') self.opts.onApproveCommand(a.id);
           });
           const runOnce = document.createElement('button');
+          runOnce.type = 'button';
           runOnce.className = 'chatgml-cmd-btn';
           runOnce.textContent = 'Run once';
           runOnce.addEventListener('click', function (ev) {
             ev.stopPropagation();
-            self.opts.onRunOnce(a.id);
+            if (typeof self.opts.onRunOnce === 'function') self.opts.onRunOnce(a.id);
           });
           const reject = document.createElement('button');
+          reject.type = 'button';
           reject.className = 'chatgml-cmd-btn';
           reject.textContent = 'Reject';
           reject.addEventListener('click', function (ev) {
             ev.stopPropagation();
-            self.opts.onRejectCommand(a.id);
+            if (typeof self.opts.onRejectCommand === 'function') self.opts.onRejectCommand(a.id);
           });
           bar.appendChild(approve);
           bar.appendChild(runOnce);
@@ -2185,7 +3063,8 @@
     if (s.catalog && s.catalog.length > 0) {
       const header = document.createElement('div');
       header.className = 'chatgml-tool-catalog-header';
-      header.textContent = (this.catalogOpen ? '▼ ' : '▶ ') + 'Tools (' + s.catalog.length + ')';
+      header.textContent =
+        (this.catalogOpen ? '▼ ' : '▶ ') + 'Available tools (' + s.catalog.length + ')';
       header.addEventListener('click', function () {
         self.toggleCatalog();
       });
@@ -2234,6 +3113,10 @@
         }
       }
     }
+
+    this._renderContextChip();
+    this._renderDiagnostics();
+    this._renderKnowledge();
 
     // Trim notice: shown only when the reducer's eviction counters are > 0. We render a single
     // composed sentence ("⚠ Showing last N turns (X trimmed from earlier history)" + an
@@ -2289,12 +3172,13 @@
 
     // If turns were cleared (e.g. /clear), reset everything.
     if (turns.length < (this._renderedTurnsCount || 0)) {
-      this.transcriptEl.innerHTML = '';
-      this._renderedTurnsCount = 0;
-      this._streamingBubbleEl = null;
-      this._pendingBubbleEl = null;
-      this._outboxBubbleEl = null;
-      this._outboxRenderedIds = [];
+      this._resetTranscriptDom();
+    }
+    var oldEmptyState = this.transcriptEl.querySelector('.chatgml-empty-state');
+    if (oldEmptyState && oldEmptyState.parentNode) oldEmptyState.parentNode.removeChild(oldEmptyState);
+    if (turns.length > 0 || hasStreamingAnswer) {
+      var oldLegacy = this.transcriptEl.querySelector('.chatgml-transcript-legacy');
+      if (oldLegacy && oldLegacy.parentNode) oldLegacy.parentNode.removeChild(oldLegacy);
     }
 
     // Pending user message (sent but not yet finalized into a turn) — shows immediately.
@@ -2419,6 +3303,7 @@
     }
 
     // Append only NEW finalized turns (those not yet rendered as DOM nodes).
+    var appendedAssistantTurn = false;
     if (turns.length > (this._renderedTurnsCount || 0)) {
       for (var ti = this._renderedTurnsCount || 0; ti < turns.length; ti++) {
         var turn = turns[ti];
@@ -2468,10 +3353,44 @@
             asstBody.textContent = turn.assistantText;
           }
           asstBubble.appendChild(asstBody);
+          var metaText = turnMetaText(turn);
+          if (metaText) {
+            var meta = document.createElement('div');
+            meta.className = 'chatgml-turn-meta';
+            meta.textContent = metaText;
+            asstBubble.appendChild(meta);
+          }
           this.transcriptEl.appendChild(asstBubble);
+          appendedAssistantTurn = true;
         }
       }
       this._renderedTurnsCount = turns.length;
+    }
+
+    var hasInlineActivityBlock = this.activityEl && this.activityEl.childNodes.length > 0;
+    if (hasInlineActivityBlock) {
+      var activityBefore = this._streamingBubbleEl || null;
+      if (
+        this.activityEl.parentNode !== this.transcriptEl ||
+        (activityBefore && this.activityEl.nextSibling !== activityBefore)
+      ) {
+        this.transcriptEl.insertBefore(this.activityEl, activityBefore);
+      }
+    } else if (this.activityEl && this.activityEl.parentNode) {
+      this.activityEl.parentNode.removeChild(this.activityEl);
+    }
+
+    var hasInlineCatalogBlock = this.catalogEl && this.catalogEl.childNodes.length > 0;
+    if (hasInlineCatalogBlock) {
+      var catalogBefore = this._streamingBubbleEl || null;
+      if (
+        this.catalogEl.parentNode !== this.transcriptEl ||
+        (catalogBefore && this.catalogEl.nextSibling !== catalogBefore)
+      ) {
+        this.transcriptEl.insertBefore(this.catalogEl, catalogBefore);
+      }
+    } else if (this.catalogEl && this.catalogEl.parentNode) {
+      this.catalogEl.parentNode.removeChild(this.catalogEl);
     }
 
     // Streaming bubble: update in-place if it exists, create if needed, remove if no answer.
@@ -2509,15 +3428,7 @@
         this._streamingBubbleEl = streamBubble;
       }
       var sb = this._streamingBubbleEl.querySelector('.chatgml-turn-body');
-      if (MarkdownApi && typeof MarkdownApi.renderMarkdown === 'function') {
-        try {
-          MarkdownApi.renderMarkdown(s.answer, sb);
-        } catch (e) {
-          sb.textContent = s.answer;
-        }
-      } else {
-        sb.textContent = s.answer;
-      }
+      if (sb) this._setStreamingBodyText(sb, s.answer);
     } else if (this._streamingBubbleEl) {
       // Streaming done — remove the streaming bubble (the turn is now in s.turns).
       if (this._streamingBubbleEl.parentNode)
@@ -2533,6 +3444,22 @@
         fallbackPre.className = 'chatgml-transcript-legacy';
         fallbackPre.textContent = s.transcript;
         this.transcriptEl.appendChild(fallbackPre);
+      }
+    } else if (
+      turns.length === 0 &&
+      !hasStreamingAnswer &&
+      !s.pendingUserText &&
+      outbox.length === 0
+    ) {
+      var empty = document.createElement('div');
+      empty.className = 'chatgml-empty-state';
+      empty.textContent = 'No conversation yet';
+      if (
+        !this.transcriptEl.querySelector(
+          '.chatgml-turn, .chatgml-transcript-legacy, .chatgml-activity, .chatgml-tool-catalog',
+        )
+      ) {
+        this.transcriptEl.appendChild(empty);
       }
     }
 
@@ -2564,24 +3491,27 @@
 
     // Error.
     if (s.error) {
-      const err = document.createElement('div');
-      err.className = 'chatgml-error';
-      err.textContent = 'error: ' + s.error;
-      this.statusEl.appendChild(err);
+      const errText = String(s.error);
+      if (this.errorDetailsEl) {
+        this.errorDetailsEl.style.display = '';
+        var authError = /HTTP\s+401|unauthorized/i.test(errText);
+        var providerBusy = /HTTP\s+429|overload|rate.?limit|too many requests/i.test(errText);
+        var prefix = authError ? 'Auth error: ' : providerBusy ? 'Provider overloaded: ' : 'Error: ';
+        this.errorSummaryEl.textContent =
+          prefix + (errText.length > 96 ? errText.slice(0, 96) + '...' : errText);
+        this.errorBodyEl.textContent = errText;
+      }
+    } else if (this.errorDetailsEl) {
+      this.errorDetailsEl.style.display = 'none';
+      this.errorSummaryEl.textContent = 'Error';
+      this.errorBodyEl.textContent = '';
     }
 
-    // Stop-button visibility: show while the agent is actively working (streaming answer or a
-    // tool/command is running or awaiting approval). Re-evaluated on every render so a state
-    // change during a turn flips the button without an extra round-trip.
-    var isWorking =
-      (s.answer != null && String(s.answer).length > 0) ||
-      s.activity.some(function (a) {
-        return a.status === 'running' || a.status === 'waiting';
-      });
+    // Stop-button visibility: show while a turn is queued, streaming, or waiting on a tool.
     if (this.stopGenBtn) this.stopGenBtn.style.display = isWorking ? '' : 'none';
 
     // Hook copy buttons onto any newly rendered code blocks (idempotent).
-    this._addCopyButtons();
+    if (appendedAssistantTurn) this._addCopyButtons();
   };
 
   /**
@@ -2598,6 +3528,7 @@
       (function (block) {
         block.classList.add('chatgml-copy-btn-added');
         var btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'chatgml-copy-btn';
         btn.textContent = 'Copy';
         btn.style.cssText =

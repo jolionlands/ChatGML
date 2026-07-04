@@ -23,13 +23,16 @@ function fakeComputedDisplay(el: { style: { display: string }; className: string
 function toggle(panel: {
   settingsPanelEl: null | { style: { display: string }; className: string };
   build: () => { style: { display: string }; className: string };
+  onSettingsOpen?: () => void;
 }) {
   if (!panel.settingsPanelEl) {
     panel.settingsPanelEl = panel.build();
   }
   const el = panel.settingsPanelEl;
   const computed = fakeComputedDisplay(el);
-  el.style.display = computed === 'none' ? 'flex' : 'none';
+  const willOpen = computed === 'none';
+  el.style.display = willOpen ? 'flex' : 'none';
+  if (willOpen && panel.onSettingsOpen) panel.onSettingsOpen();
 }
 
 describe('settings gear toggle (regression: "click does nothing")', () => {
@@ -90,5 +93,22 @@ describe('settings gear toggle (regression: "click does nothing")', () => {
     panel.settingsPanelEl!.style.display = 'none'; // simulate save handler hiding it
     toggle(panel); // should re-open
     expect(panel.settingsPanelEl!.style.display).toBe('flex');
+  });
+
+  it('calls the settings-open hook only when the panel is shown', () => {
+    let opened = 0;
+    const panel = {
+      settingsPanelEl: null as null | { style: { display: string }; className: string },
+      build() {
+        return { style: { display: 'none' }, className: 'chatgml-settings-panel' };
+      },
+      onSettingsOpen() {
+        opened++;
+      },
+    };
+    toggle(panel);
+    toggle(panel);
+    toggle(panel);
+    expect(opened).toBe(2);
   });
 });

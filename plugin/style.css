@@ -42,7 +42,8 @@
 }
 
 :root[data-theme='light'],
-:root.light {
+:root.light,
+.chatgml-panel[data-theme='light'] {
   --chatgml-bg: #fafafa;
   --chatgml-fg: #1e1e2e;
   --chatgml-border: #d9d9de;
@@ -78,12 +79,54 @@
   position: relative;
   height: 100%;
   overflow: hidden;
+  flex: 0 0 420px;
+  width: 420px;
+  min-width: 300px;
+  max-width: 760px;
+  border-left: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-0);
 }
 
-.splitter-td {
+#chatgml_editor.chatgml-aside {
+  flex: 0 0 auto;
+  min-width: 300px !important;
+  max-width: 760px !important;
+}
+
+.chatgml-aside-host {
+  display: flex !important;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chatgml-editor-main {
+  flex: 1 1 auto;
+  min-width: 360px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.chatgml-splitter {
+  flex: 0 0 5px;
+  width: 5px;
+  min-width: 5px;
   background: var(--chatgml-border);
-  width: 100%;
   cursor: col-resize;
+}
+
+.chatgml-splitter:hover {
+  background: var(--chatgml-accent);
+}
+
+.chatgml-resizing,
+.chatgml-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+#chatgml_panel_host {
+  height: 100%;
+  min-width: 0;
 }
 
 #chatgml_editor .ace_content {
@@ -98,20 +141,75 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: var(--chatgml-gap-sm);
+  padding: 8px;
   box-sizing: border-box;
   font-size: 13px;
-  gap: var(--chatgml-gap-sm);
+  gap: 8px;
   overflow: hidden;
   background: var(--chatgml-surface-0);
   color: var(--chatgml-fg);
+}
+
+.chatgml-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chatgml-workbench-header {
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  background: var(--chatgml-card-bg);
+  padding: 6px;
+  justify-content: space-between;
+}
+
+.chatgml-workbench-header .chatgml-status {
+  align-self: center;
+  max-width: 150px;
+}
+
+.chatgml-primary-controls,
+.chatgml-secondary-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chatgml-primary-controls {
+  flex: 1 1 300px;
+}
+
+.chatgml-secondary-controls {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1100px) {
+  #chatgml_editor.chatgml-aside {
+    min-width: 300px !important;
+  }
+
+  .chatgml-editor-main {
+    min-width: 280px;
+  }
+
+  .chatgml-mode-btn {
+    padding-left: 7px !important;
+    padding-right: 7px !important;
+  }
 }
 
 .chatgml-controls,
 .chatgml-sources,
 .chatgml-config-row,
 .chatgml-checkpoint-row,
-.chatgml-mention-row {
+.chatgml-mention-row,
+.chatgml-context-row,
+.chatgml-changes-section {
   flex: 0 0 auto;
 }
 
@@ -120,28 +218,29 @@
  * ========================================================================= */
 
 .run-button {
-  padding: 6px 14px;
+  padding: 5px 10px;
   cursor: pointer;
-  background-color: #4caf50;
-  border: none;
+  background: var(--chatgml-surface-1);
+  border: 1px solid var(--chatgml-border);
   border-radius: var(--chatgml-radius);
-  color: #fff;
+  color: var(--chatgml-fg);
   text-align: center;
   text-decoration: none;
   display: inline-block;
   font-size: 13px;
   font-weight: 500;
-  margin: 2px;
+  margin: 0;
   transition:
     background-color 0.18s ease,
     transform 0.05s ease,
     box-shadow 0.18s ease;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  box-shadow: none;
 }
 
 .run-button:hover:not([disabled]) {
-  background-color: #357a38;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.22);
+  background: var(--chatgml-surface-hover);
+  border-color: var(--chatgml-accent);
+  color: var(--chatgml-accent-hover);
 }
 
 .run-button:active:not([disabled]) {
@@ -149,10 +248,29 @@
 }
 
 .run-button.chatgml-reject {
-  background-color: #b23b3b;
+  background-color: var(--chatgml-del-bg);
+  border-color: var(--chatgml-del-fg);
+  color: var(--chatgml-del-fg);
 }
 .run-button.chatgml-reject:hover:not([disabled]) {
-  background-color: #7d2929;
+  background-color: var(--chatgml-del-fg);
+  color: #fff;
+}
+
+.chatgml-launch-btn,
+.chatgml-send-btn,
+.chatgml-settings-save {
+  background: var(--chatgml-accent);
+  border-color: var(--chatgml-accent);
+  color: var(--chatgml-bg);
+}
+
+.chatgml-launch-btn:hover:not([disabled]),
+.chatgml-send-btn:hover:not([disabled]),
+.chatgml-settings-save:hover:not([disabled]) {
+  background: var(--chatgml-accent-hover);
+  border-color: var(--chatgml-accent-hover);
+  color: var(--chatgml-bg);
 }
 
 button[disabled],
@@ -208,6 +326,101 @@ button[disabled],
   background: var(--chatgml-del-fg);
 }
 
+.chatgml-error-details {
+  flex: 0 0 auto;
+  border: 1px solid var(--chatgml-del-fg);
+  border-radius: var(--chatgml-radius);
+  background: var(--chatgml-del-bg);
+  color: var(--chatgml-del-fg);
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.chatgml-error-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.chatgml-error-details pre {
+  margin: 6px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--chatgml-mono);
+  font-size: 11px;
+}
+
+.chatgml-diagnostics {
+  flex: 0 0 auto;
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  background: var(--chatgml-card-bg);
+  color: var(--chatgml-fg);
+  padding: 7px;
+  font-size: 11px;
+}
+
+.chatgml-diagnostics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--chatgml-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.chatgml-diagnostics-copy,
+.chatgml-diagnostics-btn {
+  font-size: 11px;
+}
+
+.chatgml-diagnostics-copy {
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-fg);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.chatgml-diagnostics-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.chatgml-diagnostics-row {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.chatgml-diagnostics-key {
+  color: var(--chatgml-muted);
+}
+
+.chatgml-diagnostics-value,
+.chatgml-diagnostics-log {
+  font-family: var(--chatgml-mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatgml-diagnostics-log {
+  margin: 4px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--chatgml-muted);
+  border-top: 1px solid var(--chatgml-border);
+  padding-top: 6px;
+}
+
 /* =========================================================================
  * Activity rows (collapsible log)
  * ========================================================================= */
@@ -218,6 +431,8 @@ button[disabled],
   flex-direction: column;
   gap: 2px;
   margin: 0;
+  border-left: 2px solid var(--chatgml-border);
+  padding-left: 6px;
 }
 
 .chatgml-activity-row {
@@ -241,6 +456,14 @@ button[disabled],
   align-items: center;
   gap: 6px;
   font-weight: 500;
+}
+
+.chatgml-activity-phase {
+  color: var(--chatgml-muted);
+}
+
+.chatgml-activity-retry {
+  color: var(--chatgml-warn);
 }
 
 .chatgml-activity-content {
@@ -305,6 +528,15 @@ button[disabled],
   gap: var(--chatgml-gap-sm);
 }
 
+.chatgml-empty-state {
+  margin: auto;
+  color: var(--chatgml-muted);
+  font-size: 12px;
+  border: 1px dashed var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  padding: 10px 14px;
+}
+
 /* ---- Message bubble wrapper ---- */
 .chatgml-message {
   display: flex;
@@ -322,14 +554,14 @@ button[disabled],
   align-self: flex-end;
   background: var(--chatgml-surface-active);
   border-color: var(--chatgml-accent);
-  max-width: 92%;
+  max-width: 82%;
 }
 
 .chatgml-message--assistant {
   align-self: flex-start;
   background: var(--chatgml-card-bg);
   border-color: var(--chatgml-card-border);
-  max-width: 96%;
+  max-width: 100%;
 }
 
 .chatgml-message--system {
@@ -536,6 +768,23 @@ button[disabled],
   padding-right: 2px;
 }
 
+.chatgml-changes-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  background: var(--chatgml-card-bg);
+  padding: 7px;
+}
+
+.chatgml-changes-title {
+  color: var(--chatgml-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .chatgml-proposal {
   border: 1px solid var(--chatgml-card-border);
   background: var(--chatgml-card-bg);
@@ -697,6 +946,43 @@ button[disabled],
   border-top: 1px solid var(--chatgml-border);
 }
 
+.chatgml-context-row {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+  margin-bottom: -4px;
+}
+
+.chatgml-context-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--chatgml-mono);
+  font-size: 11px;
+  color: var(--chatgml-muted);
+  border: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-1);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.chatgml-context-btn {
+  flex: 0 0 32px;
+  width: 32px;
+  border-radius: var(--chatgml-radius);
+  border: 1px solid var(--chatgml-border);
+  background: var(--chatgml-surface-1);
+  color: var(--chatgml-accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chatgml-context-btn:hover {
+  border-color: var(--chatgml-accent);
+  background: var(--chatgml-surface-hover);
+}
+
 .chatgml-input {
   flex: 1 1 auto;
   resize: vertical;
@@ -735,7 +1021,7 @@ button[disabled],
   display: inline-flex;
   align-items: center;
   gap: 0;
-  margin: 0 6px;
+  margin: 0;
   background: var(--chatgml-surface-1);
   border: 1px solid var(--chatgml-border);
   border-radius: 999px;
@@ -811,7 +1097,7 @@ button[disabled],
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin: 0 6px;
+  margin: 0;
 }
 
 .chatgml-task-delete {
@@ -845,6 +1131,10 @@ button[disabled],
   flex-wrap: wrap;
   gap: 6px;
   margin: 0;
+}
+
+.chatgml-env-strip {
+  padding: 2px 0;
 }
 
 .chatgml-config-chip {
@@ -992,6 +1282,136 @@ button[disabled],
   color: var(--chatgml-fg);
 }
 
+/* =========================================================================
+ * Knowledge map
+ * ========================================================================= */
+
+.chatgml-knowledge {
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  background: var(--chatgml-card-bg);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chatgml-knowledge-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--chatgml-fg);
+}
+
+.chatgml-knowledge-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chatgml-knowledge-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.chatgml-knowledge-stat {
+  min-width: 0;
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  background: var(--chatgml-surface-2);
+  padding: 5px 6px;
+}
+
+.chatgml-knowledge-stat b,
+.chatgml-knowledge-stat span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatgml-knowledge-stat b {
+  color: var(--chatgml-accent-hover);
+  font-size: 13px;
+}
+
+.chatgml-knowledge-stat span {
+  color: var(--chatgml-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.chatgml-knowledge-graph {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 6px;
+}
+
+.chatgml-knowledge-node {
+  min-width: 0;
+  text-align: left;
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  background: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+  padding: 6px 7px;
+  cursor: pointer;
+}
+
+.chatgml-knowledge-node:disabled {
+  cursor: default;
+}
+
+.chatgml-knowledge-node:not(:disabled):hover {
+  border-color: var(--chatgml-accent);
+  background: var(--chatgml-surface-hover);
+}
+
+.chatgml-knowledge-node-title,
+.chatgml-knowledge-node-meta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatgml-knowledge-node-title {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chatgml-knowledge-node-meta {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--chatgml-muted);
+}
+
+.chatgml-knowledge-node--file,
+.chatgml-knowledge-node--source {
+  border-color: var(--chatgml-card-border);
+}
+
+.chatgml-knowledge-node--memory,
+.chatgml-knowledge-node--gmloop {
+  border-color: var(--chatgml-accent);
+}
+
+.chatgml-knowledge-edges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.chatgml-knowledge-edge {
+  font-family: var(--chatgml-mono);
+  font-size: 10px;
+  color: var(--chatgml-muted);
+  border: 1px solid var(--chatgml-border);
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--chatgml-surface-2);
+}
+
 .chatgml-tool-kind {
   display: inline-block;
   padding: 0 6px;
@@ -1002,23 +1422,23 @@ button[disabled],
 }
 
 .chatgml-tool-kind-read {
-  background-color: rgba(116, 199, 236, 0.18);
-  color: #8ecae6;
+  background-color: var(--chatgml-accent-bg);
+  color: var(--chatgml-accent-hover);
 }
 
 .chatgml-tool-kind-gated {
-  background-color: rgba(224, 175, 80, 0.18);
-  color: #ffb703;
+  background-color: var(--chatgml-warn-bg);
+  color: var(--chatgml-warn);
 }
 
 .chatgml-tool-kind-command {
-  background-color: rgba(243, 139, 168, 0.2);
-  color: #ff8a8a;
+  background-color: var(--chatgml-del-bg);
+  color: var(--chatgml-del-fg);
 }
 
 .chatgml-tool-auto {
-  background: #2e7d32;
-  color: #fff;
+  background: var(--chatgml-add-bg);
+  color: var(--chatgml-add-fg);
   padding: 0 6px;
   border-radius: 999px;
   font-size: 9px;
@@ -1031,8 +1451,8 @@ button[disabled],
 }
 
 .chatgml-mcp-badge {
-  background: #6a4c93;
-  color: #fff;
+  background: var(--chatgml-surface-active);
+  color: var(--chatgml-accent-hover);
   font-size: 9px;
   padding: 0 6px;
   border-radius: 999px;
@@ -1343,7 +1763,7 @@ button[disabled],
 .chatgml-turn-user {
   /* User bubbles: right-aligned, accent-tinted */
   align-self: flex-end;
-  max-width: 85%;
+  max-width: 78%;
   background: var(--chatgml-surface-active);
   border-radius: var(--chatgml-radius);
   padding: 8px 12px;
@@ -1353,11 +1773,11 @@ button[disabled],
 .chatgml-turn-assistant {
   /* Assistant bubbles: left-aligned, card-like */
   align-self: flex-start;
-  max-width: 92%;
+  max-width: 100%;
   background: var(--chatgml-card-bg);
   border: 1px solid var(--chatgml-card-border);
   border-radius: var(--chatgml-radius);
-  padding: 10px 14px;
+  padding: 8px 10px;
 }
 
 .chatgml-turn-streaming {
@@ -1591,11 +2011,14 @@ button[disabled],
   border: 1px solid var(--chatgml-card-border);
   border-radius: var(--chatgml-radius);
   margin: 2px 0;
+  min-height: 0;
+  overflow: hidden;
   /* Cap the panel height at ~70% of the viewport so it never pushes the transcript off-screen,
      even with every tier group expanded. The inner `.chatgml-settings-scroll` element is the
      actual scroll container — keeping the panel itself scroll-free means the box-shadow and
      border stay locked to the panel bounds and don't move on scroll. */
-  max-height: min(70vh, 720px);
+  max-height: 70vh;
+  max-height: min(70vh, calc(100% - 12px), 720px);
 }
 
 /* Scroll wrapper inside the panel. The only element with `overflow-y: auto` — the panel itself
@@ -1604,7 +2027,7 @@ button[disabled],
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px 12px 12px;
+  padding: 10px 12px 20px 12px;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
@@ -1738,6 +2161,33 @@ button[disabled],
 }
 
 /* Provider list — collapsible details per provider. */
+.chatgml-settings-provider-search {
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 4px;
+}
+
+.chatgml-settings-provider-status {
+  font-size: 11px;
+  color: var(--chatgml-accent);
+  background: var(--chatgml-accent-bg);
+  border: 1px solid var(--chatgml-accent);
+  border-radius: var(--chatgml-radius-sm);
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+.chatgml-settings-provider-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--chatgml-muted);
+  font-weight: 600;
+  padding: 2px 2px 0;
+}
+
 .chatgml-settings-providers {
   display: flex;
   flex-direction: column;
@@ -1759,6 +2209,10 @@ button[disabled],
   border: 1px solid var(--chatgml-border);
   border-radius: var(--chatgml-radius-sm);
   overflow: hidden;
+}
+
+.chatgml-settings-provider-group--unsupported {
+  opacity: 0.62;
 }
 
 .chatgml-settings-provider-group > summary {
@@ -1835,6 +2289,10 @@ button[disabled],
   background: var(--chatgml-accent-bg);
   border-color: var(--chatgml-accent);
 }
+.chatgml-settings-provider-model[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 .chatgml-settings-provider-model:focus-visible {
   outline: none;
   border-color: var(--chatgml-accent);
@@ -1861,6 +2319,28 @@ button[disabled],
   font-size: 10px;
   color: var(--chatgml-muted);
   padding: 2px 4px;
+}
+
+.chatgml-settings-providers-all {
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius-sm);
+  background: var(--chatgml-surface-0);
+  overflow: hidden;
+}
+
+.chatgml-settings-providers-all > summary {
+  cursor: pointer;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--chatgml-fg);
+  background: var(--chatgml-surface-1);
+  user-select: none;
+}
+
+.chatgml-settings-providers-all > .chatgml-settings-provider-group {
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
 }
 
 /* URL hint — shown under the Base URL row when the typed value matches (or doesn't match) a
@@ -1910,7 +2390,11 @@ button[disabled],
 
 .chatgml-settings-save {
   align-self: flex-end;
-  margin-top: 4px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 6px;
+  box-shadow: 0 -8px 16px var(--chatgml-card-bg);
 }
 
 /* Help text shown beneath sensitive fields (api key) — same row flex layout, but full width and
@@ -2219,8 +2703,9 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 .chatgml-session-root {
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid var(--chatgml-border);
-  background: var(--chatgml-surface-0);
+  border: 1px solid var(--chatgml-border);
+  border-radius: var(--chatgml-radius);
+  background: var(--chatgml-surface-1);
   font-size: 12px;
   color: var(--chatgml-fg);
   /* Sits above controls/transcript. flex layout handled by the panel container. */
@@ -2231,15 +2716,15 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  background: var(--chatgml-surface-1);
+  padding: 5px 8px;
+  background: transparent;
   border-bottom: 1px solid var(--chatgml-border);
   cursor: pointer;
   position: relative;
   transition: background 120ms ease;
 }
 .chatgml-session-header:hover {
-  background: var(--chatgml-surface-2);
+  background: var(--chatgml-surface-hover);
 }
 .chatgml-session-header--loading {
   opacity: 0.5;
@@ -2270,7 +2755,17 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 .chatgml-session-header-title {
   font-weight: 600;
   letter-spacing: 0.02em;
-  flex: 1;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chatgml-session-active-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--chatgml-muted);
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2290,7 +2785,7 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 .chatgml-session-new {
   background: var(--chatgml-accent);
   color: var(--chatgml-bg);
-  border: 0;
+  border: 1px solid var(--chatgml-accent);
   border-radius: 4px;
   width: 22px;
   height: 22px;
@@ -2315,9 +2810,12 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 .chatgml-session-body {
   display: block;
   /* Soft cap: 10 rows visible, the rest scrolls. */
-  max-height: 320px;
+  max-height: 240px;
   overflow-y: auto;
   background: var(--chatgml-surface-0);
+}
+.chatgml-session-root--empty .chatgml-session-body {
+  display: none;
 }
 .chatgml-session-root--collapsed .chatgml-session-body {
   display: none;
@@ -2335,8 +2833,8 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 .chatgml-session-list-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 5px 8px;
   cursor: pointer;
   border-left: 3px solid transparent;
   border-bottom: 1px solid transparent;
@@ -2372,7 +2870,7 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 }
 
 .chatgml-session-title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--chatgml-fg);
   white-space: nowrap;
@@ -2425,7 +2923,7 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 }
 .chatgml-session-trash:hover {
   background: var(--chatgml-surface-2);
-  color: #f38ba8;
+  color: var(--chatgml-del-fg);
 }
 .chatgml-session-trash:focus-visible {
   outline: 1px solid var(--chatgml-accent);
@@ -2498,4 +2996,68 @@ pre.chatgml-md-code-block:hover .chatgml-copy-btn {
 .chatgml-panel .run-button[disabled] {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* ponytail: final layout clamps beat duplicate earlier blocks without a CSS cleanup pass. */
+.chatgml-transcript {
+  min-height: 0;
+}
+
+.chatgml-activity,
+.chatgml-tool-catalog,
+.chatgml-sources {
+  max-height: 22vh;
+  overflow: auto;
+}
+
+.chatgml-transcript > .chatgml-activity,
+.chatgml-transcript > .chatgml-tool-catalog {
+  align-self: stretch;
+  max-height: none;
+  overflow: visible;
+}
+
+.chatgml-activity-inline {
+  border: 1px solid var(--chatgml-border);
+  border-left: 3px solid var(--chatgml-accent);
+  border-radius: var(--chatgml-radius);
+  padding: 6px;
+  background: var(--chatgml-card-bg);
+}
+
+.chatgml-tool-catalog-inline {
+  margin: 0;
+}
+
+.chatgml-activity:empty,
+.chatgml-tool-catalog:empty,
+.chatgml-sources:empty,
+.chatgml-trim-notice:empty {
+  display: none;
+}
+
+.chatgml-context-row {
+  margin-bottom: 0;
+}
+
+.chatgml-activity-title,
+.chatgml-turn-meta {
+  font-family: var(--chatgml-mono);
+  font-size: 11px;
+  color: var(--chatgml-muted);
+}
+
+.chatgml-activity-title {
+  padding: 2px 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chatgml-turn-meta {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--chatgml-border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

@@ -122,6 +122,7 @@
     return {
       ready: false,
       phase: 'stopped',
+      phaseDetail: null,
       mode: 'code',
       transcript: '',
       answer: null,
@@ -175,6 +176,7 @@
     const next = {
       ready: state.ready,
       phase: state.phase,
+      phaseDetail: state.phaseDetail,
       mode: state.mode,
       transcript: state.transcript,
       answer: state.answer,
@@ -202,6 +204,8 @@
     switch (event.type) {
       case 'status':
         next.phase = event.phase;
+        next.phaseDetail =
+          typeof event.detail === 'string' && event.detail.trim() !== '' ? event.detail : null;
         // OUTBOX / busy wiring: `status` carries lifecycle phases from the core. Only the
         // terminal (idle/done/cancelled) and explicit stopped phases mean "not busy"; other
         // phases (thinking/indexing/launching) leave busy alone so a token event arriving
@@ -388,13 +392,19 @@
             event.tier === 'planner' || event.tier === 'implementer' || event.tier === 'reviewer'
               ? event.tier
               : null;
+          const turn = {
+            userText: event.userText || '',
+            assistantText: event.assistantText != null ? event.assistantText : state.answer || '',
+            tier: tier,
+          };
+          if (event.context) turn.context = event.context;
+          if (event.sources) turn.sources = event.sources;
+          if (event.thinking) turn.thinking = event.thinking;
+          if (event.usage) turn.usage = event.usage;
+          if (event.toolsUsed && event.toolsUsed.length > 0) turn.toolsUsed = event.toolsUsed.slice();
           const capped = pushCapped(
             state.turns || [],
-            {
-              userText: event.userText || '',
-              assistantText: event.assistantText != null ? event.assistantText : state.answer || '',
-              tier: tier,
-            },
+            turn,
             TURN_CAP,
             state.turnsEvicted,
           );
@@ -403,6 +413,8 @@
         }
         next.answer = null; // the streaming answer is now captured in the turn
         next.pendingUserText = null;
+        next.phase = 'idle';
+        next.phaseDetail = null;
         // OUTBOX pop: turn_end finalizes the head outbox item. If the head is still 'streaming'
         // (the common case) shift it off; if it's 'queued' (e.g. an immediate switch), shift
         // as well. If 'sent' (a future status), shift. If the outbox is empty we no-op. Always
@@ -445,6 +457,9 @@
       case 'answer':
         next.answer = event.text;
         next.sources = event.sources;
+        next.phase = 'done';
+        next.phaseDetail = null;
+        next.busy = false;
         // Clear pending thinking so the next user prompt renders a fresh (empty) block; the
         // thinking block for THIS turn was already emitted by the prior `thinking` event.
         next.lastThinking = null;
@@ -460,9 +475,15 @@
         return next;
       case 'error':
         next.error = event.message;
-        // An error mid-turn: don't pop the head (the panel can decide to retry/recover); just
-        // ensure busy is unset so the user can Send again. If the head was the failed turn,
-        // turn_end will arrive shortly with userText/assistantText and will pop normally.
+        // Terminal model/core failures can arrive without a follow-up turn_end (for example a
+        // dropped streaming response). Treat them as the end of the in-flight UI turn so the
+        // panel does not stay stuck in "Stop / phase: streaming".
+        next.phase = 'idle';
+        next.phaseDetail = null;
+        next.answer = null;
+        next.pendingUserText = null;
+        next.outbox = [];
+        next.lastThinking = null;
         next.busy = false;
         return next;
       default:
@@ -517,6 +538,8 @@
         return { kind: 'approval', value: value };
       case 'mcp':
         return { kind: 'mcp' };
+      case 'gmloop':
+        return { kind: 'gmloop', value: value || 'status' };
       case 'undo':
         return { kind: 'undo', checkpointId: value || undefined };
       case 'new':
@@ -553,6 +576,8 @@
     '  /model <id>     set the chat model (chat.model) and restart the core',
     '  /approval gated|auto   set edit approval mode and restart the core',
     '  /mcp            list configured MCP servers and tool counts',
+    '  /gmloop [lint|format-check|graph-doctor|parse]  run safe current-file GMLoop checks',
+    '  /gmloop lint-project|format-project  run slower project-wide GMLoop checks',
     '  /undo [id]      undo the most recent checkpoint (or the specified checkpoint id)',
     '  /tier planner|implementer|reviewer|off  override the dispatch tier for the next turn',
     '  /help           show this help',
@@ -586,8 +611,8 @@
       const t = turns[i];
       if (!t || !t.userText || String(t.userText).trim() === '') continue;
       out.push({ role: 'user', content: t.userText });
-      const a = t.assistantText && String(t.assistantText).length > 0 ? t.assistantText : null;
-      out.push({ role: 'assistant', content: a });
+      const a = t.assistantText && String(t.assistantText).trim() !== '' ? t.assistantText : null;
+      if (a !== null) out.push({ role: 'assistant', content: a });
     }
     return out;
   }

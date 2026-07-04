@@ -185,6 +185,8 @@ export type AgentEvent =
       context?: EditorContext;
       taskId?: string;
       tier?: TierName | null;
+      usage?: Usage;
+      toolsUsed?: string[];
       /**
        * Model thinking text for this turn (only set when the model emitted reasoning
        * content). Mirrored onto the panel via the `thinking` event right before this one.

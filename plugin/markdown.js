@@ -26,6 +26,12 @@
     var tokens = [];
     var i = 0;
     var len = text.length;
+    function pushText(value) {
+      if (!value) return;
+      var last = tokens[tokens.length - 1];
+      if (last && last.type === 'text') last.value += value;
+      else tokens.push({ type: 'text', value: value });
+    }
 
     while (i < len) {
       // Inline code: `...`
@@ -33,7 +39,7 @@
         var end = text.indexOf('`', i + 1);
         if (end === -1) {
           // Unclosed backtick — treat rest as plain text
-          tokens.push({ type: 'text', value: text.slice(i) });
+          pushText(text.slice(i));
           break;
         }
         tokens.push({ type: 'code', value: text.slice(i + 1, end) });
@@ -86,9 +92,15 @@
         }
       }
 
-      // Plain character
-      tokens.push({ type: 'text', value: text[i] });
-      i++;
+      // Plain text run. Keep this batched; one DOM text node per character is painfully slow.
+      var start = i;
+      while (i < len && text[i] !== '`' && text[i] !== '*' && text[i] !== '[') i++;
+      if (i === start) {
+        pushText(text[i]);
+        i++;
+      } else {
+        pushText(text.slice(start, i));
+      }
     }
 
     return tokens;

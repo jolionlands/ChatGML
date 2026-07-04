@@ -20,6 +20,12 @@
       'chatgml-explain: could not load chatgml plugin modules — is the chatgml plugin installed?',
       e,
     );
+    if (typeof GMEdit !== 'undefined' && GMEdit && typeof GMEdit.register === 'function') {
+      GMEdit.register('chatgml-explain', {
+        init: function () {},
+        cleanup: function () {},
+      });
+    }
     return;
   }
 

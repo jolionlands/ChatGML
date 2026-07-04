@@ -131,28 +131,15 @@
   }
 
   /**
-   * Return a list of provider-suggested field writes that should be appended to the save plan.
-   * Currently only the chat lane has a corresponding core config field; embedding providers are
-   * surfaced in the UI as suggestions but not auto-written (the user can pick them manually).
-   *
-   * Each returned entry is `[field, value]` matching the existing `commands` array shape. The
-   * `path` and `auth` fields are optional and only emitted when explicitly provided by the
-   * panel's provider selection (the core has to learn about them before they take effect).
+   * Provider rows may carry path/auth metadata, but the core does not currently expose
+   * `chat.path` or `chat.auth` as settable config fields. Keep this helper as a compatibility
+   * no-op so older call sites never emit unsupported writes.
    *
    * @param {object} settings
    * @returns {Array<[string,string]>}
    */
   function providerDerivedCommands(settings) {
-    var out = [];
-    if (!settings || typeof settings !== 'object') return out;
-    // The path field is only meaningful when the panel explicitly set it from a provider entry.
-    if (typeof settings.path === 'string' && settings.path.trim() !== '') {
-      out.push(['chat.path', settings.path.trim()]);
-    }
-    if (typeof settings.auth === 'string' && settings.auth.trim() !== '') {
-      out.push(['chat.auth', settings.auth.trim()]);
-    }
-    return out;
+    return [];
   }
 
   const api = {

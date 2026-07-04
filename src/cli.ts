@@ -24,6 +24,8 @@ import {
 import type { Config } from './types.js';
 import { LlmClient } from './llm.js';
 import { resolveTier } from './agent.js';
+import { makeFailoverLlm, knownProviderFallbackLanes, dedupeLanes } from './llm-failover.js';
+import type { NamedChatLane } from './llm-failover.js';
 import type { ChatLane, TierName } from './types.js';
 import { OpenAIEmbeddings, type Embeddings } from './index/embeddings.js';
 import { createMemoryProvider, type MemoryProvider } from './memory/provider.js';
@@ -126,9 +128,9 @@ function buildConfig(root: string, flags: GlobalFlags, io: CliIo): Config {
   });
 }
 
-function makeLlm(deps: CliDeps, config: Config): LlmLike {
+function makeLlm(deps: CliDeps, config: Config, env: NodeJS.ProcessEnv): LlmLike {
   if (deps.makeLlm) return deps.makeLlm(config);
-  return new LlmClient(config.chat);
+  return makeProductionLlm(config, config.chat, env);
 }
 
 /**
@@ -139,7 +141,12 @@ function makeLlm(deps: CliDeps, config: Config): LlmLike {
  * back to the global lane — same fallback as `resolveTier`, so the resolver and the factory never
  * disagree about which endpoint a turn will hit.
  */
-function makeLlmFromLane(deps: CliDeps, config: Config, lane: ChatLane): LlmLike {
+function makeLlmFromLane(
+  deps: CliDeps,
+  config: Config,
+  lane: ChatLane,
+  env: NodeJS.ProcessEnv,
+): LlmLike {
   if (deps.makeLlm) {
     // Tests can intercept the global lane, but for tier lanes we honor a dedicated hook too so a
     // test fixture can simulate per-tier model routing.
@@ -149,7 +156,30 @@ function makeLlmFromLane(deps: CliDeps, config: Config, lane: ChatLane): LlmLike
   // Fallback: tests that only set `makeLlm` (no `makeTierLlm`) get the same fake LLM for every
   // tier. Production code reaches the `new LlmClient(lane)` line below when neither hook is set.
   if (deps.makeLlm) return deps.makeLlm(config);
-  return new LlmClient(lane);
+  return makeProductionLlm(config, lane, env);
+}
+
+function makeProductionLlm(config: Config, lane: ChatLane, env: NodeJS.ProcessEnv): LlmLike {
+  const fallbackLanes = dedupeLanes(lane, [
+    ...configuredTierFallbackLanes(config),
+    ...knownProviderFallbackLanes(env, lane),
+  ]);
+  return makeFailoverLlm(
+    lane,
+    fallbackLanes,
+    (candidate) => new LlmClient(candidate),
+  ) as LlmLike;
+}
+
+function configuredTierFallbackLanes(config: Config): NamedChatLane[] {
+  const out: NamedChatLane[] = [];
+  for (const name of ['planner', 'implementer', 'reviewer'] as const) {
+    if (!config.tiers?.[name]) continue;
+    const resolved = resolveTier(config, config.mode, name);
+    if (resolved.name !== name) continue;
+    out.push({ ...resolved.lane, providerName: `tier:${name}` });
+  }
+  return out;
 }
 
 /**
@@ -164,10 +194,11 @@ function buildTierDispatcher(
   deps: CliDeps,
   config: Config,
   activeMode: Config['mode'],
+  env: NodeJS.ProcessEnv,
   cliUseTier?: TierName | null,
 ): (useTier?: TierName | null) => { llm: LlmLike; name: TierName | null } {
   const cache = new Map<TierName | 'global', LlmLike>();
-  cache.set('global', makeLlmFromLane(deps, config, config.chat));
+  cache.set('global', makeLlmFromLane(deps, config, config.chat, env));
   return (useTier?: TierName | null) => {
     // CLI-side `--use-tier` wins over the inbound `command.tier` when the latter is unset. When
     // both are present the inbound wins (deeper in the stack). Null clears the override.
@@ -176,7 +207,7 @@ function buildTierDispatcher(
     const key = resolved.name ?? 'global';
     let llm = cache.get(key);
     if (!llm) {
-      llm = makeLlmFromLane(deps, config, resolved.lane);
+      llm = makeLlmFromLane(deps, config, resolved.lane, env);
       cache.set(key, llm);
     }
     return { llm, name: resolved.name };
@@ -272,7 +303,7 @@ async function buildAgent(
 ): Promise<{ agent: AgentLike; config: Config; memory: MemoryProvider }> {
   const io = resolveIo(deps.io);
   const config = buildConfig(root, flags, io);
-  const llm = makeLlm(deps, config);
+  const llm = makeLlm(deps, config, io.env);
   const embeddings = makeEmbeddings(deps, config);
   const memory = await makeMemory(deps, config, embeddings);
   const ignore = await buildIgnoreFilter(config.index.root);
@@ -285,7 +316,13 @@ async function buildAgent(
   // dispatcher is constructed here (not lazily) so the CLI doesn't have to plumb a Config into
   // serve.ts; serve just forwards `useTier` through to the dispatcher. CliDeps may inject
   // `makeTierLlm` to swap the lane's LLM in tests; otherwise a fresh LlmClient per tier is built.
-  const resolveLlmForTurn = buildTierDispatcher(deps, config, config.mode ?? 'code', flags.useTier);
+  const resolveLlmForTurn = buildTierDispatcher(
+    deps,
+    config,
+    config.mode ?? 'code',
+    io.env,
+    flags.useTier,
+  );
   const agent = createAgentLike({
     llm,
     tools: buildToolRegistry(),

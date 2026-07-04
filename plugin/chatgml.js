@@ -16,6 +16,7 @@
   const fsp = require('fs/promises');
   const fs = require('fs');
   const crypto = require('crypto');
+  const { spawn } = require('child_process');
 
   const MenuItem = Electron_MenuItem;
   const Preferences = $gmedit['ui.Preferences'];
@@ -32,6 +33,7 @@
   const DiffViewApi = globalThis.ChatGmlDiffView || _abs('diff-view.js');
   const ConfigBridgeApi = globalThis.ChatGmlConfigBridge || _abs('config-bridge.js');
   const State = globalThis.ChatGmlState || _abs('state.js');
+  const ChildProcessApi = globalThis.ChatGmlChildProcess || _abs('child-process.js');
   const SettingsTasks = globalThis.ChatGmlSettingsTasks || _abs('settings-tasks.js');
   // Resolve markdown.js so the renderer global is populated (config.json loads it before
   // panel.js, but the require fallback is also fine in Node-based test contexts).
@@ -48,6 +50,12 @@
   const ProvidersApi = globalThis.ChatGmlProviders || _abs('providers.js');
 
   const PLUGIN_NAME = 'chatgml';
+  const OPEN_PREF_KEY = 'chatgml_open_on_project_v1';
+  const ASIDE_WIDTH_KEY = 'chatgml_aside_width_v2';
+  const ASIDE_MIN_WIDTH = 300;
+  const ASIDE_MAX_WIDTH = 760;
+  const EDITOR_MIN_WIDTH = 360;
+  const ASIDE_DEFAULT_WIDTH = 420;
   // SESSION_DIR is the per-project NDJSON store. Per spec, files live at
   // `~/.config/chatgml/sessions/<projectHash>-<taskId>.ndjson` (one NDJSON line per turn). The
   // SESSIONS module (plugin/sessions.js) owns all session I/O; this constant is retained as the
@@ -70,12 +78,358 @@
   let panel = null;
   let terminalOutput = '';
   let currentTaskId = 'default';
+  const diagnosticsLog = [];
+  let lastLaunchAuthInfo = null;
+  let activeGmloopChild = null;
   // Active per-turn tier override ('planner' | 'implementer' | 'reviewer' | null). Set via the
   // panel's `/tier <name>` slash command or the inline picker chip; included on the next user
   // message as UserCommand.tier (the core's UserCommand schema accepts it; the resulting turn is
   // stamped with the tier that produced it and the panel renders a badge).
   let activeTierOverride = null;
   const configBridge = new ConfigBridgeApi.ConfigBridge(__dirname);
+
+  function sanitizeDiagnosticText(value) {
+    let text = String(value == null ? '' : value);
+    text = text.replace(/Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer <redacted>');
+    text = text.replace(/(api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi, '$1=<redacted>');
+    text = text.replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-<redacted>');
+    return text;
+  }
+
+  function recordDiagnostic(kind, value) {
+    const stamp = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+    diagnosticsLog.push(stamp + ' ' + kind + ': ' + sanitizeDiagnosticText(value));
+    while (diagnosticsLog.length > 80) diagnosticsLog.shift();
+  }
+
+  function readOpenPrefMap() {
+    try {
+      if (typeof localStorage === 'undefined') return {};
+      const raw = localStorage.getItem(OPEN_PREF_KEY);
+      return raw ? JSON.parse(raw) || {} : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function writeOpenPreference(open) {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const key = projectDirectory || '__global__';
+      const map = readOpenPrefMap();
+      map[key] = !!open;
+      localStorage.setItem(OPEN_PREF_KEY, JSON.stringify(map));
+    } catch (e) {
+      /* localStorage can be unavailable in test contexts */
+    }
+  }
+
+  function shouldRestoreOpen(projectDir) {
+    const map = readOpenPrefMap();
+    return !!map[projectDir || '__global__'];
+  }
+
+  function asideMaxWidth() {
+    const hostWidth = mainCont && mainCont.clientWidth ? mainCont.clientWidth : 0;
+    const byEditor = hostWidth > 0 ? hostWidth - EDITOR_MIN_WIDTH - 5 : ASIDE_MAX_WIDTH;
+    return Math.max(ASIDE_MIN_WIDTH, Math.min(ASIDE_MAX_WIDTH, byEditor || ASIDE_MAX_WIDTH));
+  }
+
+  function clampAsideWidth(value) {
+    const n = Number(value);
+    const raw = Number.isFinite(n) ? n : ASIDE_DEFAULT_WIDTH;
+    return Math.max(ASIDE_MIN_WIDTH, Math.min(asideMaxWidth(), Math.round(raw)));
+  }
+
+  function readAsideWidth() {
+    try {
+      if (typeof localStorage === 'undefined') return ASIDE_DEFAULT_WIDTH;
+      return clampAsideWidth(localStorage.getItem(ASIDE_WIDTH_KEY));
+    } catch (e) {
+      return ASIDE_DEFAULT_WIDTH;
+    }
+  }
+
+  function writeAsideWidth(width) {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(ASIDE_WIDTH_KEY, String(clampAsideWidth(width)));
+      }
+    } catch (e) {
+      /* localStorage can be unavailable in test contexts */
+    }
+  }
+
+  function applyAsideWidth(width) {
+    if (!container) return;
+    const w = clampAsideWidth(width);
+    container.style.width = w + 'px';
+    container.style.flexBasis = w + 'px';
+    container.style.minWidth = ASIDE_MIN_WIDTH + 'px';
+    container.style.maxWidth = asideMaxWidth() + 'px';
+  }
+
+  function installAsideResizer(handle) {
+    if (!handle) return null;
+    let dragging = false;
+    function move(ev) {
+      if (!dragging || !mainCont) return;
+      const rect = mainCont.getBoundingClientRect();
+      const width = rect.right - ev.clientX;
+      applyAsideWidth(width);
+      forceUpdate();
+    }
+    function up() {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('chatgml-resizing');
+      writeAsideWidth(container ? container.getBoundingClientRect().width : ASIDE_DEFAULT_WIDTH);
+      document.removeEventListener('mousemove', move, true);
+      document.removeEventListener('mouseup', up, true);
+      forceUpdateSoon();
+    }
+    handle.addEventListener('mousedown', function (ev) {
+      if (ev.button !== 0) return;
+      dragging = true;
+      document.body.classList.add('chatgml-resizing');
+      ev.preventDefault();
+      ev.stopPropagation();
+      document.addEventListener('mousemove', move, true);
+      document.addEventListener('mouseup', up, true);
+    });
+    handle.addEventListener('dblclick', function (ev) {
+      ev.preventDefault();
+      applyAsideWidth(ASIDE_DEFAULT_WIDTH);
+      writeAsideWidth(ASIDE_DEFAULT_WIDTH);
+      forceUpdateSoon();
+    });
+    return { apply: applyAsideWidth };
+  }
+
+  function copyText(text) {
+    const value = sanitizeDiagnosticText(text);
+    try {
+      if (typeof GMEdit !== 'undefined' && GMEdit && typeof GMEdit.setClipboard === 'function') {
+        GMEdit.setClipboard(value);
+        return true;
+      }
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === 'function'
+      ) {
+        navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch (e) {
+      return false;
+    }
+    return false;
+  }
+
+  function inferAuthState(cfg, provider) {
+    if (provider && provider.authState) return provider.authState;
+    const apiKey = cfg && cfg.chat && cfg.chat.apiKey ? String(cfg.chat.apiKey) : '';
+    if (/^env:/i.test(apiKey)) return 'env ref';
+    if (apiKey) return 'set';
+    return 'missing';
+  }
+
+  function readChatgmlEnvForDiagnostics() {
+    const out = {};
+    const file = path.join(chatgmlUserDirForProviders(), '.env');
+    try {
+      const raw = fs.readFileSync(file, 'utf8');
+      const lines = raw.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const m = /^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/.exec(lines[i]);
+        if (!m) continue;
+        const key = m[1];
+        let value = m[2] || '';
+        if ((value[0] === '"' && value[value.length - 1] === '"') || (value[0] === "'" && value[value.length - 1] === "'")) {
+          value = value.slice(1, -1);
+        }
+        out[key] = value;
+      }
+    } catch (e) {
+      /* absent .env is fine */
+    }
+    return out;
+  }
+
+  function fallbackDiagnostics() {
+    const envFile = readChatgmlEnvForDiagnostics();
+    const envValue = function (key) {
+      return process.env[key] || envFile[key] || '';
+    };
+    const items = [];
+    if (envValue('CHATGML_FALLBACK_CHAT_BASE_URL') && envValue('CHATGML_FALLBACK_CHAT_MODEL')) {
+      items.push(
+        (envValue('CHATGML_FALLBACK_CHAT_PROVIDER') || 'fallback') +
+          ' / ' +
+          envValue('CHATGML_FALLBACK_CHAT_MODEL'),
+      );
+    }
+    if (envValue('OPENROUTER_API_KEY')) {
+      items.push('OpenRouter / ' + (envValue('CHATGML_FALLBACK_OPENROUTER_MODEL') || 'minimax/minimax-m3'));
+    }
+    if (envValue('MINIMAX_API_KEY')) {
+      items.push('MiniMax / ' + (envValue('CHATGML_FALLBACK_MINIMAX_MODEL') || 'MiniMax-M3'));
+    }
+    if (envValue('NVIDIA_API_KEY') && envValue('CHATGML_FALLBACK_NVIDIA_MODEL')) {
+      items.push('NVIDIA / ' + envValue('CHATGML_FALLBACK_NVIDIA_MODEL'));
+    }
+    if (
+      envValue('MAVEROS_API_KEY') &&
+      envValue('CHATGML_FALLBACK_MAVEROS_BASE_URL') &&
+      envValue('CHATGML_FALLBACK_MAVEROS_MODEL')
+    ) {
+      items.push('Maveros / ' + envValue('CHATGML_FALLBACK_MAVEROS_MODEL'));
+    }
+    return items.join(', ');
+  }
+
+  function pathExistsAsFile(filePath) {
+    try {
+      return !!filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function pathExistsAsDirectory(filePath) {
+    try {
+      return !!filePath && fs.existsSync(filePath) && fs.statSync(filePath).isDirectory();
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function findCommandOnPath(name) {
+    const pathEnv = process.env.PATH || process.env.Path || process.env.path || '';
+    const suffixes = process.platform === 'win32' ? ['', '.cmd', '.exe', '.bat'] : [''];
+    const parts = pathEnv.split(path.delimiter);
+    for (let i = 0; i < parts.length; i++) {
+      const dir = parts[i];
+      if (!dir) continue;
+      for (let j = 0; j < suffixes.length; j++) {
+        const candidate = path.join(dir, name + suffixes[j]);
+        if (pathExistsAsFile(candidate)) return candidate;
+      }
+    }
+    return '';
+  }
+
+  function gmloopDiagnostics() {
+    const envFile = readChatgmlEnvForDiagnostics();
+    const envValue = function (key) {
+      return process.env[key] || envFile[key] || '';
+    };
+    const configuredBin = envValue('CHATGML_GMLOOP_BIN');
+    const configuredDir = envValue('CHATGML_GMLOOP_DIR');
+    const siblingDir = path.resolve(__dirname, '..', '..', 'GMLoop');
+    const dir = configuredDir || (pathExistsAsDirectory(siblingDir) ? siblingDir : '');
+    const packageFile = dir ? path.join(dir, 'package.json') : '';
+    const cliDist = dir ? path.join(dir, 'src', 'cli', 'dist', 'index.js') : '';
+    const pathBin = findCommandOnPath('gmloop');
+    const commands = [
+      'gmloop lint <file.gml>',
+      'gmloop format --path <file.gml>',
+      'gmloop lint <project>',
+      'gmloop format --path <project>',
+      'gmloop graph doctor --path <project>',
+      'gmloop parse --path <file.gml>',
+    ];
+
+    if (configuredBin) {
+      const configuredBinExists = pathExistsAsFile(configuredBin);
+      return {
+        status: configuredBinExists ? 'ready' : 'configured bin missing',
+        dir: dir,
+        runner: configuredBin,
+        cmd: configuredBinExists ? (/\.js$/i.test(configuredBin) ? 'node' : configuredBin) : '',
+        argvPrefix: configuredBinExists && /\.js$/i.test(configuredBin) ? [configuredBin] : [],
+        setup: configuredBinExists ? '' : 'CHATGML_GMLOOP_BIN points to a missing file',
+        commands: commands.join(', '),
+      };
+    }
+    if (pathBin) {
+      return {
+        status: 'ready',
+        dir: dir,
+        runner: pathBin,
+        cmd: pathBin,
+        argvPrefix: [],
+        setup: '',
+        commands: commands.join(', '),
+      };
+    }
+    if (pathExistsAsFile(cliDist)) {
+      return {
+        status: 'ready',
+        dir: dir,
+        runner: 'node ' + cliDist,
+        cmd: 'node',
+        argvPrefix: [cliDist],
+        setup: '',
+        commands: commands.join(', '),
+      };
+    }
+    if (pathExistsAsFile(packageFile)) {
+      return {
+        status: 'clone found; build needed',
+        dir: dir,
+        runner: '',
+        cmd: '',
+        argvPrefix: [],
+        setup: 'build GMLoop or set CHATGML_GMLOOP_BIN before enabling direct tool runs',
+        commands: commands.join(', '),
+      };
+    }
+    return {
+      status: 'not found',
+      dir: '',
+      runner: '',
+      cmd: '',
+      argvPrefix: [],
+      setup: 'clone SimulatorLife/GMLoop next to ChatGML or set CHATGML_GMLOOP_DIR',
+      commands: commands.join(', '),
+    };
+  }
+
+  function diagnosticsSnapshot() {
+    const cfg = panel && panel._config ? panel._config : null;
+    const provider =
+      panel && typeof panel.getActiveProviderEntry === 'function'
+        ? panel.getActiveProviderEntry()
+        : null;
+    const gmloop = gmloopDiagnostics();
+    return {
+      core: client ? (client.ready ? 'ready' : 'starting') : 'stopped',
+      projectDir: projectDirectory || '',
+      taskId: currentTaskId || 'default',
+      provider:
+        provider && provider.providerName
+          ? provider.providerName
+          : lastLaunchAuthInfo && lastLaunchAuthInfo.providerName
+            ? lastLaunchAuthInfo.providerName
+            : '',
+      model: cfg && cfg.chat && cfg.chat.model ? cfg.chat.model : '',
+      baseURL: cfg && cfg.chat && cfg.chat.baseURL ? cfg.chat.baseURL : '',
+      fallbacks: fallbackDiagnostics(),
+      gmloop: gmloop.status,
+      gmloopDir: gmloop.dir || '',
+      gmloopRunner: gmloop.runner || '',
+      envFile: path.join(chatgmlUserDirForProviders(), '.env'),
+      authState:
+        lastLaunchAuthInfo && lastLaunchAuthInfo.authState
+          ? lastLaunchAuthInfo.authState
+          : inferAuthState(cfg, provider),
+      authSource: lastLaunchAuthInfo && lastLaunchAuthInfo.authSource ? lastLaunchAuthInfo.authSource : '',
+      lastError: panel && panel.state && panel.state.error ? panel.state.error : '',
+      logs: diagnosticsLog.slice(-12),
+    };
+  }
 
   // Resolve the chatgml-owned user config directory for the providers.json file. Mirrors the
   // platform conventions of `~/.config/chatgml/` on POSIX and `%APPDATA%/chatgml/` on Windows so
@@ -92,6 +446,89 @@
       return path.join(require('os').homedir(), '.config', 'chatgml');
     } catch (e) {
       return path.join(require('os').homedir(), '.config', 'chatgml');
+    }
+  }
+
+  function chatgmlConfigPath() {
+    const xdg = process.env.XDG_CONFIG_HOME;
+    const base = xdg && typeof xdg === 'string' ? xdg : path.join(require('os').homedir(), '.config');
+    return path.join(base, 'chatgml', 'config.json');
+  }
+
+  function readJsonObject(filePath) {
+    try {
+      if (!filePath || !fs.existsSync(filePath)) return {};
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (e) {
+      recordDiagnostic('config', 'could not read ' + filePath + ': ' + (e.message || e));
+      return {};
+    }
+  }
+
+  function configSnapshotForAuth() {
+    const userCfg = readJsonObject(chatgmlConfigPath());
+    const projectCfg = projectDirectory
+      ? readJsonObject(path.join(projectDirectory, '.chatgml.json'))
+      : {};
+    const panelCfg = panel && panel._config ? panel._config : {};
+    const userChat = userCfg && userCfg.chat && typeof userCfg.chat === 'object' ? userCfg.chat : {};
+    const projectChat =
+      projectCfg && projectCfg.chat && typeof projectCfg.chat === 'object' ? projectCfg.chat : {};
+    const panelChat =
+      panelCfg && panelCfg.chat && typeof panelCfg.chat === 'object' ? panelCfg.chat : {};
+    const chat = Object.assign({}, userChat, projectChat, panelChat);
+    const rawApiKey =
+      typeof projectChat.apiKey === 'string'
+        ? projectChat.apiKey
+        : typeof userChat.apiKey === 'string'
+          ? userChat.apiKey
+          : '';
+    if (rawApiKey) chat.apiKey = rawApiKey;
+    else if (chat.apiKey === '***') delete chat.apiKey;
+    return { chat: chat };
+  }
+
+  function launchAuthEnv() {
+    try {
+      const cfg = configSnapshotForAuth();
+      const chat = cfg && cfg.chat ? cfg.chat : {};
+      const load = ProvidersApi.loadAll({ chatgmlUserDir: chatgmlUserDirForProviders() });
+      const authEnv = Object.assign({}, readChatgmlEnvForDiagnostics(), process.env);
+      const auth = ProvidersApi.resolveAuthForConfig(
+        load.registry,
+        {
+          model: chat.model || '',
+          baseURL: chat.baseURL || '',
+          apiKey: chat.apiKey || '',
+        },
+        authEnv,
+      );
+      lastLaunchAuthInfo = {
+        providerName: auth.providerName || '',
+        authState: auth.authState || 'missing',
+        authSource: auth.authSource || '',
+        envVar: auth.envVar || '',
+      };
+      const keys = auth.extraEnv && typeof auth.extraEnv === 'object' ? Object.keys(auth.extraEnv) : [];
+      recordDiagnostic(
+        'auth',
+        (auth.providerName || 'manual') +
+          ' ' +
+          (auth.authSource || auth.authState || 'missing') +
+          (keys.length > 0 ? ' bridged ' + keys.join(',') : ''),
+      );
+      return auth.extraEnv || {};
+    } catch (e) {
+      lastLaunchAuthInfo = {
+        providerName: '',
+        authState: 'missing',
+        authSource: 'auth probe failed',
+        envVar: '',
+      };
+      recordDiagnostic('auth', 'probe failed: ' + (e.message || e));
+      return {};
     }
   }
 
@@ -476,6 +913,7 @@
       panel.clear();
     }
     const turns = await loadSessionTurns();
+    if (panel) panel.loadTurns(turns);
     if (client) {
       client.sendResume(State.turnEndToMessages(turns), currentTaskId);
     }
@@ -753,12 +1191,14 @@
           const bar = document.createElement('div');
           bar.className = 'chatgml-hunk-bar';
           const acceptBtn = document.createElement('button');
+          acceptBtn.type = 'button';
           acceptBtn.className = 'run-button';
           acceptBtn.textContent = 'Accept';
           acceptBtn.addEventListener('click', function () {
             if (client) client.approve(proposal.id, bi);
           });
           const rejectBtn = document.createElement('button');
+          rejectBtn.type = 'button';
           rejectBtn.className = 'run-button chatgml-reject';
           rejectBtn.textContent = 'Reject';
           rejectBtn.addEventListener('click', function () {
@@ -820,6 +1260,7 @@
             if (panel) panel.flash('no saved session to resume');
             return;
           }
+          if (panel) panel.loadTurns(turns);
           client.sendResume(State.turnEndToMessages(turns), currentTaskId);
           if (panel) panel.flash('resumed ' + turns.length + ' saved turn(s)');
         })();
@@ -867,6 +1308,9 @@
         return;
       case 'mcp':
         handleMcpCommand();
+        return;
+      case 'gmloop':
+        handleGmloopCommand(cmd);
         return;
       case 'undo':
         if (client) client.sendUndo(cmd.checkpointId);
@@ -923,6 +1367,182 @@
     if (panel) panel.flash(lines.join('\n'));
   }
 
+  const GMLOOP_OUTPUT_CAP = 12000;
+  const GMLOOP_TIMEOUT_MS = 120000;
+  const GMLOOP_OUTPUT_HALF_CAP = Math.floor(GMLOOP_OUTPUT_CAP / 2);
+
+  function gmloopReadOnlyAction(value) {
+    const action = String(value || 'status').toLowerCase();
+    if (action === 'lint') {
+      const target = gmloopCurrentGmlFileTarget();
+      if (!target) return { label: 'lint', error: 'open a GML file before /gmloop lint' };
+      return { label: 'lint ' + target.label, argv: ['lint', target.path] };
+    }
+    if (action === 'lint-project' || action === 'project-lint') {
+      return { label: 'lint project', argv: ['lint', projectDirectory] };
+    }
+    if (action === 'format' || action === 'format-check' || action === 'check') {
+      const target = gmloopCurrentGmlFileTarget();
+      if (!target) return { label: 'format check', error: 'open a GML file before /gmloop format-check' };
+      return { label: 'format check ' + target.label, argv: ['format', '--path', target.path] };
+    }
+    if (action === 'format-project' || action === 'check-project') {
+      return { label: 'format check project', argv: ['format', '--path', projectDirectory] };
+    }
+    if (action === 'doctor' || action === 'graph' || action === 'graph-doctor') {
+      return { label: 'graph doctor', argv: ['graph', 'doctor', '--path', projectDirectory] };
+    }
+    if (action === 'parse') {
+      const target = gmloopCurrentGmlFileTarget();
+      if (!target) {
+        return { label: 'parse', error: 'open a GML file before /gmloop parse' };
+      }
+      return { label: 'parse current file', argv: ['parse', '--path', target.path] };
+    }
+    return null;
+  }
+
+  function gmloopCurrentGmlFileTarget() {
+    const ctx = currentEditorContext();
+    if (!ctx || !ctx.openFile || !/\.gml$/i.test(String(ctx.openFile))) return null;
+    const abs = resolveProjectChildPath(ctx.openFile);
+    return abs ? { path: abs, label: 'current file' } : null;
+  }
+
+  function resolveProjectChildPath(relPath) {
+    if (!projectDirectory || !relPath) return '';
+    const root = path.resolve(projectDirectory);
+    const cleaned = normalizeToPosix(relPath).replace(/^\/+/, '');
+    const abs = path.resolve(root, cleaned);
+    const relative = path.relative(root, abs);
+    if (
+      relative === '' ||
+      relative === '..' ||
+      relative.indexOf('..' + path.sep) === 0 ||
+      path.isAbsolute(relative)
+    ) {
+      return '';
+    }
+    return abs;
+  }
+
+  function runGmloopReadOnly(action) {
+    if (!projectDirectory) {
+      if (panel) panel.flash('open a GameMaker project before running GMLoop', true);
+      return true;
+    }
+    if (activeGmloopChild) {
+      if (panel) panel.flash('GMLoop is already running a check', true);
+      return true;
+    }
+    const spec = gmloopReadOnlyAction(action);
+    if (!spec) return false;
+    if (spec.error) {
+      if (panel) panel.flash(spec.error, true);
+      return true;
+    }
+    const info = gmloopDiagnostics();
+    if (!info.cmd) {
+      handleGmloopCommand({ kind: 'gmloop', value: 'status' });
+      return true;
+    }
+    const argv = (info.argvPrefix || []).concat(spec.argv);
+    const wrapped =
+      ChildProcessApi && typeof ChildProcessApi.wrapCmdForWindows === 'function'
+        ? ChildProcessApi.wrapCmdForWindows(info.cmd, argv)
+        : { cmd: info.cmd, argv: argv };
+    const env =
+      ChildProcessApi && typeof ChildProcessApi.buildMinimalEnv === 'function'
+        ? ChildProcessApi.buildMinimalEnv()
+        : process.env;
+    let child;
+    let output = '';
+    let finished = false;
+    const append = function (chunk) {
+      output = capGmloopOutput(output + sanitizeDiagnosticText(String(chunk || '')));
+    };
+    try {
+      child = spawn(wrapped.cmd, wrapped.argv, {
+        cwd: projectDirectory,
+        env: env,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch (e) {
+      recordDiagnostic('gmloop', spec.label + ' spawn failed: ' + (e.message || e));
+      if (panel) panel.flash('GMLoop ' + spec.label + ' failed to start: ' + (e.message || e), true);
+      return true;
+    }
+    activeGmloopChild = child;
+    recordDiagnostic('gmloop', 'run ' + spec.label);
+    if (panel) panel.flash('running GMLoop ' + spec.label + '...');
+    const timeout = setTimeout(function () {
+      if (finished) return;
+      finished = true;
+      try {
+        child.kill();
+      } catch (e) {
+        /* ignore */
+      }
+      if (activeGmloopChild === child) activeGmloopChild = null;
+      recordDiagnostic('gmloop', spec.label + ' timed out');
+      if (panel) panel.flash('GMLoop ' + spec.label + ' timed out after 120s', true);
+    }, GMLOOP_TIMEOUT_MS);
+    child.stdout.on('data', append);
+    child.stderr.on('data', append);
+    child.on('error', function (err) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      if (activeGmloopChild === child) activeGmloopChild = null;
+      recordDiagnostic('gmloop', spec.label + ' error: ' + (err.message || err));
+      if (panel) panel.flash('GMLoop ' + spec.label + ' error: ' + (err.message || err), true);
+    });
+    child.on('exit', function (code) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      if (activeGmloopChild === child) activeGmloopChild = null;
+      const body = output.trim() || '(no output)';
+      const ok = code === 0;
+      recordDiagnostic('gmloop', spec.label + ' exit ' + String(code));
+      if (panel) panel.flash('GMLoop ' + spec.label + ' ' + (ok ? 'passed' : 'exited ' + code) + '\n' + body, !ok);
+    });
+    return true;
+  }
+
+  function capGmloopOutput(text) {
+    const value = String(text || '');
+    if (value.length <= GMLOOP_OUTPUT_CAP) return value;
+    return (
+      value.slice(0, GMLOOP_OUTPUT_HALF_CAP) +
+      '\n[truncated ' +
+      String(value.length - GMLOOP_OUTPUT_CAP) +
+      ' chars]\n' +
+      value.slice(value.length - GMLOOP_OUTPUT_HALF_CAP)
+    );
+  }
+
+  function handleGmloopCommand(cmd) {
+    if (cmd.value && cmd.value !== 'status' && runGmloopReadOnly(cmd.value)) return;
+    const info = gmloopDiagnostics();
+    const lines = ['GMLoop: ' + info.status];
+    if (info.dir) lines.push('dir: ' + info.dir);
+    if (info.runner) lines.push('runner: ' + info.runner);
+    if (info.setup) lines.push('setup: ' + info.setup);
+    lines.push('safe commands: ' + info.commands);
+    lines.push(
+      'available now: /gmloop lint, /gmloop format-check, /gmloop graph-doctor, /gmloop parse',
+    );
+    lines.push('project-wide: /gmloop lint-project, /gmloop format-project');
+    if (cmd.value && cmd.value !== 'status') {
+      lines.push('/gmloop ' + cmd.value + ' is not wired yet');
+    }
+    recordDiagnostic('gmloop', info.status + (info.runner ? ' via ' + info.runner : ''));
+    if (panel) panel.flash(lines.join('\n'), info.status === 'not found' || /missing/.test(info.status));
+  }
+
   function setConfigAndRestart(field, value) {
     configBridge.setConfigField(field, value, function (err) {
       if (err) {
@@ -933,22 +1553,43 @@
     });
   }
 
+  function refreshEffectiveConfig() {
+    const dir = projectDirectory || __dirname;
+    configBridge.showEffectiveConfig(dir, function (err, cfg) {
+      if (err) {
+        if (panel) panel.flash('config load failed: ' + (err.message || err), true);
+        return;
+      }
+      if (!panel || !cfg) return;
+      panel.setConfig(cfg);
+      panel.setSettingsValues(cfg);
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Child process lifecycle (NdjsonClient) <-> ChatPanel wiring.
   // -------------------------------------------------------------------------
   function launch() {
     if (!projectDirectory) {
       console.warn('chatgml: open a project first');
+      recordDiagnostic('launch', 'blocked: no project');
+      if (panel) panel.flash('open a GameMaker project first', true);
       return;
     }
     if (client) return;
+    recordDiagnostic('launch', projectDirectory);
+    const extraEnv = launchAuthEnv();
     client = new ClientApi.NdjsonClient({
       projectDir: projectDirectory,
       configuredPath: configBridge.getBinaryPath(),
       scope: configBridge.getScope() || undefined,
       pluginDir: __dirname,
+      extraEnv: extraEnv,
       onEvent: function (event) {
         if (panel) panel.handleEvent(event);
+        if (event && event.type === 'error') {
+          recordDiagnostic('model error', event.message || event.error || 'unknown error');
+        }
         if (event.type === 'edit_proposal') {
           rememberProposals();
           try {
@@ -963,6 +1604,7 @@
         }
       },
       onReady: function (event) {
+        recordDiagnostic('ready', event && event.mode ? 'mode=' + event.mode : 'ready');
         if (panel) {
           panel.setReady();
           if (event && event.mode) panel.setMode(event.mode);
@@ -970,24 +1612,25 @@
         configBridge.setCoreAvailable(true);
         client.sendApprovalPolicy(configBridge.getApprovalPolicy());
         // Pull the effective config into the quick-config row (display-only; secrets are redacted).
-        configBridge.showEffectiveConfig(projectDirectory, function (err, cfg) {
-          if (!err && panel && cfg) panel.setConfig(cfg);
-          if (!err && panel && cfg) panel.setSettingsValues(cfg);
-        });
+        refreshEffectiveConfig();
         // Resume the last saved session for the current task so multi-turn context survives restarts.
         void (async function () {
           const turns = await loadSessionTurns();
+          if (panel) panel.loadTurns(turns);
           if (client) client.sendResume(State.turnEndToMessages(turns), currentTaskId);
         })();
       },
       onMalformed: function (line) {
+        recordDiagnostic('malformed', line);
         console.warn('chatgml: malformed protocol line (ignored):', line);
       },
       onStderr: function (text) {
         // stdout is protocol-only; stderr is diagnostics. Route to the console/log, never the panel.
+        recordDiagnostic('stderr', text.trim());
         console.info('chatgml[serve]:', text.trim());
       },
       onError: function (err) {
+        recordDiagnostic('error', err.message);
         console.error('chatgml: failed to launch core —', err.message);
         if (panel) panel.handleEvent({ type: 'error', message: err.message });
         client = null;
@@ -997,6 +1640,7 @@
       onExit: function (code) {
         const err =
           code !== 0 && code != null ? new Error('ChatGML core exited with code ' + code) : null;
+        recordDiagnostic('exit', String(code));
         console.info('chatgml: core exited', code);
         client = null;
         configBridge.setCoreAvailable(false);
@@ -1007,11 +1651,13 @@
     if (started && panel) {
       panel.setRunning(true);
     } else if (!started) {
+      recordDiagnostic('launch', 'start returned false');
       client = null;
     }
   }
 
   function stop() {
+    recordDiagnostic('stop', client ? 'stopping core' : 'no core');
     if (client) {
       client.stop();
       client = null;
@@ -1029,26 +1675,46 @@
     window.dispatchEvent(e);
   }
 
-  function hide() {
-    if (mainCont && sizer) mainCont.removeChild(sizer);
-    if (mainCont && container) mainCont.removeChild(container);
-    gmlFile = null;
+  function forceUpdateSoon() {
     forceUpdate();
+    setTimeout(forceUpdate, 0);
+    setTimeout(forceUpdate, 60);
+  }
+
+  function hide(remember) {
+    if (remember !== false) writeOpenPreference(false);
+    if (sizer && sizer.parentNode) sizer.parentNode.removeChild(sizer);
+    if (container && container.parentNode) container.parentNode.removeChild(container);
+    gmlFile = null;
+    recordDiagnostic('panel', 'hidden');
+    forceUpdateSoon();
     setTimeout(function () {
       aceEditor.focus();
     });
   }
 
   function show() {
-    if (gmlFile != null) return;
-    if (ready) {
-      mainCont.appendChild(sizer);
-      mainCont.appendChild(container);
+    writeOpenPreference(true);
+    if (gmlFile != null) {
+      forceUpdateSoon();
+      return;
+    }
+    if (ready && mainCont && sizer && container) {
+      if (sizer.parentNode !== mainCont) mainCont.appendChild(sizer);
+      if (container.parentNode !== mainCont) mainCont.appendChild(container);
+      applyAsideWidth(readAsideWidth());
     } else {
       prepare();
     }
     gmlFile = true;
-    forceUpdate();
+    recordDiagnostic('panel', 'shown');
+    forceUpdateSoon();
+    if (projectDirectory && !client) launch();
+  }
+
+  function togglePanel() {
+    if (gmlFile != null) hide(true);
+    else show();
   }
 
   function prepare() {
@@ -1056,6 +1722,7 @@
 
     container = document.createElement('div');
     container.classList.add('ace_container');
+    container.classList.add('chatgml-aside');
     container.id = 'chatgml_editor';
 
     panelHostEl = document.createElement('div');
@@ -1096,6 +1763,12 @@
       getMentions: getMentions,
       getProjectFiles: function () {
         return scanProjectFiles(projectDirectory);
+      },
+      getDiagnostics: diagnosticsSnapshot,
+      onCopyDiagnostics: function (text) {
+        if (!copyText(text)) {
+          console.info('[chatgml] diagnostics:\n' + sanitizeDiagnosticText(text));
+        }
       },
       onSendWithContext: function (text, context) {
         if (!client) return;
@@ -1154,6 +1827,7 @@
       onStopGenerate: function () {
         if (client) client.cancel();
       },
+      onSettingsOpen: refreshEffectiveConfig,
       onClear: function () {
         if (client) client.sendClear();
         void clearSessionFile();
@@ -1220,8 +1894,8 @@
       onRunOnce: function (id) {
         if (client) client.sendRunOnce(id);
       },
-      onUndo: function () {
-        if (client) client.send({ type: 'undo' });
+      onUndo: function (checkpointId) {
+        if (client) client.sendUndo(checkpointId);
       },
       // ---- Provider registry callbacks (panel populates / refreshes / adds / exports) ----
       // The panel keeps the registry module reference + raw registry in instance state; the
@@ -1237,13 +1911,13 @@
             panel._ProvidersApi = ProvidersApi;
             panel.populateProviders(load, {
               onRefresh: function () {
-                onRefreshProviders();
+                panel.opts.onRefreshProviders();
               },
               onAddProvider: function () {
-                onAddProvider();
+                panel.opts.onAddProvider();
               },
               onExportEnv: function () {
-                onExportEnv();
+                panel.opts.onExportEnv();
               },
             });
             if (load.bootstrapped && panel) {
@@ -1295,7 +1969,9 @@
           }
           if (panel) panel.flash('Provider "' + entry.name + '" added — refresh to see');
           // Auto-refresh so the user sees the new entry in the list without an extra click.
-          onRefreshProviders();
+          if (panel && panel.opts && typeof panel.opts.onRefreshProviders === 'function') {
+            panel.opts.onRefreshProviders();
+          }
         } catch (e) {
           if (panel) panel.flash('add provider failed: ' + (e.message || e), true);
         }
@@ -1373,9 +2049,9 @@
           // reopened settings (since `_pendingProvidersLoad` alone would carry data but no
           // callbacks).
           panel._pendingProvidersCallbacks = {
-            onRefresh: onRefreshProviders,
-            onAddProvider: onAddProvider,
-            onExportEnv: onExportEnv,
+            onRefresh: panel.opts.onRefreshProviders,
+            onAddProvider: panel.opts.onAddProvider,
+            onExportEnv: panel.opts.onExportEnv,
           };
           // The panel might not have built the settings DOM yet (first open lazy-builds it).
           // If the DOM exists, populate; otherwise the panel calls populateProviders itself the
@@ -1400,26 +2076,67 @@
           // `env:NAME` reference is accepted — and that's exactly what the help text under the
           // input tells the user to paste.
           var plan = SettingsTasks.buildSettingsCommands(settings);
-          // Provider-derived fields (path, auth) are appended AFTER the user-typed fields so the
-          // visible "model + url" always wins on collision — a registry-derived path is only
-          // persisted when the user actually picked a registry row.
-          var provDerived = SettingsTasks.providerDerivedCommands(settings);
-          var tasks = plan.commands.concat(provDerived);
+          var tasks = plan.commands;
           // Write each config field sequentially, then restart the core. Scope is a plugin pref
           // (it must precede the serve argv on restart, NOT a user-global config field) so it
           // goes through configBridge.setScope, not configBridge.setConfigField.
-          if (plan.scope !== null) configBridge.setScope(plan.scope);
+          var savedCount = tasks.length;
+          var failures = [];
+          if (plan.scope !== null) {
+            configBridge.setScope(plan.scope);
+            savedCount++;
+          }
           var i = 0;
           function next() {
             if (i >= tasks.length) {
+              if (failures.length > 0) {
+                recordDiagnostic('settings', 'failed fields: ' + failures.join(', '));
+                if (panel) {
+                  panel.flash(
+                    'settings saved with ' +
+                      failures.length +
+                      ' failure' +
+                      (failures.length === 1 ? '' : 's') +
+                      ': ' +
+                      failures.join(', '),
+                    true,
+                  );
+                }
+                return;
+              }
+              if (panel) {
+                var selected =
+                  settings && settings.providerName ? ' via ' + settings.providerName : '';
+                recordDiagnostic(
+                  'settings',
+                  savedCount > 0 ? 'saved ' + savedCount + ' field(s)' + selected : 'unchanged',
+                );
+                panel.flash(
+                  savedCount > 0
+                    ? 'settings saved' +
+                        selected +
+                        ' (' +
+                        savedCount +
+                        ' field' +
+                        (savedCount === 1 ? '' : 's') +
+                        ') — restarting core…'
+                    : 'settings unchanged — restarting core…',
+                );
+              }
               restartCore();
-              if (panel) panel.flash('settings saved — restarting core…');
               return;
             }
             var field = tasks[i][0];
             var value = tasks[i][1];
             i++;
             configBridge.setConfigField(field, value, function (err) {
+              if (err) {
+                failures.push(field);
+                recordDiagnostic(
+                  'settings',
+                  'config set ' + field + ' failed: ' + (err.message || err),
+                );
+              }
               if (err && panel)
                 panel.flash('config set ' + field + ' failed: ' + (err.message || err), true);
               next();
@@ -1440,20 +2157,23 @@
     // `opts` variable in this scope. (Left over from a refactor: previously this function
     // received opts as a parameter; the panel constructor now owns that surface.)
     if (panel && panel.opts && typeof panel.opts.onSettingsBootstrap === 'function') {
-      try { panel.opts.onSettingsBootstrap(); } catch (e) {
+      try {
+        panel.opts.onSettingsBootstrap();
+      } catch (e) {
         console.info('chatgml: settings bootstrap threw', e && (e.message || e));
       }
     }
-
     sizer = document.createElement('div');
     sizer.setAttribute('splitter-element', '#chatgml_editor');
-    sizer.setAttribute('splitter-lskey', 'chatgml_aside_width');
-    sizer.setAttribute('splitter-default-width', '420');
+    sizer.setAttribute('splitter-lskey', ASIDE_WIDTH_KEY);
+    sizer.setAttribute('splitter-default-width', String(ASIDE_DEFAULT_WIDTH));
     sizer.classList.add('splitter-td');
+    sizer.classList.add('chatgml-splitter');
 
     // Reparent the existing editor children into a flex-row container so the panel sits beside them.
     const nextCont = document.createElement('div');
     nextCont.classList.add('ace_container');
+    nextCont.classList.add('chatgml-editor-main');
     mainCont = aceEditor.container.parentElement;
     const mainChildren = [];
     for (let i = 0; i < mainCont.children.length; i++) mainChildren.push(mainCont.children[i]);
@@ -1463,13 +2183,20 @@
       nextCont.appendChild(ch);
     }
     mainCont.style.setProperty('flex-direction', 'row');
+    mainCont.style.setProperty('min-width', '0');
+    mainCont.classList.add('chatgml-aside-host');
     mainCont.appendChild(nextCont);
     mainCont.appendChild(sizer);
     mainCont.appendChild(container);
+    applyAsideWidth(readAsideWidth());
 
-    splitter = new GMEdit_Splitter(sizer);
+    splitter = installAsideResizer(sizer);
     void splitter;
     void editor;
+    window.addEventListener('resize', function () {
+      applyAsideWidth(readAsideWidth());
+    });
+    refreshEffectiveConfig();
   }
 
   // -------------------------------------------------------------------------
@@ -1521,6 +2248,8 @@
       invalidateFileIndex(); // new project -> rescan file list for @file autocomplete
       projectDirectory = e.project.dir; // the on-disk directory (NOT e.project.path / the .yyp)
       console.info('chatgml: project opened', projectDirectory);
+      recordDiagnostic('project', projectDirectory);
+      refreshEffectiveConfig();
       // Read the disk-side active pointer so the panel resumes the last-active session for
       // this project on relaunch. Falls back to 'default' when no active file exists yet
       // (first launch on this project). We then push the list to the sidebar + legacy task
@@ -1534,6 +2263,11 @@
           panel.setTask(currentTaskId);
         }
         await refreshSessionsPanel();
+        if (shouldRestoreOpen(projectDirectory)) {
+          setTimeout(function () {
+            show();
+          }, 0);
+        }
       })();
     });
 
@@ -1714,6 +2448,7 @@
     reloadRow.className = 'chatgml-prefs-row';
     reloadRow.style.marginTop = '6px';
     const reloadBtn = document.createElement('button');
+    reloadBtn.type = 'button';
     reloadBtn.className = 'run-button';
     reloadBtn.textContent = 'Reload MCP servers';
     reloadBtn.addEventListener('click', function () {
@@ -1749,7 +2484,7 @@
       name: 'chatgmlTogglePanel',
       bindKey: { win: 'Ctrl-Shift-A', mac: 'Command-Shift-A' },
       exec: function () {
-        show();
+        togglePanel();
       },
     });
     AceCommands.add({
@@ -1806,7 +2541,7 @@
     init: init,
     cleanup: function () {
       stop();
-      hide();
+      hide(false);
       // Tear down keyboard shortcuts + palette entries. Idempotent.
       if (typeof AceCommands !== 'undefined' && AceCommands && AceCommands.remove) {
         AceCommands.remove({ name: 'chatgmlTogglePanel' });

@@ -59,16 +59,23 @@ describe('companion plugin modules load as CommonJS', () => {
     const fs = require('node:fs');
     for (const file of ['plugin-inline/inline.js', 'plugin-explain/explain.js']) {
       const src = fs.readFileSync(path.join(REPO, file), 'utf8');
-      // The cleanup must reference activeSession (the tracked handle) and call .stop() on it.
-      // A bare `cleanup: function () {}` (the old buggy version) would orphan the child on
-      // GMEdit shutdown. We require a meaningful body.
-      const cleanupMatch = src.match(
-        /cleanup:\s*function\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}\s*,?\s*\n\s*\}\s*\)/,
+      expect(src, `${file} should track an active session`).toMatch(/let activeSession = null/);
+      expect(src, `${file} should stop the active session on cleanup`).toMatch(
+        /activeSession\.stop\(\)/,
       );
-      expect(cleanupMatch, `${file} should define cleanup`).toBeTruthy();
-      const body = cleanupMatch![1] ?? '';
-      expect(body).toMatch(/activeSession/);
-      expect(body).toMatch(/\.stop\(/);
+    }
+  });
+
+  it('both companions still register a disabled plugin if shared chatgml modules are missing', () => {
+    const fs = require('node:fs');
+    const cases = [
+      ['plugin-inline/inline.js', 'chatgml-inline'],
+      ['plugin-explain/explain.js', 'chatgml-explain'],
+    ];
+    for (const [file, name] of cases) {
+      const src = fs.readFileSync(path.join(REPO, file), 'utf8');
+      expect(src).toMatch(new RegExp(`GMEdit\\.register\\(['"]${name}['"]`));
+      expect(src).toMatch(/cleanup:\s*function\s*\(\)\s*\{\}/);
     }
   });
 

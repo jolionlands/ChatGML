@@ -16,7 +16,94 @@
   const { spawn } = require('child_process');
   const fs = require('fs');
   const path = require('path');
+  const os = require('os');
   const State = root.ChatGmlState || require('./state.js');
+
+  const PROVIDER_ENV_KEYS = [
+    'ANTHROPIC_API_KEY',
+    'COHERE_API_KEY',
+    'DEEPSEEK_API_KEY',
+    'GEMINI_API_KEY',
+    'GOOGLE_API_KEY',
+    'GROQ_API_KEY',
+    'KIMI_API_KEY',
+    'MAVEROS_API_KEY',
+    'MINIMAX_API_KEY',
+    'MISTRAL_API_KEY',
+    'MOONSHOT_API_KEY',
+    'NVIDIA_API_KEY',
+    'OPENAI_API_KEY',
+    'OPENCODE_API_KEY',
+    'OPENROUTER_API_KEY',
+    'XAI_API_KEY',
+  ];
+
+  function shouldCarryProviderEnv(key) {
+    if (PROVIDER_ENV_KEYS.indexOf(key) >= 0) return true;
+    return /^(AI_|LLM_)?[A-Z0-9_]+_(API_KEY|ACCESS_TOKEN)$/.test(key);
+  }
+
+  function defaultChatgmlEnvPath() {
+    const xdg = process.env.XDG_CONFIG_HOME;
+    const base = xdg && xdg.length > 0 ? xdg : path.join(os.homedir(), '.config');
+    return path.join(base, 'chatgml', '.env');
+  }
+
+  function parseDotEnv(text) {
+    const out = {};
+    if (typeof text !== 'string' || text === '') return out;
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i].trim();
+      if (line === '' || line.charAt(0) === '#') continue;
+      if (line.indexOf('export ') === 0) line = line.slice(7).trim();
+      const eq = line.indexOf('=');
+      if (eq <= 0) continue;
+      const key = line.slice(0, eq).trim();
+      if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) continue;
+      let value = line.slice(eq + 1).trim();
+      if (
+        (value.charAt(0) === '"' && value.charAt(value.length - 1) === '"') ||
+        (value.charAt(0) === "'" && value.charAt(value.length - 1) === "'")
+      ) {
+        const quote = value.charAt(0);
+        value = value.slice(1, -1);
+        if (quote === '"') {
+          value = value
+            .replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\r')
+            .replace(/\\t/g, '\t')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\');
+        }
+      } else {
+        const hash = value.indexOf(' #');
+        if (hash >= 0) value = value.slice(0, hash).trim();
+      }
+      out[key] = value;
+    }
+    return out;
+  }
+
+  function readChatgmlEnv(filePath) {
+    const target = filePath || defaultChatgmlEnvPath();
+    try {
+      return parseDotEnv(fs.readFileSync(target, 'utf8'));
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return {};
+      return {};
+    }
+  }
+
+  function copyAllowedEnv(source, target) {
+    if (!source || typeof source !== 'object') return;
+    for (const k of Object.keys(source)) {
+      if (k.indexOf('CHATGML_') === 0 || shouldCarryProviderEnv(k)) {
+        const value = source[k];
+        if (typeof value === 'string') target[k] = value;
+      }
+    }
+  }
 
   /**
    * Build the minimal child env: PATH + the config-locating vars + any CHATGML_* the user set.
@@ -24,13 +111,18 @@
    * and stops the renderer-only `ELECTRON_*`/`NODE_*` noise from leaking into the core's process
    * listing.
    */
-  function buildMinimalEnv() {
+  function buildMinimalEnv(extraEnv) {
     const env = { PATH: process.env.PATH || process.env.Path };
     for (const k of ['APPDATA', 'HOME', 'USERPROFILE', 'SystemRoot', 'XDG_CONFIG_HOME']) {
       if (process.env[k] !== undefined) env[k] = process.env[k];
     }
-    for (const k of Object.keys(process.env)) {
-      if (k.indexOf('CHATGML_') === 0) env[k] = process.env[k];
+    copyAllowedEnv(readChatgmlEnv(), env);
+    copyAllowedEnv(process.env, env);
+    if (extraEnv && typeof extraEnv === 'object') {
+      for (const k of Object.keys(extraEnv)) {
+        const value = extraEnv[k];
+        if (typeof value === 'string' && value !== '') env[k] = value;
+      }
     }
     return env;
   }
@@ -101,6 +193,7 @@
    * @param {string=} opts.configuredPath
    * @param {string=} opts.pluginDir
    * @param {string=} opts.ownDistFallback  - extra distCliPath to probe (for sibling plugins)
+   * @param {Record<string,string>=} opts.extraEnv - explicit auth env additions for the child
    * @param {(event:object)=>void} opts.onEvent
    * @param {(line:string)=>void=} opts.onMalformed
    * @param {(text:string)=>void=} opts.onStderr
@@ -128,7 +221,7 @@
     });
     const argv = resolved.argvPrefix.concat(serveArgv);
     const wrapped = wrapCmdForWindows(resolved.cmd, argv);
-    const env = buildMinimalEnv();
+    const env = buildMinimalEnv(opts.extraEnv);
 
     let child;
     try {
@@ -267,7 +360,12 @@
   }
 
   const api = {
+    PROVIDER_ENV_KEYS,
     buildMinimalEnv,
+    defaultChatgmlEnvPath,
+    parseDotEnv,
+    readChatgmlEnv,
+    shouldCarryProviderEnv,
     wrapCmdForWindows,
     resolveDistCliPath,
     resolveBinary,

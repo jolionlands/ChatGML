@@ -351,6 +351,8 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
       '/mode flying',
       '/mode',
       '/mcp',
+      '/gmloop',
+      '/gmloop lint',
       '/foo bar',
       '/  ',
       '/undo',
@@ -394,7 +396,7 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
     const turns = [
       { userText: 'q1', assistantText: 'a1' },
       { userText: '   ', assistantText: 'a2' }, // empty user -> skipped
-      { userText: 'q3', assistantText: '' }, // empty assistant -> null
+      { userText: 'q3', assistantText: '' }, // empty assistant -> skipped
       { userText: 'q4', assistantText: 'a4' },
     ];
     expect(js.turnEndToMessages(turns)).toEqual(ts.turnEndToMessages(turns));
@@ -405,7 +407,6 @@ describe('plugin/state.js <-> src/plugin-runtime.ts parity', () => {
         { role: 'user', content: 'q1' },
         { role: 'assistant', content: 'a1' },
         { role: 'user', content: 'q3' },
-        { role: 'assistant', content: null },
         { role: 'user', content: 'q4' },
         { role: 'assistant', content: 'a4' },
       ],

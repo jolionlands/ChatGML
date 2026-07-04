@@ -10,7 +10,7 @@
   const { execFile } = require('child_process');
   const fs = require('fs');
   const path = require('path');
-  const State = root.ChatGmlState || require('./state.js');
+  const ChildProcess = root.ChatGmlChildProcess || require('./child-process.js');
 
   // Simple persisted prefs in the plugin dir (GMEdit Preferences UI also edits these).
   function ConfigBridge(pluginDir) {
@@ -113,18 +113,29 @@
 
   /** Resolve the executable the same way the client does (for `config show` and UI display). */
   ConfigBridge.prototype._resolveBinary = function () {
-    const distCli = path.join(this.pluginDir, 'dist', 'cli.js');
-    const distCliUp = path.join(this.pluginDir, '..', 'dist', 'cli.js');
-    return State.resolveServeBinary({
+    return ChildProcess.resolveBinary({
       configuredPath: this.prefs.binaryPath,
-      env: process.env,
-      platform: process.platform,
-      distCliPath: fs.existsSync(distCli) ? distCli : distCliUp,
-      nodePath: 'node',
-      exists: function (p) {
-        return fs.existsSync(p);
-      },
+      pluginDir: this.pluginDir,
     });
+  };
+
+  ConfigBridge.prototype._execCore = function (args, cb) {
+    let resolved;
+    try {
+      resolved = this._resolveBinary();
+      const wrapped = ChildProcess.wrapCmdForWindows(
+        resolved.cmd,
+        resolved.argvPrefix.concat(args),
+      );
+      execFile(
+        wrapped.cmd,
+        wrapped.argv,
+        { encoding: 'utf8', env: ChildProcess.buildMinimalEnv() },
+        cb,
+      );
+    } catch (err) {
+      cb(err, '', '');
+    }
   };
 
   /**
@@ -132,14 +143,7 @@
    * (err, config). Display-only; secrets are already masked by the core.
    */
   ConfigBridge.prototype.showEffectiveConfig = function (projectDir, cb) {
-    let resolved;
-    try {
-      resolved = this._resolveBinary();
-    } catch (err) {
-      return cb(err, null);
-    }
-    const args = resolved.argvPrefix.concat(['config', 'show', projectDir]);
-    execFile(resolved.cmd, args, { encoding: 'utf8' }, function (err, stdout) {
+    this._execCore(['config', 'show', projectDir || '.'], function (err, stdout) {
       if (err) return cb(err, null);
       // `config show` prints the JSON object then a "config files searched:" footer; parse the
       // leading JSON object only.
@@ -161,16 +165,9 @@
    * commands from the panel.
    */
   ConfigBridge.prototype.setConfigField = function (field, value, cb) {
-    let resolved;
-    try {
-      resolved = this._resolveBinary();
-    } catch (err) {
-      return cb(err, null);
-    }
     // `scope` is handled as a plugin pref (configBridge.setScope) because the core takes it as a
     // flag at serve argv build time, not a config field. Guard defensively anyway.
-    const args = resolved.argvPrefix.concat(['config', 'set', field, value]);
-    execFile(resolved.cmd, args, { encoding: 'utf8' }, function (err, stdout, stderr) {
+    this._execCore(['config', 'set', field, value], function (err, stdout, stderr) {
       if (err) return cb(err, null);
       cb(null, stdout || stderr || '');
     });

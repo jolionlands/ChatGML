@@ -67,6 +67,24 @@ const Providers = require(path.join(HERE, '../../plugin/providers.js')) as {
     registry: { providers?: Record<string, unknown> },
     id: string,
   ) => { provider: unknown; model: unknown } | null;
+  authAliasesForProvider: (name: string, raw?: unknown) => string[];
+  providerEnvVarHint: (name: string, raw?: unknown) => string;
+  findProviderForConfig: (
+    registry: { providers?: Record<string, unknown> },
+    config: { model?: string; baseURL?: string; providerName?: string },
+  ) => { name: string; raw: unknown; score: number } | null;
+  resolveAuthForConfig: (
+    registry: { providers?: Record<string, unknown> },
+    config: { model?: string; baseURL?: string; apiKey?: string },
+    env?: Record<string, string>,
+  ) => {
+    providerName: string;
+    authState: string;
+    authSource: string;
+    envVar: string;
+    envVars: string[];
+    extraEnv: Record<string, string>;
+  };
   resolveEndpoint: (
     provider: { baseUrl: string; endpoint?: string } | null,
   ) => { baseUrl: string; path: string; auth: string } | null;
@@ -89,9 +107,21 @@ const Providers = require(path.join(HERE, '../../plugin/providers.js')) as {
     modelOptions: Array<{ value: string; label: string }>;
     baseUrlOptions: Array<{ value: string; label: string }>;
   };
-  loadAll: (opts: { chatgmlPath?: string; piPath?: string; chatgmlUserDir?: string }) => {
+  loadAll: (opts: {
+    chatgmlPath?: string;
+    piPath?: string;
+    opencodePath?: string;
+    crushPath?: string;
+    authPath?: string;
+    catalogPath?: string;
+    chatgmlUserDir?: string;
+  }) => {
     path: string;
     piPath: string;
+    opencodePath: string;
+    crushPath: string;
+    authPath: string;
+    catalogPath: string;
     registry: { providers: Record<string, unknown>; __source?: string };
     providers: Array<{ name: string; models: unknown[] }>;
     models: Array<{ providerName: string; modelId: string }>;
@@ -99,6 +129,8 @@ const Providers = require(path.join(HERE, '../../plugin/providers.js')) as {
       modelOptions: Array<{ value: string; label: string }>;
       baseUrlOptions: Array<{ value: string; label: string }>;
     };
+    sources: Array<{ name: string; path: string; count: number }>;
+    providerCount: number;
     bootstrapped: boolean;
     warnings: string[];
   };
@@ -185,7 +217,10 @@ describe('plugin/providers.js — readProvidersFile shape normalization', () => 
 
   it('strips a leading UTF-8 BOM (common on hand-edited Windows files)', () => {
     // Write BOM (0xEF 0xBB 0xBF) + valid JSON.
-    fs.writeFileSync(chatgmlPath, '﻿' + JSON.stringify({ providers: { x: { base_url: 'http://x' } } }));
+    fs.writeFileSync(
+      chatgmlPath,
+      '﻿' + JSON.stringify({ providers: { x: { base_url: 'http://x' } } }),
+    );
     const out = Providers.readProvidersFile(chatgmlPath);
     expect(out).not.toBeNull();
     expect((out as { providers: Record<string, unknown> }).providers.x).toBeDefined();
@@ -283,6 +318,11 @@ describe('plugin/providers.js — normalizeProvider', () => {
       baseUrl: 'http://x/v1',
       endpoint: '/api/chat',
       auth: 'none',
+      authState: 'none',
+      envVar: '',
+      envVars: [],
+      source: '',
+      usable: true,
       models: [
         { id: 'qwen3-27b', wireModel: 'Qwen3.gguf', contextWindow: 65536 },
         { id: 'no-wire', wireModel: 'no-wire', contextWindow: 1024 },
@@ -298,6 +338,11 @@ describe('plugin/providers.js — normalizeProvider', () => {
       baseUrl: 'http://x',
       endpoint: '/chat/completions',
       auth: 'bearer',
+      authState: 'missing',
+      envVar: '',
+      envVars: [],
+      source: '',
+      usable: true,
       models: [],
     });
   });
@@ -345,6 +390,10 @@ describe('plugin/providers.js — listProviders / listModels', () => {
       baseUrl: 'http://a/v1',
       endpoint: '/chat/completions',
       auth: 'bearer',
+      authState: 'missing',
+      envVar: '',
+      envVars: [],
+      usable: true,
       contextWindow: 0,
     });
     expect(ms[1]?.wireModel).toBe('M2.gguf');
@@ -384,6 +433,58 @@ describe('plugin/providers.js — findProviderByUrl / findModel', () => {
 
   it('findModel returns null for an unknown id', () => {
     expect(Providers.findModel(reg, 'claude')).toBeNull();
+  });
+
+  it('findProviderForConfig matches by selected base URL and model', () => {
+    const hit = Providers.findProviderForConfig(reg, {
+      baseURL: 'https://api.openai.com/v1/',
+      model: 'gpt-4o',
+    });
+    expect(hit?.name).toBe('openai');
+  });
+
+  it('resolveAuthForConfig uses provider env vars for the selected Kimi Code provider', () => {
+    const registry = {
+      providers: {
+        'kimi-coding': {
+          base_url: 'https://api.kimi.com/coding/v1',
+          auth: 'env',
+          envVar: 'KIMI_API_KEY',
+          envVars: ['KIMI_API_KEY', 'KIMI_CODE_API_KEY'],
+          models: [{ id: 'kimi-for-coding' }],
+        },
+      },
+    };
+    const auth = Providers.resolveAuthForConfig(
+      registry,
+      { baseURL: 'https://api.kimi.com/coding/v1', model: 'kimi-for-coding' },
+      { KIMI_API_KEY: 'secret' },
+    );
+    expect(auth.providerName).toBe('kimi-coding');
+    expect(auth.authState).toBe('env ref');
+    expect(auth.authSource).toBe('env:KIMI_API_KEY');
+    expect(auth.extraEnv.CHATGML_CHAT_API_KEY).toBe('secret');
+  });
+
+  it('resolveAuthForConfig bridges literal local auth only through extra env', () => {
+    const registry = {
+      providers: {
+        'kimi-coding': {
+          base_url: 'https://api.kimi.com/coding/v1',
+          auth: 'bearer',
+          apiKey: 'pi-secret',
+          models: [{ id: 'kimi-for-coding' }],
+        },
+      },
+    };
+    const auth = Providers.resolveAuthForConfig(registry, {
+      baseURL: 'https://api.kimi.com/coding/v1',
+      model: 'kimi-for-coding',
+    });
+    expect(auth.authState).toBe('key found');
+    expect(auth.envVar).toBe('KIMI_API_KEY');
+    expect(auth.extraEnv.KIMI_API_KEY).toBe('pi-secret');
+    expect(auth.extraEnv.CHATGML_CHAT_API_KEY).toBe('pi-secret');
   });
 });
 
@@ -568,11 +669,14 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
     );
     const out = isolatedLoad({ chatgmlPath, piPath });
     expect(out.bootstrapped).toBe(true);
-    expect(out.providers).toHaveLength(1);
-    expect(out.providers[0]?.name).toBe('maveros');
-    expect(out.models).toHaveLength(1);
-    expect(out.datalistOptions.modelOptions[0]?.value).toBe('qwen3-27b');
-    expect(out.datalistOptions.baseUrlOptions[0]?.value).toBe('http://192.168.1.206:18091/v1');
+    expect(out.providers.map((p) => p.name)).toEqual(
+      expect.arrayContaining(['maveros', 'kimi-coding', 'openrouter']),
+    );
+    expect(out.models.map((m) => m.modelId)).toContain('qwen3-27b');
+    expect(out.datalistOptions.modelOptions.map((o) => o.value)).toContain('qwen3-27b');
+    expect(out.datalistOptions.baseUrlOptions.map((o) => o.value)).toContain(
+      'http://192.168.1.206:18091/v1',
+    );
     expect(fs.existsSync(chatgmlPath)).toBe(true);
   });
 
@@ -586,7 +690,9 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
     expect(out.bootstrapped).toBe(false);
     // Merged registry contains BOTH providers — chatgml takes precedence on collision but
     // external entries with unique names survive.
-    expect(Object.keys(out.registry.providers).sort()).toEqual(['ext', 'own']);
+    expect(Object.keys(out.registry.providers)).toEqual(
+      expect.arrayContaining(['ext', 'own', 'kimi-coding', 'openrouter']),
+    );
   });
 
   it('chatgml entries win on collision during merge', () => {
@@ -608,16 +714,27 @@ describe('plugin/providers.js — loadAll end-to-end', () => {
     expect(out.providers[0]?.name).toBe('ok');
   });
 
-  it('empty registries return empty providers + empty datalists + no warnings', () => {
+  it('empty registries return curated providers + datalists + no warnings', () => {
     const out = isolatedLoad({
       chatgmlPath: path.join(tmpRoot, 'no-chatgml.json'),
       piPath: path.join(tmpRoot, 'no-pi.json'),
     });
     expect(out.bootstrapped).toBe(false);
-    expect(out.providers).toEqual([]);
-    expect(out.models).toEqual([]);
-    expect(out.datalistOptions.modelOptions).toEqual([]);
-    expect(out.datalistOptions.baseUrlOptions).toEqual([]);
+    expect(out.providers.map((p) => p.name)).toEqual(
+      expect.arrayContaining([
+        'kimi-coding',
+        'kimi-moonshot',
+        'opencode-go',
+        'openrouter',
+        'minimax-openai',
+        'maveros-lan',
+      ]),
+    );
+    expect(out.models.map((m) => m.modelId)).toContain('minimax/minimax-m3');
+    expect(out.datalistOptions.modelOptions.map((o) => o.value)).toContain('MiniMax-M3');
+    expect(out.datalistOptions.baseUrlOptions.map((o) => o.value)).toContain(
+      'https://openrouter.ai/api/v1',
+    );
     expect(out.warnings).toEqual([]);
   });
 });
@@ -794,9 +911,7 @@ describe('plugin/providers.js — readCrushProviders', () => {
     fs.writeFileSync(
       crushPath,
       JSON.stringify({
-        providers: [
-          { id: 'x', api_endpoint: 'http://x', api_key: '$X', models: [] },
-        ],
+        providers: [{ id: 'x', api_endpoint: 'http://x', api_key: '$X', models: [] }],
       }),
     );
     const out = Providers.readCrushProviders(crushPath);
@@ -974,6 +1089,26 @@ describe('plugin/providers.js — enrichWithAuth', () => {
     expect((registry.providers.kimi as { envVar: string }).envVar).toBe('KIMI_KEY');
   });
 
+  it('matches local auth aliases for Kimi Code entries', () => {
+    const registry = {
+      providers: {
+        'kimi-coding': {
+          base_url: 'https://api.kimi.com/coding/v1',
+          auth: 'env',
+          models: [{ id: 'kimi-for-coding' }],
+        },
+      },
+    };
+    const auth = { kimi: { auth: 'bearer', envVar: 'KIMI_API_KEY' } };
+    Providers.enrichWithAuth(registry, auth);
+    expect((registry.providers['kimi-coding'] as { auth: string; envVar: string }).auth).toBe(
+      'env',
+    );
+    expect((registry.providers['kimi-coding'] as { envVar: string }).envVar).toBe(
+      'KIMI_API_KEY',
+    );
+  });
+
   it('marks oauth providers separately + stashes refresh/expires', () => {
     const registry = { providers: { google: { base_url: 'http://g', models: [] } } };
     const auth = {
@@ -1016,8 +1151,11 @@ describe('plugin/providers.js — enrichWithCatalog', () => {
     };
     const catalog = { 'gpt-5': { name: 'GPT-5', contextWindow: 400000, canReason: true } };
     Providers.enrichWithCatalog(registry, catalog);
-    const m = (registry.providers.nvidia as { models: Array<{ context_window: number; can_reason: boolean }> })
-      .models[0];
+    const m = (
+      registry.providers.nvidia as {
+        models: Array<{ context_window: number; can_reason: boolean }>;
+      }
+    ).models[0];
     expect(m?.context_window).toBe(400000);
     expect(m?.can_reason).toBe(true);
   });
@@ -1103,9 +1241,11 @@ describe('plugin/providers.js — loadAll multi-source merge', () => {
       authPath: noPath('no-auth.json'),
       catalogPath: noPath('no-catalog.json'),
     });
-    expect(Object.keys(out.registry.providers).sort()).toEqual(['gemini', 'maveros', 'nvidia']);
+    expect(Object.keys(out.registry.providers)).toEqual(
+      expect.arrayContaining(['gemini', 'maveros', 'nvidia', 'kimi-coding', 'openrouter']),
+    );
     expect(out.sources.map((s) => s.name).sort()).toEqual(['crush', 'opencode', 'pi']);
-    expect(out.providerCount).toBe(3);
+    expect(out.providerCount).toBe(9);
   });
 
   it('chatgml file wins over every external source on name collision', () => {
@@ -1194,7 +1334,7 @@ describe('plugin/providers.js — loadAll multi-source merge', () => {
     });
     expect(out.registry.providers._orphan).toBeDefined();
     // providerCount excludes the synthetic orphan row so the badge shows real provider count.
-    expect(out.providerCount).toBe(1);
+    expect(out.providerCount).toBe(7);
   });
 
   it('returns warnings for malformed external files but keeps the load alive', () => {
@@ -1214,7 +1354,7 @@ describe('plugin/providers.js — loadAll multi-source merge', () => {
     expect((out.registry.providers.ok as { base_url: string }).base_url).toBe('http://x');
   });
 
-  it('all sources missing → empty registry, no warnings, no errors', () => {
+  it('all sources missing → curated fallbacks, no warnings, no errors', () => {
     const out = Providers.loadAll({
       chatgmlPath: path.join(tmpRoot, 'no-chatgml.json'),
       piPath: path.join(tmpRoot, 'no-pi.json'),
@@ -1223,10 +1363,156 @@ describe('plugin/providers.js — loadAll multi-source merge', () => {
       authPath: path.join(tmpRoot, 'no-auth.json'),
       catalogPath: path.join(tmpRoot, 'no-catalog.json'),
     });
-    expect(out.providers).toEqual([]);
+    expect(Object.keys(out.registry.providers).sort()).toEqual([
+      'kimi-coding',
+      'kimi-moonshot',
+      'maveros-lan',
+      'minimax-openai',
+      'opencode-go',
+      'openrouter',
+    ]);
+    expect(
+      (out.registry.providers.openrouter as { models: Array<{ id: string }> }).models.map(
+        (m) => m.id,
+      ),
+    ).toContain('minimax/minimax-m3');
+    expect(
+      (out.registry.providers['minimax-openai'] as { models: Array<{ id: string }> }).models.map(
+        (m) => m.id,
+      ),
+    ).toContain('MiniMax-M3');
+    expect(
+      (out.registry.providers['kimi-moonshot'] as { models: Array<{ id: string }> }).models.map(
+        (m) => m.id,
+      ),
+    ).toContain('kimi-k2.7-code');
+    expect((out.registry.providers['kimi-coding'] as { envVar: string }).envVar).toBe(
+      'KIMI_API_KEY',
+    );
+    expect((out.registry.providers['kimi-moonshot'] as { envVar: string }).envVar).toBe(
+      'MOONSHOT_API_KEY',
+    );
     expect(out.sources).toEqual([]);
-    expect(out.providerCount).toBe(0);
+    expect(out.providerCount).toBe(6);
     expect(out.warnings).toEqual([]);
+  });
+
+  it('marks the Kimi Code CLI API as usable by the OpenAI-compatible core', () => {
+    const provider = Providers.normalizeProvider('kimi-coding', {
+      kind: 'openai_compat',
+      base_url: 'https://api.kimi.com/coding/v1',
+      auth: 'env',
+      models: [{ id: 'kimi-for-coding' }],
+    });
+    expect(provider?.usable).toBe(true);
+    expect(provider?.models[0]?.wireModel).toBe('Kimi K2.7 Code (Kimi Code CLI alias)');
+
+    const moonshot = Providers.normalizeProvider('kimi-moonshot', {
+      kind: 'openai_compat',
+      base_url: 'https://api.moonshot.ai/v1',
+      auth: 'env',
+      models: [{ id: 'kimi-k2.7-code' }],
+    });
+    expect(moonshot?.usable).toBe(true);
+  });
+
+  it('opencode Kimi keeps /coding/v1 when crush has a colliding name', () => {
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: {
+          'kimi-coding': {
+            options: { baseURL: 'https://api.kimi.com/coding/v1' },
+            models: { 'kimi-for-coding': { name: 'Kimi for Coding' } },
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      crushPath,
+      JSON.stringify([
+        {
+          id: 'kimi-coding',
+          api_endpoint: 'https://api.kimi.com/coding',
+          models: [{ id: 'kimi-for-coding' }],
+        },
+      ]),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath: noPath('no-pi.json'),
+      opencodePath,
+      crushPath,
+      authPath: noPath('no-auth.json'),
+      catalogPath: noPath('no-catalog.json'),
+    });
+    expect((out.registry.providers['kimi-coding'] as { base_url: string }).base_url).toBe(
+      'https://api.kimi.com/coding/v1',
+    );
+  });
+
+  it('crush collision enriches missing model metadata without overriding opencode URL', () => {
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({
+        provider: {
+          shared: {
+            options: { baseURL: 'https://opencode.example/v1' },
+            models: { m1: { name: 'M1' } },
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      crushPath,
+      JSON.stringify([
+        {
+          id: 'shared',
+          api_endpoint: 'https://crush.example/v1',
+          models: [
+            { id: 'm1', context_window: 1234, can_reason: true },
+            { id: 'm2', context_window: 5678 },
+          ],
+        },
+      ]),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath: noPath('no-pi.json'),
+      opencodePath,
+      crushPath,
+      authPath: noPath('no-auth.json'),
+      catalogPath: noPath('no-catalog.json'),
+    });
+    const shared = out.registry.providers.shared as {
+      base_url: string;
+      models: Array<{ id: string; context_window?: number; can_reason?: boolean }>;
+    };
+    expect(shared.base_url).toBe('https://opencode.example/v1');
+    expect(shared.models.find((m) => m.id === 'm1')?.context_window).toBe(1234);
+    expect(shared.models.find((m) => m.id === 'm1')?.can_reason).toBe(true);
+    expect(shared.models.find((m) => m.id === 'm2')?.context_window).toBe(5678);
+  });
+
+  it('chatgml file still wins over opencode and curated fallbacks', () => {
+    fs.writeFileSync(
+      chatgmlPath,
+      JSON.stringify({ providers: { openrouter: { base_url: 'https://mine.example/v1' } } }),
+    );
+    const noPath = (p: string) => path.join(tmpRoot, p);
+    const out = Providers.loadAll({
+      chatgmlPath,
+      piPath: noPath('no-pi.json'),
+      opencodePath: noPath('no-opencode.json'),
+      crushPath: noPath('no-crush.json'),
+      authPath: noPath('no-auth.json'),
+      catalogPath: noPath('no-catalog.json'),
+    });
+    expect((out.registry.providers.openrouter as { base_url: string }).base_url).toBe(
+      'https://mine.example/v1',
+    );
   });
 
   it('sources array reports counts per source for transparency in the panel badge', () => {
@@ -1285,16 +1571,13 @@ describe('plugin/settings-tasks.js — hasProviderSelection / providerDerivedCom
     );
   });
 
-  it('providerDerivedCommands emits chat.path + chat.auth when set', () => {
+  it('providerDerivedCommands does not emit unsupported chat.path/chat.auth writes', () => {
     const cmds = SettingsTasks.providerDerivedCommands({
       providerSelected: true,
       path: '/api/chat',
       auth: 'bearer',
     });
-    expect(cmds).toEqual([
-      ['chat.path', '/api/chat'],
-      ['chat.auth', 'bearer'],
-    ]);
+    expect(cmds).toEqual([]);
   });
 
   it('providerDerivedCommands skips empty / missing path and auth (no-op writes)', () => {

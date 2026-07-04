@@ -62,6 +62,19 @@ Config resolves flags > `CHATGML_*` env > config file > defaults. There are two 
 `env:NAME` reference instead, so a raw key is never written to disk and never into a repo-tracked
 file.
 
+### Debugging provider HTTP failures
+
+Set `CHATGML_DEBUG_HTTP=1` before launching the core or GMEdit to print sanitized request/response
+facts to stderr:
+
+```powershell
+$env:CHATGML_DEBUG_HTTP = '1'
+node dist\cli.js serve C:\path\to\project
+```
+
+The log includes URL, model, stream flag, message/tool counts, auth presence, response status, and
+a scrubbed 400/500 body snippet. It never prints API keys or prompt text.
+
 ## CI
 
 `.github/workflows/ci.yml` runs `npm ci && npm run ci` on a matrix of

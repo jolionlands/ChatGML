@@ -15,6 +15,24 @@ export interface ChatRequest {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  onRetry?: (info: LlmRetryInfo) => void;
+  onFailover?: (info: LlmFailoverInfo) => void;
+}
+
+export interface LlmRetryInfo {
+  status: number;
+  attempt: number;
+  maxRetries: number;
+  delayMs: number;
+  body?: string;
+}
+
+export interface LlmFailoverInfo {
+  status?: number;
+  fromModel: string;
+  toModel: string;
+  toBaseURL: string;
+  reason: string;
 }
 
 export type StreamDelta =
@@ -54,6 +72,103 @@ export interface LlmDeps {
 /** Build the /chat/completions URL from a baseURL, normalizing a trailing slash. */
 function completionsUrl(baseURL: string): string {
   return `${trimTrailingSlash(baseURL)}/chat/completions`;
+}
+
+function debugHttpEnabled(): boolean {
+  const v = process.env['CHATGML_DEBUG_HTTP'];
+  return v === '1' || v === 'true';
+}
+
+function debugHttp(message: string, fields: Record<string, unknown>): void {
+  if (!debugHttpEnabled()) return;
+  console.error(`[chatgml:http] ${message} ${JSON.stringify(fields)}`);
+}
+
+function shouldOmitTemperature(lane: ChatLane): boolean {
+  const model = lane.model.toLowerCase();
+  const baseURL = lane.baseURL.toLowerCase();
+  if (model.startsWith('kimi-k2.') && baseURL.indexOf('api.moonshot.ai') >= 0) return true;
+  return model === 'kimi-for-coding' && baseURL.indexOf('api.kimi.com/coding') >= 0;
+}
+
+const RETRY_DELAYS_MS = [1200, 3000];
+const MAX_RETRY_AFTER_MS = 10_000;
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+function retryAfterMs(headers: Headers): number | null {
+  const raw = headers.get('retry-after');
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(MAX_RETRY_AFTER_MS, Math.round(seconds * 1000));
+  }
+  const when = Date.parse(raw);
+  if (Number.isFinite(when)) {
+    return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, when - Date.now()));
+  }
+  return null;
+}
+
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(new LlmError('aborted', 'request aborted'));
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const cleanup = (): void => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    const finish = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new LlmError('aborted', 'request aborted'));
+    };
+    timer = setTimeout(finish, delayMs);
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+function toWireMessages(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg.role !== 'string') continue;
+    const content = typeof msg.content === 'string' ? msg.content : null;
+    const hasText = content !== null && content.trim() !== '';
+    if (msg.role === 'assistant') {
+      const toolCalls =
+        Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0 ? msg.tool_calls : undefined;
+      if (!hasText && !toolCalls) continue;
+      out.push({
+        role: 'assistant',
+        content: hasText ? content : null,
+        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      });
+      continue;
+    }
+    if (msg.role === 'user' || msg.role === 'system') {
+      if (!hasText) continue;
+      out.push({ role: msg.role, content });
+      continue;
+    }
+    if (msg.role === 'tool') {
+      if (typeof msg.tool_call_id !== 'string' || msg.tool_call_id === '') continue;
+      out.push({
+        role: 'tool',
+        content: content ?? '',
+        tool_call_id: msg.tool_call_id,
+        ...(typeof msg.name === 'string' ? { name: msg.name } : {}),
+      });
+    }
+  }
+  return out;
 }
 
 interface RawDelta {
@@ -221,10 +336,13 @@ export class LlmClient {
   private buildBody(req: ChatRequest, stream: boolean): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.lane.model,
-      messages: req.messages,
+      messages: toWireMessages(req.messages),
       stream,
-      temperature: req.temperature ?? this.lane.temperature,
     };
+    const temperature = req.temperature ?? this.lane.temperature;
+    if (temperature !== undefined && !shouldOmitTemperature(this.lane)) {
+      body['temperature'] = temperature;
+    }
     const maxTokens = req.maxTokens ?? this.lane.maxTokens;
     if (maxTokens !== undefined) body['max_tokens'] = maxTokens;
     if (req.tools && req.tools.length > 0) {
@@ -247,34 +365,76 @@ export class LlmClient {
 
   private async send(req: ChatRequest, stream: boolean): Promise<Response> {
     const url = completionsUrl(this.lane.baseURL);
+    const body = this.buildBody(req, stream);
     const init: RequestInit = {
       method: 'POST',
       headers: this.buildHeaders(),
-      body: JSON.stringify(this.buildBody(req, stream)),
+      body: JSON.stringify(body),
     };
     if (req.signal) init.signal = req.signal;
-    let res: Response;
-    try {
-      res = await this.fetchImpl(url, init);
-    } catch (err) {
-      if (isAbortError(err) || req.signal?.aborted) {
-        throw new LlmError('aborted', 'request aborted');
+    for (let retryIndex = 0; ; retryIndex++) {
+      debugHttp('request', {
+        url,
+        model: this.lane.model,
+        stream,
+        attempt: retryIndex + 1,
+        messages: Array.isArray(body['messages']) ? body['messages'].length : req.messages.length,
+        tools: req.tools ? req.tools.length : 0,
+        auth: this.lane.apiKey ? 'present' : 'none',
+        temperature: body['temperature'] === undefined ? 'omitted' : body['temperature'],
+      });
+      let res: Response;
+      try {
+        res = await this.fetchImpl(url, init);
+      } catch (err) {
+        if (isAbortError(err) || req.signal?.aborted) {
+          throw new LlmError('aborted', 'request aborted');
+        }
+        debugHttp('network_error', { url, model: this.lane.model });
+        throw new LlmError('network', `network error contacting chat endpoint`);
       }
-      throw new LlmError('network', `network error contacting chat endpoint`);
-    }
-    if (!res.ok) {
+      debugHttp('response', { url, model: this.lane.model, status: res.status, ok: res.ok });
+      if (res.ok) return res;
       let bodyText = '';
       try {
         bodyText = await res.text();
       } catch {
         bodyText = '';
       }
-      throw new LlmError('http', `chat endpoint returned HTTP ${res.status}`, {
+      const safeBody = scrubBody(bodyText);
+      debugHttp('http_error', {
+        url,
+        model: this.lane.model,
         status: res.status,
-        body: scrubBody(bodyText),
+        body: safeBody.slice(0, 500),
+      });
+      if (isRetryableHttpStatus(res.status) && retryIndex < RETRY_DELAYS_MS.length) {
+        const delayMs = retryAfterMs(res.headers) ?? RETRY_DELAYS_MS[retryIndex]!;
+        const info: LlmRetryInfo = {
+          status: res.status,
+          attempt: retryIndex + 1,
+          maxRetries: RETRY_DELAYS_MS.length,
+          delayMs,
+        };
+        if (safeBody) info.body = safeBody;
+        debugHttp('retry', {
+          url,
+          model: this.lane.model,
+          status: res.status,
+          attempt: info.attempt,
+          maxRetries: info.maxRetries,
+          delayMs,
+        });
+        req.onRetry?.(info);
+        await waitForRetry(delayMs, req.signal);
+        continue;
+      }
+      const detail = safeBody.trim() ? `: ${safeBody.trim().slice(0, 300)}` : '';
+      throw new LlmError('http', `chat endpoint returned HTTP ${res.status}${detail}`, {
+        status: res.status,
+        body: safeBody,
       });
     }
-    return res;
   }
 
   /** Non-streaming chat completion. */

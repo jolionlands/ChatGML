@@ -15,6 +15,7 @@ import type {
   Mode,
   TierName,
   ToolCatalogEntry,
+  Usage,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -241,6 +242,11 @@ export interface TurnRecord {
    * `turn_end.tier` from the core wire; the panel renders this as a tier badge on the bubble.
    */
   tier?: TierName | null;
+  context?: EditorContext;
+  sources?: Citation[];
+  thinking?: string;
+  usage?: Usage;
+  toolsUsed?: string[];
 }
 
 /** Cap on `turns` — only the most recent TURN_CAP user/assistant bubble pairs are kept in state. */
@@ -252,6 +258,8 @@ export interface PluginState {
   /** True once the ready handshake arrived; gates Send/Approve. */
   ready: boolean;
   phase: PluginStatusPhase;
+  /** Optional human-readable detail for the current phase, e.g. retry/backoff status. */
+  phaseDetail: string | null;
   /** Active agent mode reported by the core in the ready handshake. */
   mode: Mode;
   /** Accumulated streamed assistant text for the current turn (token deltas concatenated). */
@@ -370,6 +378,7 @@ export function initialPluginState(): PluginState {
   return {
     ready: false,
     phase: 'stopped',
+    phaseDetail: null,
     mode: 'code',
     transcript: '',
     answer: null,
@@ -402,6 +411,7 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
   const next: PluginState = {
     ...state,
     sources: state.sources,
+    phaseDetail: state.phaseDetail,
     activity: state.activity,
     pendingProposals: state.pendingProposals,
     turns: state.turns,
@@ -416,6 +426,8 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
   switch (event.type) {
     case 'status': {
       next.phase = event.phase;
+      next.phaseDetail =
+        typeof event.detail === 'string' && event.detail.trim() !== '' ? event.detail : null;
       // OUTBOX / busy wiring: `status` carries lifecycle phases from the core. Only the
       // terminal (idle/done/cancelled) and explicit stopped phases mean "not busy"; other
       // phases (thinking/indexing/launching) leave busy alone so a token event arriving
@@ -611,6 +623,9 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     case 'answer': {
       next.answer = event.text;
       next.sources = event.sources;
+      next.phase = 'done';
+      next.phaseDetail = null;
+      next.busy = false;
       // Clear pending thinking so the next user prompt renders a fresh (empty) block; the
       // thinking block for THIS turn was already emitted by the prior `thinking` event.
       next.lastThinking = null;
@@ -645,6 +660,13 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
             userText: event.userText ?? '',
             assistantText: event.assistantText != null ? event.assistantText : (state.answer ?? ''),
             tier,
+            ...(event.context ? { context: event.context } : {}),
+            ...(event.sources ? { sources: event.sources } : {}),
+            ...(event.thinking ? { thinking: event.thinking } : {}),
+            ...(event.usage ? { usage: event.usage } : {}),
+            ...(event.toolsUsed && event.toolsUsed.length > 0
+              ? { toolsUsed: event.toolsUsed.slice() }
+              : {}),
           },
           TURN_CAP,
           state.turnsEvicted,
@@ -654,6 +676,8 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       }
       next.answer = null;
       next.pendingUserText = null;
+      next.phase = 'idle';
+      next.phaseDetail = null;
       // OUTBOX pop: turn_end finalizes the head outbox item. If the head is still 'streaming'
       // (the common case) shift it off; if it's 'queued' (e.g. an immediate switch), shift
       // as well. If 'sent' (a future status), shift. If the outbox is empty we no-op. Always
@@ -666,9 +690,15 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
     }
     case 'error': {
       next.error = event.message;
-      // An error mid-turn: don't pop the head (the panel can decide to retry/recover); just
-      // ensure busy is unset so the user can Send again. If the head was the failed turn,
-      // turn_end will arrive shortly with userText/assistantText and will pop normally.
+      // Terminal model/core failures can arrive without a follow-up turn_end (for example a
+      // dropped streaming response). Treat them as the end of the in-flight UI turn so the
+      // panel does not stay stuck in "Stop / phase: streaming".
+      next.phase = 'idle';
+      next.phaseDetail = null;
+      next.answer = null;
+      next.pendingUserText = null;
+      next.outbox = [];
+      next.lastThinking = null;
       next.busy = false;
       return next;
     }
@@ -747,6 +777,7 @@ export type SlashCommand =
   | { kind: 'mode'; value: Mode }
   | { kind: 'approval'; value: 'gated' | 'auto' }
   | { kind: 'mcp' }
+  | { kind: 'gmloop'; value: string }
   | { kind: 'undo'; checkpointId?: string }
   | { kind: 'new_task'; value: string }
   | { kind: 'list_tasks' }
@@ -795,6 +826,8 @@ export function parseSlashCommand(line: string): SlashCommand | null {
       return { kind: 'approval', value };
     case 'mcp':
       return { kind: 'mcp' };
+    case 'gmloop':
+      return { kind: 'gmloop', value: value || 'status' };
     case 'undo':
       return { kind: 'undo', checkpointId: value || undefined };
     case 'new':
@@ -834,6 +867,8 @@ export const SLASH_HELP: readonly string[] = [
   '  /model <id>     set the chat model (chat.model) and restart the core',
   '  /approval gated|auto   set edit approval mode and restart the core',
   '  /mcp            list configured MCP servers and tool counts',
+  '  /gmloop [lint|format-check|graph-doctor|parse]  run safe current-file GMLoop checks',
+  '  /gmloop lint-project|format-project  run slower project-wide GMLoop checks',
   '  /undo [id]      undo the most recent checkpoint (or the specified checkpoint id)',
   '  /tier planner|implementer|reviewer|off  override the dispatch tier for the next turn',
   '  /help           show this help',
@@ -893,12 +928,11 @@ export function turnEndToMessages(
     // Skip turns with no user text (a user-spam/empty case) so we never replay a null user turn.
     if (!t.userText || t.userText.trim() === '') continue;
     out.push({ role: 'user', content: t.userText });
-    // An assistant turn that ended in an error has empty assistantText; keep it as null (the shape
+    // Turns that ended in an error have empty assistantText; skip those assistant entries.
     // the core's resume() accepts — content string|null).
-    out.push({
-      role: 'assistant',
-      content: t.assistantText && t.assistantText.length > 0 ? t.assistantText : null,
-    });
+    if (t.assistantText && t.assistantText.trim() !== '') {
+      out.push({ role: 'assistant', content: t.assistantText });
+    }
   }
   return out;
 }

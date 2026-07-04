@@ -110,4 +110,14 @@ describe('chatgml.js prepare() — no free `opts` references', () => {
     expect(body).toMatch(/container\s*=\s*document\.createElement/);
     expect(body).toMatch(/sizer\s*=\s*document\.createElement/);
   });
+
+  it('does not reference provider callbacks as free identifiers inside prepare()', () => {
+    const src = readFileSync(PLUGIN_PATH, 'utf8');
+    const body = extractFunctionBody(src, 'prepare');
+    expect(body).not.toBeNull();
+    expect(body).not.toMatch(/onRefresh:\s*onRefreshProviders/);
+    expect(body).not.toMatch(/onAddProvider:\s*onAddProvider/);
+    expect(body).not.toMatch(/onExportEnv:\s*onExportEnv/);
+    expect(body).not.toMatch(/[^.]onRefreshProviders\s*\(/);
+  });
 });

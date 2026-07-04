@@ -9,6 +9,7 @@ import {
 } from '../src/agent.js';
 import { FakeLlm, ThrowingLlm, SlowLlm } from './helpers/fake-llm.js';
 import { LlmError } from '../src/llm.js';
+import type { ChatRequest, ChatResult, StreamDelta } from '../src/llm.js';
 import { buildToolRegistry } from '../src/tools/index.js';
 import { makeTmpRepo, FakeEmbeddings } from './helpers/fakes.js';
 import { buildIgnoreFilter } from '../src/index/files.js';
@@ -60,6 +61,34 @@ function collect() {
   return { events, emit: (e: AgentEvent) => events.push(e) };
 }
 
+class RetryNoticeLlm {
+  async *chatStream(req: ChatRequest): AsyncGenerator<StreamDelta, ChatResult, void> {
+    req.onRetry?.({
+      status: 429,
+      attempt: 1,
+      maxRetries: 2,
+      delayMs: 1200,
+      body: '{"error":{"message":"engine overloaded"}}',
+    });
+    yield { kind: 'text', text: 'ok' };
+    return { message: { role: 'assistant', content: 'ok' }, finishReason: 'stop' };
+  }
+}
+
+class FailoverNoticeLlm {
+  async *chatStream(req: ChatRequest): AsyncGenerator<StreamDelta, ChatResult, void> {
+    req.onFailover?.({
+      status: 429,
+      fromModel: 'kimi-for-coding',
+      toModel: 'minimax/minimax-m3',
+      toBaseURL: 'https://openrouter.ai/api/v1',
+      reason: 'Kimi returned HTTP 429',
+    });
+    yield { kind: 'text', text: 'ok' };
+    return { message: { role: 'assistant', content: 'ok' }, finishReason: 'stop' };
+  }
+}
+
 describe('runAgent loop', () => {
   it('no tool calls: streams tokens then emits an answer; history records the turn', async () => {
     const { config, memory, ignore } = await setup();
@@ -89,7 +118,7 @@ describe('runAgent loop', () => {
       {
         toolCalls: [{ id: 'c1', name: 'glob', arguments: JSON.stringify({ pattern: '**/*.gml' }) }],
       },
-      { tokens: ['Found the files.'] },
+      { tokens: ['Found the files.'], usage: { totalTokens: 123 } },
     ]);
     const { events, emit } = collect();
     const gate = createApprovalGate({ autoApprove: false, emit });
@@ -109,6 +138,8 @@ describe('runAgent loop', () => {
     const toolMsg = res.history.find((m) => m.role === 'tool');
     expect(toolMsg?.tool_call_id).toBe('c1');
     expect(toolMsg?.name).toBe('glob');
+    expect(res.toolsUsed).toEqual(['glob']);
+    expect(res.usage?.totalTokens).toBe(123);
     // second model call saw the tool result in its messages
     expect(llm.callCount).toBe(2);
   });
@@ -258,6 +289,48 @@ describe('runAgent loop', () => {
     const err = events.find((e) => e.type === 'error');
     expect(err && err.type === 'error' && err.code).toBe('http');
     expect(res.message.role).toBe('assistant');
+  });
+
+  it('provider retry notices are surfaced as status detail before the answer', async () => {
+    const { config, memory, ignore } = await setup();
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('x', {
+      llm: new RetryNoticeLlm(),
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
+    expect(events).toContainEqual({
+      type: 'status',
+      phase: 'streaming',
+      detail: 'provider overloaded; retry 1/2 in 1.2s',
+    });
+    expect(events[events.length - 1]?.type).toBe('answer');
+  });
+
+  it('provider failover notices are surfaced as status detail before the answer', async () => {
+    const { config, memory, ignore } = await setup();
+    const { events, emit } = collect();
+    const gate = createApprovalGate({ autoApprove: false, emit });
+    await runAgent('x', {
+      llm: new FailoverNoticeLlm(),
+      tools: buildToolRegistry(),
+      config,
+      memory,
+      emit,
+      approvals: gate,
+      ignore,
+    });
+    expect(events).toContainEqual({
+      type: 'status',
+      phase: 'streaming',
+      detail: 'provider failed over to openrouter.ai / minimax/minimax-m3',
+    });
+    expect(events[events.length - 1]?.type).toBe('answer');
   });
 
   it('TEST 6 PROMPT INJECTION: an "apply this patch" instruction inside tool content does NOT bypass gated approval', async () => {

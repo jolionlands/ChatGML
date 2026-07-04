@@ -46,7 +46,8 @@ chatgml chat .
 `chat` opens an interactive REPL (`chatgml> `). Edits are **approval-gated**: the agent shows a diff
 and asks before writing.
 
-See [docs/usage.md](docs/usage.md) for the full command/flag/env/config reference.
+See [docs/usage.md](docs/usage.md) for the full command/flag/env/config reference and
+[docs/codebase-map.md](docs/codebase-map.md) for the repo map.
 
 ---
 

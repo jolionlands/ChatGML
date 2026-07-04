@@ -31,9 +31,16 @@ import type {
   Mode,
   TierName,
   Tiers,
+  Usage,
 } from './types.js';
 import { LlmError } from './llm.js';
-import type { ChatRequest, StreamDelta, ChatResult } from './llm.js';
+import type {
+  ChatRequest,
+  StreamDelta,
+  ChatResult,
+  LlmRetryInfo,
+  LlmFailoverInfo,
+} from './llm.js';
 import type { MemoryProvider } from './memory/provider.js';
 import { makeScope } from './memory/types.js';
 import { buildIgnoreFilter } from './index/files.js';
@@ -501,6 +508,8 @@ export interface AgentRunResult {
   taskId?: string;
   /** Which tier produced this turn (null when the global lane was used; null is THE default). */
   tier: TierName | null;
+  usage?: Usage;
+  toolsUsed?: string[];
   /**
    * Model thinking / chain-of-thought text the model emitted during this turn. Populated
    * from the final assistant message's `thinking` field, which the LLM client accumulates
@@ -528,6 +537,7 @@ export async function runAgent(
   const scope: Scope = makeScope(deps.config.scope);
   const ignore = deps.ignore ?? (await buildIgnoreFilter(deps.config.index.root));
   const sources: Citation[] = [];
+  const toolsUsed: string[] = [];
 
   const activeTools = filterToolsByMode(deps.tools, deps.config.mode ?? 'code');
   const toolSpecs: ToolSpec[] = toOpenAiToolSpecs(activeTools);
@@ -577,6 +587,7 @@ export async function runAgent(
       sources,
       taskId: opts.taskId,
       tier: turnTier,
+      ...(toolsUsed.length > 0 ? { toolsUsed: toolsUsed.slice() } : {}),
     };
   };
 
@@ -602,7 +613,21 @@ export async function runAgent(
         // and behavior is unchanged. Cached once at turn start so every step in a single turn
         // hits the same model.
         turnLlm,
-        { messages, tools: toolSpecs, signal },
+        {
+          messages,
+          tools: toolSpecs,
+          signal,
+          onRetry: (info) => {
+            deps.emit({ type: 'status', phase: 'streaming', detail: formatLlmRetryStatus(info) });
+          },
+          onFailover: (info) => {
+            deps.emit({
+              type: 'status',
+              phase: 'streaming',
+              detail: formatLlmFailoverStatus(info),
+            });
+          },
+        },
         deps.emit,
         opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {},
       );
@@ -639,6 +664,8 @@ export async function runAgent(
         sources,
         taskId: opts.taskId,
         tier: turnTier,
+        ...(result.usage ? { usage: result.usage } : {}),
+        ...(toolsUsed.length > 0 ? { toolsUsed: toolsUsed.slice() } : {}),
         ...(turnThinking !== undefined ? { thinking: turnThinking } : {}),
       };
     }
@@ -647,6 +674,8 @@ export async function runAgent(
     // identical failures so a model stuck re-issuing one failing call is stopped early.
     for (const call of toolCalls) {
       if (signal.aborted) break;
+      const toolName = call.function.name;
+      if (toolsUsed.indexOf(toolName) === -1) toolsUsed.push(toolName);
       const outcome = await runOneToolCall(call, deps, ctx, sources, messages);
       if (outcome.ok) {
         lastFailedFingerprint = null;
@@ -681,6 +710,30 @@ export async function runAgent(
   // Unreachable in practice (every path above returns), but keep a defensive terminal `error` so the
   // contract — exactly one of {answer, error} per turn — holds even if maxSteps is 0.
   return errorExit('agent loop ended without a final answer', 'no_answer');
+}
+
+function formatLlmRetryStatus(info: LlmRetryInfo): string {
+  const seconds = info.delayMs >= 1000 ? `${(info.delayMs / 1000).toFixed(1)}s` : `${info.delayMs}ms`;
+  const overloaded =
+    info.status === 429 && typeof info.body === 'string' && /overload|busy/i.test(info.body);
+  const why = overloaded ? 'provider overloaded' : `provider HTTP ${info.status}`;
+  return `${why}; retry ${info.attempt}/${info.maxRetries} in ${seconds}`;
+}
+
+function formatLlmFailoverStatus(info: LlmFailoverInfo): string {
+  const target = shortProviderTarget(info.toBaseURL, info.toModel);
+  return `provider failed over to ${target}`;
+}
+
+function shortProviderTarget(baseURL: string, model: string): string {
+  const host = (() => {
+    try {
+      return new URL(baseURL).hostname.replace(/^api\./, '');
+    } catch {
+      return baseURL.replace(/^https?:\/\//, '').split('/')[0] || baseURL;
+    }
+  })();
+  return `${host} / ${model}`;
 }
 
 /** A canonical, order-stable JSON of a value so two semantically equal arg objects fingerprint alike. */
@@ -1045,6 +1098,8 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
         if (role !== 'user' && role !== 'assistant') continue; // only conversational turns resumed
         const content = (m as { content?: unknown }).content;
         if (content !== null && typeof content !== 'string') continue;
+        if (role === 'assistant' && (content === null || content.trim() === '')) continue;
+        if (role === 'user' && (content === null || content.trim() === '')) continue;
         coerced.push({ role: role as 'user' | 'assistant', content: content as string | null });
       }
       history = coerced;
@@ -1200,6 +1255,10 @@ export function createAgentLike(deps: AgentLikeDeps): AgentLike {
             // was used (no tier was configured for the active mode). Plugin badgers the bubble
             // when this is set.
             tier: result.tier,
+            ...(result.usage ? { usage: result.usage } : {}),
+            ...(result.toolsUsed && result.toolsUsed.length > 0
+              ? { toolsUsed: result.toolsUsed }
+              : {}),
             // THINKING PROPAGATION (mirror of the `thinking` event for late-joining clients;
             // the plugin can ignore this since it already saw the `thinking` event, but a
             // replayed turn_end from /resume gets the block too).

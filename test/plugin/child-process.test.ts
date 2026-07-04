@@ -12,21 +12,30 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const PLUGIN = path.join(HERE, '../../plugin');
 const cp = require(path.join(PLUGIN, 'child-process.js')) as {
-  buildMinimalEnv: () => Record<string, string>;
+  buildMinimalEnv: (extraEnv?: Record<string, string>) => Record<string, string>;
+  parseDotEnv: (text: string) => Record<string, string>;
+  shouldCarryProviderEnv: (key: string) => boolean;
   wrapCmdForWindows: (cmd: string, argv: string[]) => { cmd: string; argv: string[] };
   resolveDistCliPath: (pluginDir?: string, ownDistFallback?: string) => string;
 };
 
 describe('plugin/child-process.js helpers', () => {
-  it('buildMinimalEnv only carries PATH + the config-locating vars + any CHATGML_* set in process.env', () => {
+  it('buildMinimalEnv carries PATH, config-locating vars, ChatGML vars, and provider API keys', () => {
     const savedPath = process.env.PATH;
     const savedChat = process.env['CHATGML_TEST_TOKEN'];
+    const savedKimi = process.env['KIMI_API_KEY'];
+    const savedCustom = process.env['CUSTOM_API_KEY'];
     process.env.PATH = '/usr/bin';
     process.env['CHATGML_TEST_TOKEN'] = 'secret-token';
+    process.env['KIMI_API_KEY'] = 'kimi-token';
+    process.env['CUSTOM_API_KEY'] = 'custom-token';
     try {
-      const env = cp.buildMinimalEnv();
+      const env = cp.buildMinimalEnv({ CHATGML_CHAT_API_KEY: 'bridged-token' });
       expect(env.PATH).toBe('/usr/bin');
       expect(env['CHATGML_TEST_TOKEN']).toBe('secret-token');
+      expect(env['KIMI_API_KEY']).toBe('kimi-token');
+      expect(env['CUSTOM_API_KEY']).toBe('custom-token');
+      expect(env['CHATGML_CHAT_API_KEY']).toBe('bridged-token');
       // Must not inherit renderer-only Electron noise.
       expect(env['ELECTRON_RUN_AS_NODE']).toBeUndefined();
     } finally {
@@ -34,7 +43,31 @@ describe('plugin/child-process.js helpers', () => {
       else process.env.PATH = savedPath;
       if (savedChat === undefined) delete process.env['CHATGML_TEST_TOKEN'];
       else process.env['CHATGML_TEST_TOKEN'] = savedChat;
+      if (savedKimi === undefined) delete process.env['KIMI_API_KEY'];
+      else process.env['KIMI_API_KEY'] = savedKimi;
+      if (savedCustom === undefined) delete process.env['CUSTOM_API_KEY'];
+      else process.env['CUSTOM_API_KEY'] = savedCustom;
     }
+  });
+
+  it('shouldCarryProviderEnv accepts provider key shapes without carrying arbitrary noise', () => {
+    expect(cp.shouldCarryProviderEnv('OPENROUTER_API_KEY')).toBe(true);
+    expect(cp.shouldCarryProviderEnv('CUSTOM_ACCESS_TOKEN')).toBe(true);
+    expect(cp.shouldCarryProviderEnv('ELECTRON_RUN_AS_NODE')).toBe(false);
+  });
+
+  it('parseDotEnv supports ChatGML provider key files without leaking comments into values', () => {
+    const env = cp.parseDotEnv(`
+      # ChatGML local env
+      KIMI_API_KEY="kimi-secret"
+      KIMI_CODE_API_KEY='code-secret'
+      OPENROUTER_API_KEY=router-secret # inline note
+      bad-name=nope
+    `);
+    expect(env.KIMI_API_KEY).toBe('kimi-secret');
+    expect(env.KIMI_CODE_API_KEY).toBe('code-secret');
+    expect(env.OPENROUTER_API_KEY).toBe('router-secret');
+    expect(env['bad-name']).toBeUndefined();
   });
 
   it('wrapCmdForWindows rewrites a .cmd shim into cmd.exe /c <shim> <args> on win32', () => {

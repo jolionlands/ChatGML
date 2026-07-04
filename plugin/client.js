@@ -18,6 +18,7 @@
    * @param {string=} opts.configuredPath       - absolute chatgml path from a Preference
    * @param {string=} opts.scope                - optional --scope
    * @param {string=} opts.pluginDir            - __dirname of the plugin (to locate a bundled core)
+   * @param {Record<string,string>=} opts.extraEnv - auth env additions passed only to child core
    * @param {(event:object)=>void} opts.onEvent - called once per decoded AgentEvent
    * @param {(line:string)=>void=} opts.onMalformed
    * @param {(text:string)=>void=} opts.onStderr
@@ -41,6 +42,7 @@
       scope: this.opts.scope,
       configuredPath: this.opts.configuredPath,
       pluginDir: this.opts.pluginDir,
+      extraEnv: this.opts.extraEnv,
       longLived: true,
       heartbeatMs: 60000,
       killBackstopMs: 1000,

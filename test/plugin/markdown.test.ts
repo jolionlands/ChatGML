@@ -50,9 +50,7 @@ describe('escapeHtml', () => {
 describe('parseInline', () => {
   it('plain text → all text tokens (one per char)', () => {
     const tokens = parseInline('hello');
-    expect(tokens).toHaveLength(5);
-    expect(tokens.every((t: any) => t.type === 'text')).toBe(true);
-    expect(tokens.map((t: any) => t.value).join('')).toBe('hello');
+    expect(tokens).toEqual([{ type: 'text', value: 'hello' }]);
   });
 
   it('backtick code → code token', () => {
@@ -66,7 +64,7 @@ describe('parseInline', () => {
     const tokens = parseInline('hello `world');
     const last = tokens[tokens.length - 1];
     expect(last.type).toBe('text');
-    expect(last.value).toBe('`world');
+    expect(last.value).toBe('hello `world');
   });
 
   it('bold **text** → strong token', () => {
@@ -100,6 +98,7 @@ describe('parseInline', () => {
 
   it('plain text without markup → all text tokens', () => {
     const tokens = parseInline('just plain text');
+    expect(tokens).toHaveLength(1);
     expect(tokens.every((t: any) => t.type === 'text')).toBe(true);
   });
 

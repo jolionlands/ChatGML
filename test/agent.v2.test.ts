@@ -174,6 +174,7 @@ describe('createAgentLike v2 — context, history, turn_end', () => {
     const sent = llm.requests[0]!.messages;
     expect(sent.some((m) => m.role === 'user' && m.content === 'prior q')).toBe(true);
     expect(sent.some((m) => m.role === 'assistant' && m.content === 'prior a')).toBe(true);
+    expect(sent.some((m) => m.role === 'assistant' && !m.content)).toBe(false);
     // tool/system resume entries were dropped.
     expect(sent.some((m) => m.role === 'tool')).toBe(false);
     // Only ONE system message (the agent's own prompt), not the resumed one.
