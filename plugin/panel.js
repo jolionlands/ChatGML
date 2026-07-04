@@ -1868,11 +1868,11 @@
       },
       {
         type: 'agent-packs',
-        label: 'Agent packs',
+        label: 'Marketplace',
         action: function () {
           self.catalogOpen = true;
           self.render();
-          self.flash('open Capabilities -> Agent packs');
+          self.flash('open Capabilities -> Marketplace');
         },
       },
       { type: 'url', label: 'url', insert: 'url ' },
@@ -2959,7 +2959,7 @@
       { title: 'GMEdit tools', items: [] },
       { title: 'GMLoop', items: [] },
       { title: 'MCP servers', items: [] },
-      { title: 'Agent packs', items: [] },
+      { title: 'Marketplace', items: [] },
     ];
     var byTitle = {};
     for (var gi = 0; gi < groups.length; gi++) byTitle[groups[gi].title] = groups[gi];
@@ -2972,9 +2972,9 @@
       else byTitle['Core tools'].items.push(t);
     }
     try {
-      byTitle['Agent packs'].items = AgentPacks.listPacks();
+      byTitle.Marketplace.items = AgentPacks.listMarketplace();
     } catch (e) {
-      byTitle['Agent packs'].items = [];
+      byTitle.Marketplace.items = [];
     }
     return groups.filter(function (g) {
       return g.items.length > 0;
@@ -3264,13 +3264,19 @@
               'click',
               (function (entry) {
                 return function () {
-                  if (entry.kind === 'agent-pack' && !entry.installed) {
+                  if (
+                    (entry.kind === 'agent-pack' ||
+                      entry.kind === 'skill' ||
+                      entry.kind === 'plugin' ||
+                      entry.kind === 'provider') &&
+                    !entry.installed
+                  ) {
                     try {
-                      AgentPacks.installPack(entry.id);
-                      self.flash(entry.name + ' pack installed');
+                      AgentPacks.installMarketplace(entry.id);
+                      self.flash(entry.name + ' installed');
                       entry.installed = true;
                     } catch (e) {
-                      self.flash('pack install failed: ' + (e.message || e), true);
+                      self.flash('marketplace install failed: ' + (e.message || e), true);
                       return;
                     }
                   }
@@ -3280,8 +3286,13 @@
             );
             const kind = document.createElement('span');
             kind.className = 'chatgml-tool-kind chatgml-tool-kind-' + t.kind;
+            const isMarketplace =
+              t.kind === 'agent-pack' ||
+              t.kind === 'skill' ||
+              t.kind === 'plugin' ||
+              t.kind === 'provider';
             kind.textContent =
-              t.kind === 'agent-pack' ? (t.installed ? 'installed' : 'install') : t.kind;
+              isMarketplace ? (t.installed ? 'installed' : 'install') : t.kind;
             const name = document.createElement('span');
             name.textContent = t.name;
             if (t.kind === 'mcp') {

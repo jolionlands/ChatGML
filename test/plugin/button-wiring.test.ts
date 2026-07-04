@@ -100,23 +100,25 @@ describe('GMEdit panel button wiring', () => {
     expect(PANEL).toMatch(/GMEdit tools/);
     expect(PANEL).toMatch(/GMLoop/);
     expect(PANEL).toMatch(/MCP servers/);
-    expect(PANEL).toMatch(/Agent packs/);
-    expect(PANEL).toMatch(/AgentPacks\.listPacks/);
-    expect(PANEL).toMatch(/AgentPacks\.installPack/);
+    expect(PANEL).toMatch(/Marketplace/);
+    expect(PANEL).toMatch(/AgentPacks\.listMarketplace/);
+    expect(PANEL).toMatch(/AgentPacks\.installMarketplace/);
     expect(PANEL).toMatch(/agent-pack/);
+    expect(PANEL).toMatch(/entry\.kind === 'provider'/);
     expect(PANEL).toMatch(/_insertCapabilityPrompt/);
     expect(PANEL).toMatch(/Use gmedit_plugins to inspect installed GMEdit plugins/);
     expect(PANEL).toMatch(/Use gmloop_check to check GMLoop status/);
     expect(STYLE).toMatch(/\.chatgml-capability-group/);
     expect(STYLE).toMatch(/\.chatgml-capability-row/);
     expect(STYLE).toMatch(/\.chatgml-tool-kind-agent-pack/);
+    expect(STYLE).toMatch(/\.chatgml-tool-kind-provider/);
     expect(CONFIG).toMatch(/agent-packs\.js/);
   });
 
   it('@ menu exposes capability context and budget chips', () => {
     expect(PANEL).toMatch(/label:\s*'GMEdit plugins'/);
     expect(PANEL).toMatch(/label:\s*'GMLoop status'/);
-    expect(PANEL).toMatch(/label:\s*'Agent packs'/);
+    expect(PANEL).toMatch(/label:\s*'Marketplace'/);
     expect(PANEL).toMatch(/last answer sources/);
     expect(PANEL).toMatch(/chatgml-mention-budget/);
     expect(PANEL).toMatch(/context: '/);

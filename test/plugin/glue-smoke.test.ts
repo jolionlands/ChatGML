@@ -62,6 +62,8 @@ describe('plugin glue modules load as CommonJS', () => {
     expect(Array.isArray(m.BUILTIN_PACKS)).toBe(true);
     expect(typeof m.listPacks).toBe('function');
     expect(typeof m.installPack).toBe('function');
+    expect(typeof m.listMarketplace).toBe('function');
+    expect(typeof m.installMarketplace).toBe('function');
   });
 
   it('panel.js exposes ChatPanel', () => {

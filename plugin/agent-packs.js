@@ -5,6 +5,7 @@
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
+  const Providers = root.ChatGmlProviders || require('./providers.js');
 
   const BUILTIN_PACKS = [
     {
@@ -41,13 +42,96 @@
     },
   ];
 
+  const BUILTIN_SKILLS = [
+    {
+      id: 'review-current-file',
+      name: 'Review current file',
+      kind: 'skill',
+      description: 'Focused bug/risk review using current editor context.',
+      prompt: 'Review the current file and call out concrete bugs, risks, and missing tests.',
+    },
+    {
+      id: 'debug-gml-event',
+      name: 'Debug GML event',
+      kind: 'skill',
+      description: 'GameMaker event debugger for active object/event code.',
+      prompt: 'Debug the current GameMaker event using the attached file, cursor, and selection.',
+    },
+    {
+      id: 'write-tests',
+      name: 'Write focused tests',
+      kind: 'skill',
+      description: 'Add the smallest useful test for a code change.',
+      prompt: 'Add or update the smallest focused test that would catch this change regressing.',
+    },
+  ];
+
+  const BUILTIN_PLUGINS = [
+    {
+      id: 'chatgml-gmloop',
+      name: 'GMLoop companion',
+      kind: 'plugin',
+      description: 'GMEdit context-menu companion for GMLoop and GMLive checks.',
+      prompt: 'Use the GMLoop companion plugin for lint, format-check, live reload, and runner checks.',
+    },
+    {
+      id: 'chatgml-inline',
+      name: 'Inline edit companion',
+      kind: 'plugin',
+      description: 'GMEdit inline edit/review companion.',
+      prompt: 'Use the inline companion flow for small selected-code edits.',
+    },
+  ];
+
+  const BUILTIN_PROVIDERS = [
+    {
+      id: 'provider-kimi-coding',
+      name: 'Kimi Code',
+      kind: 'provider',
+      description: 'Kimi coding endpoint with the kimi-for-coding model.',
+      providerName: 'kimi-coding',
+      provider: {
+        kind: 'openai_compat',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        endpoint: '/chat/completions',
+        auth: 'bearer',
+        models: [{ id: 'kimi-for-coding' }],
+      },
+      prompt: 'Use the Kimi Code provider: model kimi-for-coding at https://api.kimi.com/coding/v1.',
+    },
+    {
+      id: 'provider-openrouter-minimax-m3',
+      name: 'OpenRouter MiniMax M3',
+      kind: 'provider',
+      description: 'OpenRouter route for MiniMax M3.',
+      providerName: 'openrouter',
+      provider: {
+        kind: 'openai_compat',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        endpoint: '/chat/completions',
+        auth: 'bearer',
+        models: [{ id: 'minimax/minimax-m3' }],
+      },
+      prompt: 'Use OpenRouter MiniMax M3: model minimax/minimax-m3 via https://openrouter.ai/api/v1.',
+    },
+  ];
+
+  function configDir() {
+    if (process.env.CHATGML_CONFIG_DIR) return process.env.CHATGML_CONFIG_DIR;
+    if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'chatgml');
+    if (process.platform === 'win32' && process.env.APPDATA) return path.join(process.env.APPDATA, 'chatgml');
+    return path.join(os.homedir(), '.config', 'chatgml');
+  }
+
   function userDir() {
     if (process.env.CHATGML_AGENT_PACKS_DIR) return process.env.CHATGML_AGENT_PACKS_DIR;
-    if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'chatgml', 'agent-packs');
-    if (process.platform === 'win32' && process.env.APPDATA) {
-      return path.join(process.env.APPDATA, 'chatgml', 'agent-packs');
-    }
-    return path.join(os.homedir(), '.config', 'chatgml', 'agent-packs');
+    return path.join(configDir(), 'agent-packs');
+  }
+
+  function manifestDir(kind, dir) {
+    if (dir) return dir;
+    if (kind === 'agent-pack') return userDir();
+    return path.join(configDir(), 'marketplace', kind + 's');
   }
 
   function packById(id) {
@@ -84,6 +168,42 @@
     });
   }
 
+  function marketplaceEntries() {
+    return BUILTIN_PACKS.concat(BUILTIN_SKILLS, BUILTIN_PLUGINS, BUILTIN_PROVIDERS);
+  }
+
+  function marketplaceById(id) {
+    return marketplaceEntries().find(function (p) {
+      return p.id === id;
+    });
+  }
+
+  function hasManifest(entry, opts) {
+    if (entry.kind === 'agent-pack') return !!installedIds(opts && opts.agentPacksDir)[entry.id];
+    const base = manifestDir(entry.kind, opts && opts.manifestDir);
+    return fs.existsSync(path.join(base, entry.id + '.json'));
+  }
+
+  function providerInstalled(entry, opts) {
+    const providerName = entry.providerName || entry.id;
+    const p =
+      (opts && opts.providersPath) ||
+      Providers.defaultChatgmlProvidersPath(opts && opts.configDir ? opts.configDir : configDir());
+    try {
+      const data = Providers.readProvidersFile(p);
+      return !!(data && data.providers && data.providers[providerName]);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function listMarketplace(opts) {
+    return marketplaceEntries().map(function (entry) {
+      const installed = entry.kind === 'provider' ? providerInstalled(entry, opts) : hasManifest(entry, opts);
+      return Object.assign({}, entry, { installed: installed });
+    });
+  }
+
   function installPack(id, dir) {
     const pack = packById(id);
     if (!pack) throw new Error('unknown agent pack: ' + id);
@@ -106,7 +226,64 @@
     return Object.assign({}, pack, { installed: true });
   }
 
-  const api = { BUILTIN_PACKS, userDir, listPacks, installPack, installedIds };
+  function writeManifest(entry, dir) {
+    const base = manifestDir(entry.kind, dir);
+    fs.mkdirSync(base, { recursive: true });
+    fs.writeFileSync(
+      path.join(base, entry.id + '.json'),
+      JSON.stringify(
+        {
+          id: entry.id,
+          name: entry.name,
+          kind: entry.kind,
+          description: entry.description,
+          prompt: entry.prompt,
+          installedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+  }
+
+  function installMarketplace(id, opts) {
+    const entry = marketplaceById(id);
+    if (!entry) throw new Error('unknown marketplace entry: ' + id);
+    if (entry.kind === 'agent-pack') return installPack(id, opts && opts.agentPacksDir);
+    if (entry.kind === 'provider') {
+      const p =
+        (opts && opts.providersPath) ||
+        Providers.defaultChatgmlProvidersPath(opts && opts.configDir ? opts.configDir : configDir());
+      const provider = entry.provider || {};
+      const result = Providers.registerProvider({
+        chatgmlPath: p,
+        name: entry.providerName || entry.id,
+        kind: provider.kind,
+        baseUrl: provider.baseUrl,
+        endpoint: provider.endpoint,
+        auth: provider.auth,
+        models: provider.models || [],
+      });
+      if (!result.ok) throw new Error(result.error || 'provider install failed');
+      return Object.assign({}, entry, { installed: true });
+    }
+    writeManifest(entry, opts && opts.manifestDir);
+    return Object.assign({}, entry, { installed: true });
+  }
+
+  const api = {
+    BUILTIN_PACKS,
+    BUILTIN_SKILLS,
+    BUILTIN_PLUGINS,
+    BUILTIN_PROVIDERS,
+    configDir,
+    userDir,
+    listPacks,
+    installPack,
+    installedIds,
+    listMarketplace,
+    installMarketplace,
+  };
   root.ChatGmlAgentPacks = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
