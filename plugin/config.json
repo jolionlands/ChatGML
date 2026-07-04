@@ -8,6 +8,7 @@
     "markdown.js",
     "fuzzy.js",
     "providers.js",
+    "agent-packs.js",
     "settings-tasks.js",
     "sessions.js",
     "panel.js",

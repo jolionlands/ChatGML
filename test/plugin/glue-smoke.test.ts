@@ -57,6 +57,13 @@ describe('plugin glue modules load as CommonJS', () => {
     expect(typeof m.diffLineClass).toBe('function');
   });
 
+  it('agent-packs.js exposes local pack install helpers', () => {
+    const m = require(path.join(PLUGIN, 'agent-packs.js'));
+    expect(Array.isArray(m.BUILTIN_PACKS)).toBe(true);
+    expect(typeof m.listPacks).toBe('function');
+    expect(typeof m.installPack).toBe('function');
+  });
+
   it('panel.js exposes ChatPanel', () => {
     const m = require(path.join(PLUGIN, 'panel.js'));
     expect(typeof m.ChatPanel).toBe('function');

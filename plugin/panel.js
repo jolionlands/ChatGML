@@ -6,6 +6,7 @@
   'use strict';
 
   const State = root.ChatGmlState || require('./state.js');
+  const AgentPacks = root.ChatGmlAgentPacks || require('./agent-packs.js');
   const SettingsTasks = root.ChatGmlSettingsTasks || require('./settings-tasks.js');
   const DiffView = root.ChatGmlDiffView || require('./diff-view.js');
 
@@ -1865,6 +1866,15 @@
           self._insertCapabilityPrompt('Use gmloop_check to check GMLoop status for this project.');
         },
       },
+      {
+        type: 'agent-packs',
+        label: 'Agent packs',
+        action: function () {
+          self.catalogOpen = true;
+          self.render();
+          self.flash('open Capabilities -> Agent packs');
+        },
+      },
       { type: 'url', label: 'url', insert: 'url ' },
       { type: 'image', label: 'image', insert: 'image ' },
     );
@@ -2949,7 +2959,7 @@
       { title: 'GMEdit tools', items: [] },
       { title: 'GMLoop', items: [] },
       { title: 'MCP servers', items: [] },
-      { title: 'Skills', items: [] },
+      { title: 'Agent packs', items: [] },
     ];
     var byTitle = {};
     for (var gi = 0; gi < groups.length; gi++) byTitle[groups[gi].title] = groups[gi];
@@ -2961,26 +2971,11 @@
       else if (t.name === 'gmloop_check' || t.name === 'gmloop_control') byTitle.GMLoop.items.push(t);
       else byTitle['Core tools'].items.push(t);
     }
-    byTitle.Skills.items.push(
-      {
-        name: 'Review current file',
-        kind: 'skill',
-        description: 'Review with current editor context.',
-        prompt: 'Review the current file and call out concrete bugs, risks, and fixes.',
-      },
-      {
-        name: 'Debug current event',
-        kind: 'skill',
-        description: 'Inspect the active GameMaker event.',
-        prompt: 'Debug the current GameMaker event using the attached file and selection.',
-      },
-      {
-        name: 'GMLoop diagnostics',
-        kind: 'skill',
-        description: 'Check GMLoop status and safe local checks.',
-        prompt: 'Use gmloop_check to inspect GMLoop status and suggest the next safe check.',
-      },
-    );
+    try {
+      byTitle['Agent packs'].items = AgentPacks.listPacks();
+    } catch (e) {
+      byTitle['Agent packs'].items = [];
+    }
     return groups.filter(function (g) {
       return g.items.length > 0;
     });
@@ -3269,13 +3264,24 @@
               'click',
               (function (entry) {
                 return function () {
+                  if (entry.kind === 'agent-pack' && !entry.installed) {
+                    try {
+                      AgentPacks.installPack(entry.id);
+                      self.flash(entry.name + ' pack installed');
+                      entry.installed = true;
+                    } catch (e) {
+                      self.flash('pack install failed: ' + (e.message || e), true);
+                      return;
+                    }
+                  }
                   self._insertCapabilityPrompt(capabilityPrompt(entry));
                 };
               })(t),
             );
             const kind = document.createElement('span');
             kind.className = 'chatgml-tool-kind chatgml-tool-kind-' + t.kind;
-            kind.textContent = t.kind;
+            kind.textContent =
+              t.kind === 'agent-pack' ? (t.installed ? 'installed' : 'install') : t.kind;
             const name = document.createElement('span');
             name.textContent = t.name;
             if (t.kind === 'mcp') {

@@ -1463,6 +1463,11 @@ button[disabled],
   color: var(--chatgml-del-fg);
 }
 
+.chatgml-tool-kind-agent-pack {
+  background-color: var(--chatgml-surface-2);
+  color: var(--chatgml-fg);
+}
+
 .chatgml-tool-auto {
   background: var(--chatgml-add-bg);
   color: var(--chatgml-add-fg);

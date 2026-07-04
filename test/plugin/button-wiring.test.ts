@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const PANEL = readFileSync(resolve(__dirname, '../../plugin/panel.js'), 'utf8');
 const CHAT = readFileSync(resolve(__dirname, '../../plugin/chatgml.js'), 'utf8');
 const STYLE = readFileSync(resolve(__dirname, '../../plugin/style.css'), 'utf8');
+const CONFIG = readFileSync(resolve(__dirname, '../../plugin/config.json'), 'utf8');
 
 describe('GMEdit panel button wiring', () => {
   it('Undo button sends the selected checkpoint id when one is selected', () => {
@@ -99,17 +100,23 @@ describe('GMEdit panel button wiring', () => {
     expect(PANEL).toMatch(/GMEdit tools/);
     expect(PANEL).toMatch(/GMLoop/);
     expect(PANEL).toMatch(/MCP servers/);
-    expect(PANEL).toMatch(/Skills/);
+    expect(PANEL).toMatch(/Agent packs/);
+    expect(PANEL).toMatch(/AgentPacks\.listPacks/);
+    expect(PANEL).toMatch(/AgentPacks\.installPack/);
+    expect(PANEL).toMatch(/agent-pack/);
     expect(PANEL).toMatch(/_insertCapabilityPrompt/);
     expect(PANEL).toMatch(/Use gmedit_plugins to inspect installed GMEdit plugins/);
     expect(PANEL).toMatch(/Use gmloop_check to check GMLoop status/);
     expect(STYLE).toMatch(/\.chatgml-capability-group/);
     expect(STYLE).toMatch(/\.chatgml-capability-row/);
+    expect(STYLE).toMatch(/\.chatgml-tool-kind-agent-pack/);
+    expect(CONFIG).toMatch(/agent-packs\.js/);
   });
 
   it('@ menu exposes capability context and budget chips', () => {
     expect(PANEL).toMatch(/label:\s*'GMEdit plugins'/);
     expect(PANEL).toMatch(/label:\s*'GMLoop status'/);
+    expect(PANEL).toMatch(/label:\s*'Agent packs'/);
     expect(PANEL).toMatch(/last answer sources/);
     expect(PANEL).toMatch(/chatgml-mention-budget/);
     expect(PANEL).toMatch(/context: '/);
