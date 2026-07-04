@@ -100,6 +100,7 @@ export class EventRenderer {
       case 'command_exit':
         return null;
     }
+    return null;
   }
 
   private renderSources(sources: Citation[]): void {

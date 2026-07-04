@@ -33,15 +33,51 @@ parity/unit tests can `require()` them despite the repo root being `type:module`
 
 ## Install
 
-The plugin lives in `%APPDATA%/AceGM/GMEdit/plugins/<name>/`. Symlink the repo's `plugin/` dir there
-(Windows; run an elevated shell):
+Shortest path from npm:
+
+```bash
+npm install -g chatgml
+chatgml-gmedit-setup
+```
+
+Shortest path from a checkout:
+
+```bash
+npm ci
+npm run build
+npm run setup:gmedit
+```
+
+That links the main plugin plus `chatgml-inline` and `chatgml-explain` into GMEdit's plugin folder.
+Add `--gmloop` (`npm run setup:gmedit -- --gmloop` from a checkout) to also link the optional
+`chatgml-gmloop` plugin.
+
+GMEdit plugin folders:
+
+| OS | default folder |
+|---|---|
+| Windows | `%APPDATA%/AceGM/GMEdit/plugins` |
+| macOS | `~/Library/Application Support/AceGM/GMEdit/plugins` |
+| Linux | `$XDG_CONFIG_HOME/AceGM/GMEdit/plugins` or `~/.config/AceGM/GMEdit/plugins` |
+
+Manual Windows equivalent:
 
 ```
 cd %APPDATA%\AceGM\GMEdit\plugins
 mklink /D "chatgml" "C:\Users\you\Development\ChatGML\plugin"
+mklink /D "chatgml-inline" "C:\Users\you\Development\ChatGML\plugin-inline"
+mklink /D "chatgml-explain" "C:\Users\you\Development\ChatGML\plugin-explain"
 ```
 
-(On macOS/Linux GMEdit: `ln -s /path/to/ChatGML/plugin ~/.config/AceGM/GMEdit/plugins/chatgml`.)
+Manual macOS/Linux equivalent:
+
+```bash
+ln -s /path/to/ChatGML/plugin "$HOME/Library/Application Support/AceGM/GMEdit/plugins/chatgml"
+ln -s /path/to/ChatGML/plugin-inline "$HOME/Library/Application Support/AceGM/GMEdit/plugins/chatgml-inline"
+ln -s /path/to/ChatGML/plugin-explain "$HOME/Library/Application Support/AceGM/GMEdit/plugins/chatgml-explain"
+```
+
+On Linux, replace the target base with `${XDG_CONFIG_HOME:-$HOME/.config}/AceGM/GMEdit/plugins`.
 
 Restart GMEdit. A **ChatGML** entry appears in the editor context menu; clicking it opens the side
 panel. The plugin folder/`config.json` `name` is `chatgml` — keep them in sync.
@@ -53,9 +89,9 @@ panel. The plugin folder/`config.json` `name` is `chatgml` — keep them in sync
 
 1. an explicit **absolute path** set in the plugin's *ChatGML binary path* Preference;
 2. the **`CHATGML_BIN`** environment variable;
-3. on Windows, the npm shim **`%APPDATA%/npm/chatgml.cmd`** if it exists;
-4. the bundled **`dist/cli.js`** (next to the plugin, or one level up in a repo checkout), run via the
+3. the bundled **`dist/cli.js`** (next to the plugin, or one level up in a repo checkout), run via the
    current `node` (`process.execPath`).
+4. on Windows, the npm shim **`%APPDATA%/npm/chatgml.cmd`** if it exists.
 
 If none resolve, the plugin surfaces a clear, actionable error rather than a silent dead child. For a
 dev checkout, run `npm run build` so `dist/cli.js` exists, or `npm link` to put `chatgml` on PATH.
@@ -69,7 +105,20 @@ minimal: it spawns only `serve <projectDir>` plus an optional `--scope` (from th
 Secrets belong in the user-global config (`~/.config/chatgml/config.json`) as `env:NAME` references,
 set via `chatgml config set chat.apiKey env:MY_KEY`.
 
-The plugin's two Preferences (under GMEdit *Preferences → Plugins → chatgml*):
+Minimum working config:
+
+```bash
+chatgml config set chat.baseURL http://localhost:8080/v1
+chatgml config set chat.model qwen2.5-coder
+chatgml config set embed.model nomic-embed-text
+chatgml config set scope mygame
+```
+
+The plugin settings panel can save `chat.model`, `chat.baseURL`, `embed.model`, `embed.baseURL`,
+`chat.apiKey` env refs, mode, approval, scope, tier model/baseURL overrides, tool approval, and MCP
+servers.
+
+The plugin Preferences (under GMEdit *Preferences -> Plugins -> chatgml*) include:
 
 - **ChatGML binary path** — optional absolute path to the core executable.
 - **Scope** — optional `--scope` value.
@@ -77,6 +126,22 @@ The plugin's two Preferences (under GMEdit *Preferences → Plugins → chatgml*
 The child is spawned with an explicit **minimal env** (`PATH` + `APPDATA`/`HOME`/`USERPROFILE`/
 `SystemRoot`/`XDG_CONFIG_HOME` so the core can find its config + any `CHATGML_*` vars) — not the full
 inherited Electron environment.
+
+### Providers
+
+ChatGML providers are OpenAI-compatible endpoints. The core does not need a provider plugin: a
+provider is just `chat.baseURL`, `chat.model`, optional `chat.apiKey`, and an `embed.model`.
+
+The GMEdit settings panel also reads a provider registry from these places and merges them:
+
+- ChatGML-owned: `%APPDATA%/chatgml/providers.json` on Windows or `~/.config/chatgml/providers.json`
+  on macOS/Linux.
+- `~/.pi/agent/providers.json`
+- opencode and crush provider configs, when present.
+
+Use **Refresh providers** to load the registry, **Add provider** for a quick custom endpoint, and
+**Export .env** to copy provider environment hints. Picking a provider row fills the model/base URL
+fields; **Save & Restart** persists the actual ChatGML config.
 
 ## Spawn argv ordering (important)
 

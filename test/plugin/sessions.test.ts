@@ -243,8 +243,8 @@ describe('plugin/sessions.js', () => {
     await Sessions.appendTurn(projectDir, { userText: 'Q', assistantText: 'A' });
     const turns = await Sessions.loadTurns(projectDir, 'turncheck');
     expect(turns.length).toBe(1);
-    expect(turns[0].userText).toBe('Q');
-    expect(turns[0].assistantText).toBe('A');
+    expect(turns[0]!.userText).toBe('Q');
+    expect(turns[0]!.assistantText).toBe('A');
   });
 
   it('parity: state.js initial state carries the three session fields', () => {

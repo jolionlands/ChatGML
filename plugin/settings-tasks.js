@@ -131,15 +131,15 @@
   }
 
   /**
-   * Provider rows may carry path/auth metadata, but the core does not currently expose
-   * `chat.path` or `chat.auth` as settable config fields. Keep this helper as a compatibility
-   * no-op so older call sites never emit unsupported writes.
+   * Build the config writes implied by an Add/Use provider flow. Provider rows may carry path/auth
+   * metadata, but the core only exposes the normal chat/embed fields, so unsupported leaves are
+   * deliberately ignored here.
    *
    * @param {object} settings
    * @returns {Array<[string,string]>}
    */
   function providerDerivedCommands(settings) {
-    return [];
+    return buildSettingsCommands(settings).commands;
   }
 
   const api = {

@@ -68,7 +68,7 @@ describe('companion plugin modules load as CommonJS', () => {
 
   it('both companions still register a disabled plugin if shared chatgml modules are missing', () => {
     const fs = require('node:fs');
-    const cases = [
+    const cases: Array<[string, string]> = [
       ['plugin-inline/inline.js', 'chatgml-inline'],
       ['plugin-explain/explain.js', 'chatgml-explain'],
     ];

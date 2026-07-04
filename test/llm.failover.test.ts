@@ -9,12 +9,20 @@ import {
   type NamedChatLane,
 } from '../src/llm-failover.js';
 
+function throwBeforeTokens(err: LlmError): AsyncGenerator<StreamDelta, ChatResult, void> {
+  return (async function* (emitNever = false): AsyncGenerator<StreamDelta, ChatResult, void> {
+    if (emitNever) yield { kind: 'text', text: '' };
+    throw err;
+  })();
+}
+
 class ThrowBeforeTokens implements LlmLike {
   constructor(private readonly status: number) {}
-  async *chatStream(_req: ChatRequest): AsyncGenerator<StreamDelta, ChatResult, void> {
-    throw new LlmError('http', `chat endpoint returned HTTP ${this.status}`, {
+  chatStream(_req: ChatRequest): AsyncGenerator<StreamDelta, ChatResult, void> {
+    const err = new LlmError('http', `chat endpoint returned HTTP ${this.status}`, {
       status: this.status,
     });
+    return throwBeforeTokens(err);
   }
 }
 
@@ -26,8 +34,9 @@ class ThrowAfterToken implements LlmLike {
 }
 
 class ThrowNetworkBeforeTokens implements LlmLike {
-  async *chatStream(_req: ChatRequest): AsyncGenerator<StreamDelta, ChatResult, void> {
-    throw new LlmError('network', 'network error reading chat stream');
+  chatStream(_req: ChatRequest): AsyncGenerator<StreamDelta, ChatResult, void> {
+    const err = new LlmError('network', 'network error reading chat stream');
+    return throwBeforeTokens(err);
   }
 }
 
@@ -46,7 +55,10 @@ class TextLlm implements LlmLike {
   }
 }
 
-async function collect(llm: LlmLike, req: ChatRequest): Promise<{ text: string; result: ChatResult }> {
+async function collect(
+  llm: LlmLike,
+  req: ChatRequest,
+): Promise<{ text: string; result: ChatResult }> {
   let text = '';
   const gen = llm.chatStream(req);
   let next = await gen.next();
@@ -99,11 +111,11 @@ describe('FailoverLlm', () => {
     const llm = makeFailoverLlm(primary, [openrouter], (lane) =>
       lane.providerName === 'Kimi' ? new ThrowAfterToken() : new TextLlm('fallback'),
     );
-    await expect(collect(llm, { messages: [{ role: 'user', content: 'hi' }] })).rejects.toMatchObject(
-      {
-        status: 429,
-      },
-    );
+    await expect(
+      collect(llm, { messages: [{ role: 'user', content: 'hi' }] }),
+    ).rejects.toMatchObject({
+      status: 429,
+    });
   });
 
   it('fails over from a stream network error before any tokens are emitted', async () => {
@@ -129,11 +141,11 @@ describe('FailoverLlm', () => {
     const llm = makeFailoverLlm(primary, [openrouter], (lane) =>
       lane.providerName === 'Kimi' ? new ThrowNetworkAfterToken() : new TextLlm('fallback'),
     );
-    await expect(collect(llm, { messages: [{ role: 'user', content: 'hi' }] })).rejects.toMatchObject(
-      {
-        code: 'network',
-      },
-    );
+    await expect(
+      collect(llm, { messages: [{ role: 'user', content: 'hi' }] }),
+    ).rejects.toMatchObject({
+      code: 'network',
+    });
   });
 
   it('builds env fallback lanes for OpenRouter and MiniMax and dedupes the active lane', () => {

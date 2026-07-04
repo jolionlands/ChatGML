@@ -30,17 +30,24 @@
     "node": ">=24"
   },
   "bin": {
-    "chatgml": "bin/chatgml.mjs"
+    "chatgml": "bin/chatgml.mjs",
+    "chatgml-gmedit-setup": "scripts/setup-gmedit.mjs"
   },
   "exports": {
     ".": "./dist/index.js"
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "plugin",
+    "plugin-inline",
+    "plugin-explain",
+    "plugin-gmloop",
+    "scripts/setup-gmedit.mjs"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "setup:gmedit": "node scripts/setup-gmedit.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "coverage": "vitest run --coverage",

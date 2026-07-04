@@ -167,7 +167,15 @@ export type AgentEvent =
       // `streaming` is the IDLE HEARTBEAT (GAP5): a slow upstream whose body chunks undici batches on
       // Node25/Win-ARM64 can stall the token read for seconds; the streaming-turn watchdog emits this
       // (at most every IDLE_MS) so a serve client knows the turn is alive during the buffered gap.
-      phase: 'ready' | 'thinking' | 'streaming' | 'indexing' | 'idle' | 'done' | 'cancelled';
+      phase:
+        | 'ready'
+        | 'thinking'
+        | 'streaming'
+        | 'indexing'
+        | 'idle'
+        | 'done'
+        | 'cancelled'
+        | 'stopped';
       detail?: string;
       protocolVersion?: number;
       mode?: Mode;

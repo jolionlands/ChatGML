@@ -58,7 +58,8 @@ interface JsState {
 }
 
 // Synthetic helpers (mirror the style of test/plugin/parity.test.ts).
-const user = (text: string): AgentEvent => ({ type: 'user' as const, text, sources: [] });
+const user = (text: string): AgentEvent =>
+  ({ type: 'user' as const, text, sources: [] }) as unknown as AgentEvent;
 
 const token = (text: string): AgentEvent => ({ type: 'token' as const, text });
 
@@ -102,7 +103,7 @@ function pushOutbox(s: JsState, text: string): JsState {
   // head stays unchanged so we keep showing the FIRST message the user sent (which is exactly
   // the bug-fix semantics — the user can always see what they typed, even if A's response is
   // lagging).
-  next.pendingUserText = next.outbox[0].text;
+  next.pendingUserText = next.outbox[0]!.text;
   return next;
 }
 
@@ -132,7 +133,7 @@ describe('outbox push via panel logic', () => {
     const s0 = js.initialPluginState();
     const s1 = pushOutbox(s0, 'hello');
     expect(s1.outbox.length).toBe(1);
-    expect(s1.outbox[0]).toMatchObject({
+    expect(s1.outbox[0]!).toMatchObject({
       id: 'q1',
       text: 'hello',
       status: 'queued',
@@ -167,7 +168,7 @@ describe('outbox lifecycle: token / answer / turn_end', () => {
     const js0 = pushOutbox(js.initialPluginState(), 'A');
     const js1 = js.reducePluginState(token('hi '), js0);
     expect(js1.outbox.length).toBe(1);
-    expect(js1.outbox[0].status).toBe('streaming');
+    expect(js1.outbox[0]!.status).toBe('streaming');
     expect(js1.busy).toBe(true);
 
     // Same on the TS port: panel-side push (modeled the same way — the panel uses the SAME
@@ -181,11 +182,11 @@ describe('outbox lifecycle: token / answer / turn_end', () => {
     };
     const ts1 = tsReduce(token('hi '), tsSeqBumped);
     expect(ts1.outbox.length).toBe(1);
-    expect(ts1.outbox[0].status).toBe('streaming');
+    expect(ts1.outbox[0]!.status).toBe('streaming');
     expect(ts1.busy).toBe(true);
 
     // Parity between the two reducer copies (same input shape, same expected output shape).
-    expect(js1.outbox[0].status).toBe(ts1.outbox[0].status);
+    expect(js1.outbox[0]!.status).toBe(ts1.outbox[0]!.status);
     expect(js1.busy).toBe(ts1.busy);
     expect(js1.outbox.length).toBe(ts1.outbox.length);
   });
@@ -196,7 +197,7 @@ describe('outbox lifecycle: token / answer / turn_end', () => {
     const js0 = pushOutbox(js.initialPluginState(), 'A');
     const js1 = js.reducePluginState(answer('done'), js0);
     expect(js1.outbox.length).toBe(1);
-    expect(js1.outbox[0].status).toBe('streaming');
+    expect(js1.outbox[0]!.status).toBe('streaming');
     expect(js1.answer).toBe('done');
   });
 
@@ -218,25 +219,25 @@ describe('outbox lifecycle: token / answer / turn_end', () => {
     const sA = pushOutbox(js.initialPluginState(), 'A');
     const sAB = pushOutbox(sA, 'B');
     expect(sAB.outbox.length).toBe(2);
-    expect(sAB.outbox[0].text).toBe('A');
-    expect(sAB.outbox[1].text).toBe('B');
+    expect(sAB.outbox[0]!.text).toBe('A');
+    expect(sAB.outbox[1]!.text).toBe('B');
     expect(sAB.pendingUserText).toBe('A');
 
     // Token arrives for A (the head).
     const sABStreamA = js.reducePluginState(token('a1 '), sAB);
-    expect(sABStreamA.outbox[0].status).toBe('streaming');
-    expect(sABStreamA.outbox[1].status).toBe('queued');
+    expect(sABStreamA.outbox[0]!.status).toBe('streaming');
+    expect(sABStreamA.outbox[1]!.status).toBe('queued');
 
     // A's turn ends.
     const sABTurnA = js.reducePluginState(turnEnd('A', 'a1 '), sABStreamA);
     expect(sABTurnA.outbox.length).toBe(1);
-    expect(sABTurnA.outbox[0].text).toBe('B');
-    expect(sABTurnA.outbox[0].status).toBe('queued'); // still queued — not yet streamed
+    expect(sABTurnA.outbox[0]!.text).toBe('B');
+    expect(sABTurnA.outbox[0]!.status).toBe('queued'); // still queued — not yet streamed
     expect(sABTurnA.busy).toBe(false);
 
     // Token for B.
     const sABStreamB = js.reducePluginState(token('b1 '), sABTurnA);
-    expect(sABStreamB.outbox[0].status).toBe('streaming');
+    expect(sABStreamB.outbox[0]!.status).toBe('streaming');
     expect(sABStreamB.busy).toBe(true);
 
     // B's turn ends.
@@ -355,8 +356,8 @@ describe('parity: outbox/busy/queueSeq behavior is identical across both reducer
     tsMid2 = tsReduce(token('b'), tsMid2);
     // Both must agree on outbox content and busy state.
     expect(jsMid2.outbox.length).toBe(tsMid2.outbox.length);
-    expect(jsMid2.outbox[0].status).toBe(tsMid2.outbox[0].status);
-    expect(jsMid2.outbox[0].text).toBe(tsMid2.outbox[0].text);
+    expect(jsMid2.outbox[0]!.status).toBe(tsMid2.outbox[0]!.status);
+    expect(jsMid2.outbox[0]!.text).toBe(tsMid2.outbox[0]!.text);
     expect(jsMid2.busy).toBe(tsMid2.busy);
   });
 
@@ -390,15 +391,15 @@ describe('panel-side helpers (pure simulation of _submit -> outbox push)', () =>
     let s = js.initialPluginState();
     s = pushOutbox(s, 'first');
     expect(s.outbox.length).toBe(1);
-    expect(s.outbox[0].id).toBe('q1');
-    expect(s.outbox[0].text).toBe('first');
-    expect(s.outbox[0].status).toBe('queued');
+    expect(s.outbox[0]!.id).toBe('q1');
+    expect(s.outbox[0]!.text).toBe('first');
+    expect(s.outbox[0]!.status).toBe('queued');
     s = pushOutbox(s, 'second');
     expect(s.outbox.length).toBe(2);
-    expect(s.outbox[1].id).toBe('q2');
-    expect(s.outbox[1].text).toBe('second');
+    expect(s.outbox[1]!.id).toBe('q2');
+    expect(s.outbox[1]!.text).toBe('second');
     // Old entry's id/text/status unchanged.
-    expect(s.outbox[0]).toMatchObject({
+    expect(s.outbox[0]!).toMatchObject({
       id: 'q1',
       text: 'first',
       status: 'queued',
@@ -410,7 +411,7 @@ describe('panel-side helpers (pure simulation of _submit -> outbox push)', () =>
     const ids = new Set<string>();
     for (let i = 1; i <= 100; i++) {
       s = pushOutbox(s, 'msg-' + i);
-      const id = s.outbox[s.outbox.length - 1].id;
+      const id = s.outbox[s.outbox.length - 1]!.id;
       expect(ids.has(id)).toBe(false);
       ids.add(id);
     }

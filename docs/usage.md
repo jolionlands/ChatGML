@@ -334,7 +334,26 @@ Either is rejected unless you pass `--trust-project-config`. Keep raw keys in th
 
 ## Point it at an endpoint
 
-ChatGML talks to **any OpenAI-compatible** chat + embeddings endpoint.
+ChatGML talks to **any OpenAI-compatible** chat + embeddings endpoint. That is the provider model:
+no provider class is needed unless the service uses a non-OpenAI wire protocol.
+
+Required setup is always:
+
+```bash
+chatgml config set chat.baseURL <openai-compatible-base-url>
+chatgml config set chat.model <chat-model>
+chatgml config set embed.model <embedding-model>
+chatgml config set scope <memory-scope>
+```
+
+If the endpoint needs a key, store an env reference:
+
+```bash
+chatgml config set chat.apiKey env:OPENAI_API_KEY
+```
+
+The embed lane reuses `chat.baseURL` and `chat.apiKey` unless you set `embed.baseURL` or
+`embed.apiKey`; `embed.model` is still required.
 
 ### Local `llama-server`
 
@@ -371,6 +390,29 @@ chatgml --chat-base-url https://api.openai.com/v1 --chat-api-key env:OPENAI_API_
 
 (For OpenAI specifically the simplest durable setup is the `config set` form above so the key stays
 an `env:` reference rather than a flag.)
+
+### GMEdit provider registry
+
+The GMEdit plugin has a provider registry for autocomplete and quick setup. It reads ChatGML's
+editable `providers.json`, plus Pi/opencode/crush provider files when present, then shows providers
+in the settings panel. The registry helps fill fields; the core still runs from the same durable
+config fields above.
+
+Minimal `providers.json` shape:
+
+```json
+{
+  "providers": {
+    "local": {
+      "kind": "openai_compat",
+      "base_url": "http://localhost:8080/v1",
+      "path": "/chat/completions",
+      "auth": "bearer",
+      "models": [{ "id": "qwen2.5-coder" }]
+    }
+  }
+}
+```
 
 ---
 

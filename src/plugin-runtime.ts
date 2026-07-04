@@ -462,10 +462,9 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       // Promote the head outbox item from 'queued' to 'streaming' (first token after send).
       // Pure: build a fresh array (no in-place mutation of state.outbox) so the reducer
       // stays referentially transparent across reducers.
-      if (state.outbox.length > 0 && state.outbox[0].status === 'queued') {
-        const promoted = state.outbox.slice();
-        promoted[0] = { ...promoted[0], status: 'streaming' };
-        next.outbox = promoted;
+      const tokenHead = state.outbox[0];
+      if (tokenHead && tokenHead.status === 'queued') {
+        next.outbox = [{ ...tokenHead, status: 'streaming' }, ...state.outbox.slice(1)];
       }
       return next;
     }
@@ -639,10 +638,9 @@ export function reducePluginState(event: AgentEvent, state: PluginState): Plugin
       // happens on `turn_end` which always follows. We intentionally do NOT shift here so
       // the queued bubbles remain visible until the turn_end event definitively finalizes
       // the turn (matches the panel's expectation — see panel.js handleEvent hook).
-      if (state.outbox.length > 0 && state.outbox[0].status === 'queued') {
-        const promoted = state.outbox.slice();
-        promoted[0] = { ...promoted[0], status: 'streaming' };
-        next.outbox = promoted;
+      const answerHead = state.outbox[0];
+      if (answerHead && answerHead.status === 'queued') {
+        next.outbox = [{ ...answerHead, status: 'streaming' }, ...state.outbox.slice(1)];
       }
       return next;
     }

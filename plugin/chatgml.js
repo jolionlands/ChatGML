@@ -94,7 +94,10 @@
   }
 
   function recordDiagnostic(kind, value) {
-    const stamp = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+    const stamp = new Date()
+      .toISOString()
+      .replace('T', ' ')
+      .replace(/\.\d+Z$/, 'Z');
     diagnosticsLog.push(stamp + ' ' + kind + ': ' + sanitizeDiagnosticText(value));
     while (diagnosticsLog.length > 80) diagnosticsLog.shift();
   }
@@ -166,7 +169,10 @@
         if (!m) continue;
         const key = m[1];
         let value = m[2] || '';
-        if ((value[0] === '"' && value[value.length - 1] === '"') || (value[0] === "'" && value[value.length - 1] === "'")) {
+        if (
+          (value[0] === '"' && value[value.length - 1] === '"') ||
+          (value[0] === "'" && value[value.length - 1] === "'")
+        ) {
           value = value.slice(1, -1);
         }
         out[key] = value;
@@ -191,7 +197,9 @@
       );
     }
     if (envValue('OPENROUTER_API_KEY')) {
-      items.push('OpenRouter / ' + (envValue('CHATGML_FALLBACK_OPENROUTER_MODEL') || 'minimax/minimax-m3'));
+      items.push(
+        'OpenRouter / ' + (envValue('CHATGML_FALLBACK_OPENROUTER_MODEL') || 'minimax/minimax-m3'),
+      );
     }
     if (envValue('MINIMAX_API_KEY')) {
       items.push('MiniMax / ' + (envValue('CHATGML_FALLBACK_MINIMAX_MODEL') || 'MiniMax-M3'));
@@ -345,7 +353,8 @@
         lastLaunchAuthInfo && lastLaunchAuthInfo.authState
           ? lastLaunchAuthInfo.authState
           : inferAuthState(cfg, provider),
-      authSource: lastLaunchAuthInfo && lastLaunchAuthInfo.authSource ? lastLaunchAuthInfo.authSource : '',
+      authSource:
+        lastLaunchAuthInfo && lastLaunchAuthInfo.authSource ? lastLaunchAuthInfo.authSource : '',
       lastError: panel && panel.state && panel.state.error ? panel.state.error : '',
       logs: diagnosticsLog.slice(-12),
     };
@@ -371,7 +380,8 @@
 
   function chatgmlConfigPath() {
     const xdg = process.env.XDG_CONFIG_HOME;
-    const base = xdg && typeof xdg === 'string' ? xdg : path.join(require('os').homedir(), '.config');
+    const base =
+      xdg && typeof xdg === 'string' ? xdg : path.join(require('os').homedir(), '.config');
     return path.join(base, 'chatgml', 'config.json');
   }
 
@@ -393,7 +403,8 @@
       ? readJsonObject(path.join(projectDirectory, '.chatgml.json'))
       : {};
     const panelCfg = panel && panel._config ? panel._config : {};
-    const userChat = userCfg && userCfg.chat && typeof userCfg.chat === 'object' ? userCfg.chat : {};
+    const userChat =
+      userCfg && userCfg.chat && typeof userCfg.chat === 'object' ? userCfg.chat : {};
     const projectChat =
       projectCfg && projectCfg.chat && typeof projectCfg.chat === 'object' ? projectCfg.chat : {};
     const panelChat =
@@ -431,7 +442,8 @@
         authSource: auth.authSource || '',
         envVar: auth.envVar || '',
       };
-      const keys = auth.extraEnv && typeof auth.extraEnv === 'object' ? Object.keys(auth.extraEnv) : [];
+      const keys =
+        auth.extraEnv && typeof auth.extraEnv === 'object' ? Object.keys(auth.extraEnv) : [];
       recordDiagnostic(
         'auth',
         (auth.providerName || 'manual') +
@@ -1303,7 +1315,8 @@
     }
     if (action === 'format' || action === 'format-check' || action === 'check') {
       const target = gmloopCurrentGmlFileTarget();
-      if (!target) return { label: 'format check', error: 'open a GML file before /gmloop format-check' };
+      if (!target)
+        return { label: 'format check', error: 'open a GML file before /gmloop format-check' };
       return { label: 'format check ' + target.label, argv: ['format', '--path', target.path] };
     }
     if (action === 'format-project' || action === 'check-project') {
@@ -1391,7 +1404,8 @@
       });
     } catch (e) {
       recordDiagnostic('gmloop', spec.label + ' spawn failed: ' + (e.message || e));
-      if (panel) panel.flash('GMLoop ' + spec.label + ' failed to start: ' + (e.message || e), true);
+      if (panel)
+        panel.flash('GMLoop ' + spec.label + ' failed to start: ' + (e.message || e), true);
       return true;
     }
     activeGmloopChild = child;
@@ -1427,7 +1441,11 @@
       const body = output.trim() || '(no output)';
       const ok = code === 0;
       recordDiagnostic('gmloop', spec.label + ' exit ' + String(code));
-      if (panel) panel.flash('GMLoop ' + spec.label + ' ' + (ok ? 'passed' : 'exited ' + code) + '\n' + body, !ok);
+      if (panel)
+        panel.flash(
+          'GMLoop ' + spec.label + ' ' + (ok ? 'passed' : 'exited ' + code) + '\n' + body,
+          !ok,
+        );
     });
     return true;
   }
@@ -1460,7 +1478,8 @@
       lines.push('/gmloop ' + cmd.value + ' is not wired yet');
     }
     recordDiagnostic('gmloop', info.status + (info.runner ? ' via ' + info.runner : ''));
-    if (panel) panel.flash(lines.join('\n'), info.status === 'not found' || /missing/.test(info.status));
+    if (panel)
+      panel.flash(lines.join('\n'), info.status === 'not found' || /missing/.test(info.status));
   }
 
   function setConfigAndRestart(field, value) {
@@ -1848,12 +1867,13 @@
         }
       },
       onAddProvider: function () {
-        // Minimal inline add form. The panel could grow this into a full modal later; for now
-        // we collect (name, baseURL, modelId) via window.prompt and write through the
-        // ProvidersApi. The registry refresh callback then re-renders the section.
+        // Minimal inline add form. Keep it prompt-based for GMEdit compatibility, but also persist
+        // the selected provider into core config so "Add provider" is enough to use it.
         var name = null;
         var baseUrl = null;
         var modelId = null;
+        var embedModel = null;
+        var envVar = null;
         try {
           // GMEdit's renderer has window.prompt; we fall back to a no-op for safety in headless
           // contexts (tests + the initial background bootstrap).
@@ -1862,7 +1882,10 @@
             if (!name) return;
             baseUrl = window.prompt('Base URL (e.g. https://api.example.com/v1):', '');
             if (!baseUrl) return;
-            modelId = window.prompt('First model id (or leave blank for no models yet):', '');
+            modelId = window.prompt('Chat model id:', '');
+            if (!modelId) return;
+            embedModel = window.prompt('Embed model id (optional, required before indexing):', '');
+            envVar = window.prompt('API key env var name (optional, e.g. OPENAI_API_KEY):', '');
           }
         } catch (e) {
           if (panel) panel.flash('add provider aborted: ' + (e.message || e), true);
@@ -1877,16 +1900,38 @@
             baseUrl: String(baseUrl).trim(),
             endpoint: '/chat/completions',
             auth: 'bearer',
-            models: modelId
-              ? [{ id: String(modelId).trim(), wire_model: String(modelId).trim() }]
-              : [],
+            models: [{ id: String(modelId).trim(), wire_model: String(modelId).trim() }],
           };
           var result = ProvidersApi.registerProvider(entry);
           if (!result.ok) {
             if (panel) panel.flash('add provider failed: ' + result.error, true);
             return;
           }
-          if (panel) panel.flash('Provider "' + entry.name + '" added — refresh to see');
+          var envName = envVar ? String(envVar).trim().replace(/^env:/i, '') : '';
+          var commands = SettingsTasks.providerDerivedCommands({
+            model: String(modelId).trim(),
+            baseURL: entry.baseUrl,
+            embedModel: embedModel ? String(embedModel).trim() : '',
+            apiKey: envName ? 'env:' + envName : '',
+          });
+          var i = 0;
+          var saveNext = function () {
+            if (i >= commands.length) {
+              if (panel) panel.flash('Provider "' + entry.name + '" added and selected');
+              restartCore();
+              return;
+            }
+            var pair = commands[i++];
+            configBridge.setConfigField(pair[0], pair[1], function (err) {
+              if (err) {
+                if (panel)
+                  panel.flash('provider saved, config set failed: ' + (err.message || err), true);
+                return;
+              }
+              saveNext();
+            });
+          };
+          saveNext();
           // Auto-refresh so the user sees the new entry in the list without an extra click.
           if (panel && panel.opts && typeof panel.opts.onRefreshProviders === 'function') {
             panel.opts.onRefreshProviders();

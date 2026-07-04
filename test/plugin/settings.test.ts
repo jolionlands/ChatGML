@@ -35,6 +35,7 @@ const SettingsTasks = require(path.join(PLUGIN, 'settings-tasks.js')) as {
   };
   apiKeyDisplayPlaceholder: (redacted: string | undefined) => string;
   hasApiKey: (redacted: string | undefined) => boolean;
+  providerDerivedCommands: (settings: Record<string, unknown>) => Array<[string, string]>;
   API_KEY_PLACEHOLDER: string;
 };
 
@@ -83,6 +84,24 @@ describe('plugin/settings-tasks.js — settings save plan (audit gaps #12 + #13)
     // Only `mode` is non-empty so only `mode` survives.
     expect(plan.commands).toEqual([['mode', 'ask']]);
     expect(plan.scope).toBeNull();
+  });
+
+  it('providerDerivedCommands: maps add-provider input to supported config fields', () => {
+    expect(
+      SettingsTasks.providerDerivedCommands({
+        model: 'gpt-4o-mini',
+        baseURL: 'https://api.openai.com/v1',
+        embedModel: 'text-embedding-3-small',
+        apiKey: 'env:OPENAI_API_KEY',
+        path: '/chat/completions',
+        auth: 'bearer',
+      }),
+    ).toEqual([
+      ['chat.model', 'gpt-4o-mini'],
+      ['chat.baseURL', 'https://api.openai.com/v1'],
+      ['embed.model', 'text-embedding-3-small'],
+      ['chat.apiKey', 'env:OPENAI_API_KEY'],
+    ]);
   });
 
   it('buildSettingsCommands: empty apiKey is a NO-OP (chat.apiKey is NOT in the plan)', () => {

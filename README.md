@@ -190,6 +190,45 @@ ChatGML ships a GMEdit plugin (in `plugin/`) that spawns the core as a child pro
 streaming agent events in a side panel — chat, tool activity, and approve/reject for gated edits.
 See **[docs/gmedit-plugin.md](docs/gmedit-plugin.md)** for install and architecture.
 
+### GMEdit in 5 minutes
+
+From npm:
+
+```bash
+npm install -g chatgml
+chatgml-gmedit-setup
+```
+
+From a checkout:
+
+```bash
+git clone https://github.com/jolionlands/ChatGML.git
+cd ChatGML
+npm ci
+npm run build
+npm run setup:gmedit
+```
+
+Use `--plugins-dir=/path/to/GMEdit/plugins` if GMEdit stores plugins somewhere custom.
+
+Then configure one OpenAI-compatible chat endpoint, one embedding model, and a scope:
+
+```bash
+chatgml config set chat.baseURL http://localhost:8080/v1
+chatgml config set chat.model qwen2.5-coder
+chatgml config set embed.model nomic-embed-text
+chatgml config set scope mygame
+```
+
+Restart GMEdit and open the **ChatGML** panel. For hosted providers, set the key as an env reference:
+
+```bash
+chatgml config set chat.apiKey env:OPENAI_API_KEY
+```
+
+Provider presets and hand-added providers are managed in the GMEdit settings panel and stored in
+`providers.json` under the ChatGML user config dir.
+
 ## MCP server (the leverage route — use ChatGML from Cline, Cursor, Claude Code, Copilot Chat, …)
 
 ChatGML exposes its **GML-aware tool registry** as an **MCP server** over stdio, so ANY MCP-speaking

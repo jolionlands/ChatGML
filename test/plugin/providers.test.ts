@@ -26,55 +26,90 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
+
+type ProviderRegistry = { providers?: Record<string, unknown> };
+type ProviderListEntry = {
+  name: string;
+  kind: string;
+  baseUrl: string;
+  endpoint: string;
+  auth: string;
+  authState: string;
+  envVar: string;
+  envVars: string[];
+  source: string;
+  usable: boolean;
+  models: Array<{ id: string; wireModel: string; contextWindow: number }>;
+};
+type ModelListEntry = {
+  providerName: string;
+  modelId: string;
+  wireModel: string;
+  baseUrl: string;
+  endpoint: string;
+  auth: string;
+  authState: string;
+  envVar: string;
+  envVars: string[];
+  usable: boolean;
+  contextWindow: number;
+};
+type CatalogEntry = {
+  name?: string;
+  contextWindow?: number;
+  canReason?: boolean;
+  supportsAttachments?: boolean;
+};
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const Providers = require(path.join(HERE, '../../plugin/providers.js')) as {
   defaultChatgmlProvidersPath: (dir?: string) => string;
   defaultPiProvidersPath: () => string;
-  readProvidersFile: (p: string) => { providers: Record<string, unknown> } | null;
+  defaultOpencodeConfigPath: () => string;
+  defaultCrushProvidersPath: () => string;
+  defaultAuthJsonPath: () => string;
+  defaultModelCatalogPath: () => string;
+  readProvidersFile: (p: string) => ProviderRegistry | null;
   bootstrapProviders: (opts: { chatgmlPath: string; piPath: string }) => {
     path: string;
     data: { providers: Record<string, unknown> };
     bootstrapped: boolean;
     warning?: string;
   };
-  mergeRegistries: (sources: Array<{ providers?: Record<string, unknown> } | null>) => {
+  mergeRegistries: (sources: Array<ProviderRegistry | null | undefined>) => {
     providers: Record<string, unknown>;
   };
-  normalizeProvider: (
-    name: string,
-    raw: unknown,
-  ) => {
-    name: string;
-    kind: string;
-    baseUrl: string;
-    endpoint: string;
-    auth: string;
-    models: Array<{ id: string; wireModel: string; contextWindow: number }>;
-  } | null;
-  listProviders: (registry: { providers?: Record<string, unknown> }) => Array<{
-    name: string;
-    baseUrl: string;
-    models: Array<{ id: string; wireModel: string; contextWindow: number }>;
-  }>;
-  listModels: (registry: { providers?: Record<string, unknown> }) => Array<{
-    providerName: string;
-    modelId: string;
-    baseUrl: string;
-    contextWindow: number;
-  }>;
-  findProviderByUrl: (registry: { providers?: Record<string, unknown> }, url: string) => unknown;
+  readOpencodeConfig: (p: string) => { providers: Record<string, unknown>; warning: string | null };
+  readCrushProviders: (p: string) => { providers: Record<string, unknown>; warning: string | null };
+  readAuthFile: (p: string) => { auth: Record<string, unknown>; warning: string | null };
+  readModelCatalog: (p: string) => {
+    catalog: Record<string, CatalogEntry>;
+    warning: string | null;
+  };
+  enrichWithAuth: (
+    registry: ProviderRegistry | null,
+    auth: Record<string, unknown> | null,
+  ) => ProviderRegistry | null;
+  enrichWithCatalog: (
+    registry: ProviderRegistry | null,
+    catalog: Record<string, unknown> | null,
+  ) => ProviderRegistry | null;
+  normalizeProvider: (name: string, raw: unknown) => ProviderListEntry | null;
+  listProviders: (registry: ProviderRegistry) => ProviderListEntry[];
+  listModels: (registry: ProviderRegistry) => ModelListEntry[];
+  findProviderByUrl: (registry: ProviderRegistry, url: string) => unknown;
   findModel: (
-    registry: { providers?: Record<string, unknown> },
+    registry: ProviderRegistry,
     id: string,
   ) => { provider: unknown; model: unknown } | null;
   authAliasesForProvider: (name: string, raw?: unknown) => string[];
   providerEnvVarHint: (name: string, raw?: unknown) => string;
   findProviderForConfig: (
-    registry: { providers?: Record<string, unknown> },
+    registry: ProviderRegistry,
     config: { model?: string; baseURL?: string; providerName?: string },
   ) => { name: string; raw: unknown; score: number } | null;
   resolveAuthForConfig: (
-    registry: { providers?: Record<string, unknown> },
+    registry: ProviderRegistry,
     config: { model?: string; baseURL?: string; apiKey?: string },
     env?: Record<string, string>,
   ) => {
@@ -94,7 +129,7 @@ const Providers = require(path.join(HERE, '../../plugin/providers.js')) as {
     path: string | null;
     auth: string | null;
   };
-  toEnvFormat: (registry: { providers?: Record<string, unknown>; __source?: string }) => string;
+  toEnvFormat: (registry: ProviderRegistry & { __source?: string }) => string;
   registerProvider: (opts: {
     chatgmlPath: string;
     name: string;
@@ -103,7 +138,7 @@ const Providers = require(path.join(HERE, '../../plugin/providers.js')) as {
     auth?: string;
     models?: Array<{ id: string }>;
   }) => { ok: boolean; error?: string };
-  buildDatalistOptions: (registry: { providers?: Record<string, unknown> }) => {
+  buildDatalistOptions: (registry: ProviderRegistry) => {
     modelOptions: Array<{ value: string; label: string }>;
     baseUrlOptions: Array<{ value: string; label: string }>;
   };
@@ -123,8 +158,8 @@ const Providers = require(path.join(HERE, '../../plugin/providers.js')) as {
     authPath: string;
     catalogPath: string;
     registry: { providers: Record<string, unknown>; __source?: string };
-    providers: Array<{ name: string; models: unknown[] }>;
-    models: Array<{ providerName: string; modelId: string }>;
+    providers: ProviderListEntry[];
+    models: ModelListEntry[];
     datalistOptions: {
       modelOptions: Array<{ value: string; label: string }>;
       baseUrlOptions: Array<{ value: string; label: string }>;
@@ -1078,15 +1113,17 @@ describe('plugin/providers.js — enrichWithAuth', () => {
     };
     const auth = { nvidia: { auth: 'bearer', apiKey: 'nvapi-XYZ' } };
     Providers.enrichWithAuth(registry, auth);
-    expect((registry.providers.nvidia as { apiKey: string }).apiKey).toBe('nvapi-XYZ');
+    expect((registry.providers.nvidia as unknown as { apiKey: string }).apiKey).toBe('nvapi-XYZ');
   });
 
   it('injects env var references when only envVar is set', () => {
     const registry = { providers: { kimi: { base_url: 'http://k', auth: 'bearer', models: [] } } };
     const auth = { kimi: { auth: 'bearer', envVar: 'KIMI_KEY' } };
     Providers.enrichWithAuth(registry, auth);
-    expect((registry.providers.kimi as { auth: string; envVar: string }).auth).toBe('env');
-    expect((registry.providers.kimi as { envVar: string }).envVar).toBe('KIMI_KEY');
+    expect((registry.providers.kimi as unknown as { auth: string; envVar: string }).auth).toBe(
+      'env',
+    );
+    expect((registry.providers.kimi as unknown as { envVar: string }).envVar).toBe('KIMI_KEY');
   });
 
   it('matches local auth aliases for Kimi Code entries', () => {
@@ -1101,10 +1138,10 @@ describe('plugin/providers.js — enrichWithAuth', () => {
     };
     const auth = { kimi: { auth: 'bearer', envVar: 'KIMI_API_KEY' } };
     Providers.enrichWithAuth(registry, auth);
-    expect((registry.providers['kimi-coding'] as { auth: string; envVar: string }).auth).toBe(
-      'env',
-    );
-    expect((registry.providers['kimi-coding'] as { envVar: string }).envVar).toBe(
+    expect(
+      (registry.providers['kimi-coding'] as unknown as { auth: string; envVar: string }).auth,
+    ).toBe('env');
+    expect((registry.providers['kimi-coding'] as unknown as { envVar: string }).envVar).toBe(
       'KIMI_API_KEY',
     );
   });
@@ -1115,7 +1152,7 @@ describe('plugin/providers.js — enrichWithAuth', () => {
       google: { auth: 'oauth', apiKey: 'ya29.X', refresh: '1//R', expires: 1234 },
     };
     Providers.enrichWithAuth(registry, auth);
-    const g = registry.providers.google as {
+    const g = registry.providers.google as unknown as {
       auth: string;
       apiKey: string;
       refreshToken: string;
@@ -1152,7 +1189,7 @@ describe('plugin/providers.js — enrichWithCatalog', () => {
     const catalog = { 'gpt-5': { name: 'GPT-5', contextWindow: 400000, canReason: true } };
     Providers.enrichWithCatalog(registry, catalog);
     const m = (
-      registry.providers.nvidia as {
+      registry.providers.nvidia as unknown as {
         models: Array<{ context_window: number; can_reason: boolean }>;
       }
     ).models[0];
@@ -1171,14 +1208,16 @@ describe('plugin/providers.js — enrichWithCatalog', () => {
   });
 
   it('surfaces orphan catalog entries into a synthetic _orphan provider', () => {
-    const registry = { providers: { known: { base_url: 'http://x', models: [{ id: 'foo' }] } } };
+    const registry: ProviderRegistry = {
+      providers: { known: { base_url: 'http://x', models: [{ id: 'foo' }] } },
+    };
     const catalog = {
       foo: { name: 'Foo', contextWindow: 1000, canReason: false, supportsAttachments: false },
       bar: { name: 'Bar', contextWindow: 2000, canReason: true, supportsAttachments: true },
       baz: { name: 'Baz', contextWindow: 3000, canReason: false, supportsAttachments: false },
     };
     Providers.enrichWithCatalog(registry, catalog);
-    const orphan = registry.providers._orphan as {
+    const orphan = registry.providers!._orphan as {
       models: Array<{ id: string; can_reason: boolean }>;
       _orphan: boolean;
     };
@@ -1189,13 +1228,13 @@ describe('plugin/providers.js — enrichWithCatalog', () => {
   });
 
   it('caps orphan entries at 100 to avoid noisy catalogs spamming the panel', () => {
-    const registry = { providers: {} };
+    const registry: ProviderRegistry = { providers: {} };
     const catalog: Record<string, { name: string; contextWindow: number }> = {};
     for (let i = 0; i < 500; i++) {
       catalog['model-' + i] = { name: 'Model ' + i, contextWindow: 1000 };
     }
     Providers.enrichWithCatalog(registry, catalog);
-    const orphan = registry.providers._orphan as { models: unknown[] };
+    const orphan = registry.providers!._orphan as { models: unknown[] };
     expect(orphan.models).toHaveLength(100);
   });
 

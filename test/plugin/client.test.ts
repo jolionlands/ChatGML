@@ -16,7 +16,7 @@ const require = createRequire(import.meta.url);
 
 interface ClientLike {
   start(): boolean;
-  sendUser(text: string, context?: unknown): boolean;
+  sendUser(text: string, context?: unknown, opts?: unknown): boolean;
   approve(id: string): boolean;
   stop(): void;
   sendResume(messages: unknown[]): boolean;

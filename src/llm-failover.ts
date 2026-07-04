@@ -68,7 +68,7 @@ export class FailoverLlm implements LlmLike {
         });
       }
     }
-    throw lastErr;
+    throw lastErr instanceof Error ? lastErr : new LlmError('network', String(lastErr));
   }
 
   private clientFor(lane: NamedChatLane): LlmLike {

@@ -14,6 +14,9 @@ const {
   markdownToHtml,
 } = require('../../plugin/markdown.js');
 
+type InlineToken = { type: string; value?: string; url?: string };
+type MarkdownBlock = { type: string; items?: string[] };
+
 // ---------------------------------------------------------------------------
 // escapeHtml
 // ---------------------------------------------------------------------------
@@ -54,8 +57,8 @@ describe('parseInline', () => {
   });
 
   it('backtick code → code token', () => {
-    const tokens = parseInline('foo `bar` baz');
-    const codeToken = tokens.find((t: any) => t.type === 'code');
+    const tokens = parseInline('foo `bar` baz') as InlineToken[];
+    const codeToken = tokens.find((t) => t.type === 'code');
     expect(codeToken).toBeDefined();
     expect(codeToken!.value).toBe('bar');
   });
@@ -68,45 +71,45 @@ describe('parseInline', () => {
   });
 
   it('bold **text** → strong token', () => {
-    const tokens = parseInline('**bold**');
-    const strong = tokens.find((t: any) => t.type === 'strong');
+    const tokens = parseInline('**bold**') as InlineToken[];
+    const strong = tokens.find((t) => t.type === 'strong');
     expect(strong).toBeDefined();
     expect(strong!.value).toBe('bold');
   });
 
   it('bold+italic ***text*** → strong token', () => {
-    const tokens = parseInline('***text***');
-    const strong = tokens.find((t: any) => t.type === 'strong');
+    const tokens = parseInline('***text***') as InlineToken[];
+    const strong = tokens.find((t) => t.type === 'strong');
     expect(strong).toBeDefined();
     expect(strong!.value).toBe('text');
   });
 
   it('italic *text* → em token', () => {
-    const tokens = parseInline('*italic*');
-    const em = tokens.find((t: any) => t.type === 'em');
+    const tokens = parseInline('*italic*') as InlineToken[];
+    const em = tokens.find((t) => t.type === 'em');
     expect(em).toBeDefined();
     expect(em!.value).toBe('italic');
   });
 
   it('link [text](url) → link token with url', () => {
-    const tokens = parseInline('[click](http://example.com)');
-    const link = tokens.find((t: any) => t.type === 'link');
+    const tokens = parseInline('[click](http://example.com)') as InlineToken[];
+    const link = tokens.find((t) => t.type === 'link');
     expect(link).toBeDefined();
     expect(link!.value).toBe('click');
-    expect((link as any).url).toBe('http://example.com');
+    expect(link!.url).toBe('http://example.com');
   });
 
   it('plain text without markup → all text tokens', () => {
-    const tokens = parseInline('just plain text');
+    const tokens = parseInline('just plain text') as InlineToken[];
     expect(tokens).toHaveLength(1);
-    expect(tokens.every((t: any) => t.type === 'text')).toBe(true);
+    expect(tokens.every((t) => t.type === 'text')).toBe(true);
   });
 
   it('mixed content', () => {
-    const tokens = parseInline('see `code` and **bold** end');
-    expect(tokens.some((t: any) => t.type === 'code')).toBe(true);
-    expect(tokens.some((t: any) => t.type === 'strong')).toBe(true);
-    expect(tokens.some((t: any) => t.type === 'text')).toBe(true);
+    const tokens = parseInline('see `code` and **bold** end') as InlineToken[];
+    expect(tokens.some((t) => t.type === 'code')).toBe(true);
+    expect(tokens.some((t) => t.type === 'strong')).toBe(true);
+    expect(tokens.some((t) => t.type === 'text')).toBe(true);
   });
 });
 
@@ -201,11 +204,11 @@ describe('parseBlocks', () => {
 
   it('multiple blocks', () => {
     const md = '# Title\n\nparagraph here\n\n- list item';
-    const blocks = parseBlocks(md);
+    const blocks = parseBlocks(md) as MarkdownBlock[];
     expect(blocks.length).toBeGreaterThanOrEqual(3);
-    expect(blocks[0].type).toBe('header');
-    expect(blocks.some((b: any) => b.type === 'paragraph')).toBe(true);
-    expect(blocks.some((b: any) => b.type === 'ul')).toBe(true);
+    expect(blocks[0]!.type).toBe('header');
+    expect(blocks.some((b) => b.type === 'paragraph')).toBe(true);
+    expect(blocks.some((b) => b.type === 'ul')).toBe(true);
   });
 
   it('blank lines are skipped', () => {
@@ -309,9 +312,9 @@ describe('markdownToHtml', () => {
   });
 
   it('non-string → empty string', () => {
-    expect(markdownToHtml(null as any)).toBe('');
-    expect(markdownToHtml(undefined as any)).toBe('');
-    expect(markdownToHtml(42 as any)).toBe('');
+    expect(markdownToHtml(null as unknown as string)).toBe('');
+    expect(markdownToHtml(undefined as unknown as string)).toBe('');
+    expect(markdownToHtml(42 as unknown as string)).toBe('');
   });
 
   it('simple paragraph', () => {

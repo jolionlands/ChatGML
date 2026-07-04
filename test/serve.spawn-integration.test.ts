@@ -248,6 +248,7 @@ function spawnServe(root: string, baseURL: string): ServeChild {
       HOME: process.env['HOME'],
       USERPROFILE: process.env['USERPROFILE'],
       SystemRoot: process.env['SystemRoot'],
+      XDG_CONFIG_HOME: path.join(root, '.xdg-config'),
     },
   });
   return new ServeChild(child);

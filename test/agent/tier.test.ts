@@ -9,7 +9,7 @@
 // test/plugin/tier.test.ts (when added) will mirror turn_end -> TurnRecord.tier stamping.
 import { describe, it, expect } from 'vitest';
 import { tierForMode, resolveTier } from '../../src/agent.js';
-import type { ChatLane, Mode, TierName } from '../../src/types.js';
+import type { AgentEvent, ChatLane, Config, Mode, TierName } from '../../src/types.js';
 
 // --- Test fixtures ------------------------------------------------------------
 
@@ -45,20 +45,18 @@ function makeConfig(overrides?: {
     };
   };
   mode?: Mode;
-}): {
-  chat: ChatLane;
-  embed: ChatLane;
-  mode: Mode;
-  approval: 'gated' | 'auto';
-  tiers?: typeof overrides extends { tiers: infer T } ? T : never;
-} {
+}): Config {
   return {
     chat: GLOBAL_LANE,
-    embed: { baseURL: 'http://embed.local/v1', apiKey: 'sk-EMBED', model: 'bge-m3' },
+    embed: { baseURL: 'http://embed.local/v1', apiKey: 'sk-EMBED', model: 'bge-m3', batchSize: 64 },
+    memory: { provider: 'local' },
+    scope: 'test',
     mode: overrides?.mode ?? 'code',
     approval: 'gated',
+    index: { chunkSize: 1500, chunkOverlap: 200, root: '.' },
+    search: {},
     ...(overrides?.tiers ? { tiers: overrides.tiers } : {}),
-  } as never;
+  };
 }
 
 // --- tierForMode --------------------------------------------------------------
@@ -191,7 +189,7 @@ describe('resolveTier (lane merge + name stamp)', () => {
 // reducer tests).  We avoid a fancy type-check helper here; instead we just assign.
 describe('AgentEvent.turn_end tier field is plumbed through', () => {
   it("a turn_end event with tier='planner' is a valid AgentEvent", () => {
-    const e = {
+    const e: AgentEvent = {
       type: 'turn_end' as const,
       userText: 'hi',
       assistantText: 'hello',
@@ -201,7 +199,7 @@ describe('AgentEvent.turn_end tier field is plumbed through', () => {
     expect(e.tier).toBe('planner');
   });
   it('a turn_end event may omit tier entirely (older clients keep working)', () => {
-    const e = {
+    const e: AgentEvent = {
       type: 'turn_end' as const,
       userText: 'hi',
       assistantText: 'hello',
@@ -210,7 +208,7 @@ describe('AgentEvent.turn_end tier field is plumbed through', () => {
     expect(e.tier).toBeUndefined();
   });
   it('a turn_end event may also carry `thinking?` (mirror of the `thinking` event for replay)', () => {
-    const e = {
+    const e: AgentEvent = {
       type: 'turn_end' as const,
       userText: 'hi',
       assistantText: 'hello',

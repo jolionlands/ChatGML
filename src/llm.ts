@@ -116,7 +116,6 @@ function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (delayMs <= 0) return Promise.resolve();
   if (signal?.aborted) return Promise.reject(new LlmError('aborted', 'request aborted'));
   return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout>;
     const cleanup = (): void => {
       if (signal) signal.removeEventListener('abort', onAbort);
     };
@@ -129,7 +128,7 @@ function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
       cleanup();
       reject(new LlmError('aborted', 'request aborted'));
     };
-    timer = setTimeout(finish, delayMs);
+    const timer = setTimeout(finish, delayMs);
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
     }
